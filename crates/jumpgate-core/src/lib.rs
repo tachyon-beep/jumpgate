@@ -15,6 +15,11 @@
 #![forbid(unsafe_code)]
 
 pub mod math;
+pub mod time;
+pub mod ids;
+pub mod types;
+pub mod config;
+pub mod hash;
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.
