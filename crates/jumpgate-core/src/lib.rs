@@ -20,6 +20,7 @@ pub mod ids;
 pub mod types;
 pub mod config;
 pub mod hash;
+pub mod rng;
 pub mod stores;
 
 pub use ids::{BodyId, CraftId, SlotMap};
