@@ -14,6 +14,8 @@
 //! ONLY once each file exists (no forward `pub mod` for not-yet-created files).
 #![forbid(unsafe_code)]
 
+pub mod math;
+
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.
 pub fn scaffold_ok() -> u64 {
