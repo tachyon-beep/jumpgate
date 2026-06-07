@@ -82,6 +82,35 @@ impl<T> SlotMap<T> {
     pub fn gen_of(&self, slot: u32) -> Option<u32> {
         self.gens.get(slot as usize).copied()
     }
+
+    /// Dense SoA row index for a live `(slot, gen)`. Under the v1 `slot == row`
+    /// invariant this is the slot itself. Stale gen, removed slot, or out-of-range
+    /// slot -> `None`.
+    pub fn dense_index(&self, slot: u32, gen: u32) -> Option<usize> {
+        let s = slot as usize;
+        if s >= self.values.len() || self.gens[s] != gen || self.values[s].is_none() {
+            return None;
+        }
+        Some(s)
+    }
+
+    /// The live `(slot, gen)` occupying dense row `idx`, or `None` if the row is
+    /// empty/freed or out of range. Generic over `T`, so it returns the raw tuple;
+    /// typed stores wrap it into `CraftId`/`BodyId`.
+    pub fn id_at(&self, idx: usize) -> Option<(u32, u32)> {
+        if idx >= self.values.len() || self.values[idx].is_none() {
+            return None;
+        }
+        Some((idx as u32, self.gens[idx]))
+    }
+
+    /// Iterate every live `(slot, gen)` in ascending slot order.
+    pub fn iter_ids(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
+        self.values
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, v)| v.as_ref().map(|_| (i as u32, self.gens[i])))
+    }
 }
 
 impl<T> Default for SlotMap<T> {
@@ -158,5 +187,119 @@ mod tests {
         // after remove, gen_of returns the bumped generation
         m.remove(s, 0);
         assert_eq!(m.gen_of(s), Some(1));
+    }
+
+    // --- Task 4 additions ---
+
+    #[test]
+    fn ids_are_copy_and_ord() {
+        let a = CraftId { slot: 0, gen: 0 };
+        let b = CraftId { slot: 0, gen: 1 };
+        let c = CraftId { slot: 1, gen: 0 };
+        // Copy: using `a` after passing it by value must still work.
+        let _copy = a;
+        assert!(a < b, "same slot, lower gen sorts first");
+        assert!(b < c, "lower slot sorts before higher slot regardless of gen");
+        assert_eq!(a, a);
+
+        let x = BodyId { slot: 2, gen: 5 };
+        let y = BodyId { slot: 2, gen: 5 };
+        assert_eq!(x, y);
+    }
+
+    #[test]
+    fn insert_get_len_cursor() {
+        let mut sm: SlotMap<u32> = SlotMap::new();
+        assert_eq!(sm.len(), 0);
+        assert_eq!(sm.cursor(), 0);
+
+        let (s0, g0) = sm.insert(100);
+        assert_eq!((s0, g0), (0, 0));
+        assert_eq!(sm.len(), 1);
+        assert_eq!(sm.cursor(), 1);
+        assert_eq!(sm.get(s0, g0), Some(&100));
+
+        let (s1, g1) = sm.insert(200);
+        assert_eq!((s1, g1), (1, 0));
+        assert_eq!(sm.len(), 2);
+        assert_eq!(sm.cursor(), 2);
+        assert_eq!(sm.get(s1, g1), Some(&200));
+
+        // wrong generation reads nothing.
+        assert_eq!(sm.get(s0, 99), None);
+        // out-of-range slot reads nothing.
+        assert_eq!(sm.get(7, 0), None);
+    }
+
+    #[test]
+    fn remove_invalidates_old_id_not_replacement() {
+        let mut sm: SlotMap<u32> = SlotMap::new();
+        let (s0, g0) = sm.insert(100);
+        assert_eq!(sm.remove(s0, g0), Some(100));
+        // double-remove of the stale id is a no-op.
+        assert_eq!(sm.remove(s0, g0), None);
+        // old id is now stale.
+        assert_eq!(sm.get(s0, g0), None);
+        assert_eq!(sm.len(), 0);
+        // cursor is a high-water mark: removal does NOT shrink it.
+        assert_eq!(sm.cursor(), 1);
+
+        // reinserting reuses slot 0 but with a bumped generation.
+        let (s1, g1) = sm.insert(200);
+        assert_eq!(s1, s0, "freed slot is reused");
+        assert_eq!(g1, g0 + 1, "generation bumped on reuse");
+        // the replacement is live...
+        assert_eq!(sm.get(s1, g1), Some(&200));
+        // ...but the old id still does NOT resolve to it.
+        assert_eq!(sm.get(s0, g0), None);
+        assert_eq!(sm.cursor(), 1, "reused slot does not advance cursor");
+    }
+
+    #[test]
+    fn dense_index_id_at_iter_ids() {
+        let mut sm: SlotMap<u32> = SlotMap::new();
+        let (s0, g0) = sm.insert(10);
+        let (s1, g1) = sm.insert(20);
+
+        // dense_index: live id -> its row (slot==row in v1); stale/oob -> None.
+        assert_eq!(sm.dense_index(s0, g0), Some(0));
+        assert_eq!(sm.dense_index(s1, g1), Some(1));
+        assert_eq!(sm.dense_index(s0, 99), None, "stale gen -> None");
+        assert_eq!(sm.dense_index(7, 0), None, "out-of-range slot -> None");
+
+        // id_at: row -> (slot,gen) of the live occupant; empty/oob row -> None.
+        assert_eq!(sm.id_at(0), Some((s0, g0)));
+        assert_eq!(sm.id_at(1), Some((s1, g1)));
+        assert_eq!(sm.id_at(2), None, "out-of-range row -> None");
+
+        // iter_ids: yields every live (slot,gen) in ascending slot order.
+        let live: Vec<(u32, u32)> = sm.iter_ids().collect();
+        assert_eq!(live, vec![(s0, g0), (s1, g1)]);
+
+        // after a remove, the freed row is skipped by iter_ids and id_at -> None.
+        assert_eq!(sm.remove(s0, g0), Some(10));
+        assert_eq!(sm.id_at(0), None, "removed row -> None");
+        assert_eq!(sm.dense_index(s0, g0), None, "stale id after remove -> None");
+        let live_after: Vec<(u32, u32)> = sm.iter_ids().collect();
+        assert_eq!(live_after, vec![(s1, g1)]);
+    }
+
+    #[test]
+    fn cursor_is_deterministic() {
+        fn drive() -> (u64, usize) {
+            let mut sm: SlotMap<u32> = SlotMap::new();
+            let a = sm.insert(1);
+            let b = sm.insert(2);
+            sm.remove(a.0, a.1);
+            let _c = sm.insert(3); // reuses a's slot, does not grow cursor
+            sm.remove(b.0, b.1);
+            let _d = sm.insert(4); // reuses b's slot
+            (sm.cursor(), sm.len())
+        }
+        let first = drive();
+        let second = drive();
+        assert_eq!(first, second, "same op sequence -> same (cursor, len)");
+        assert_eq!(first.0, 2, "two slots ever allocated -> cursor == 2");
+        assert_eq!(first.1, 2, "two live entries");
     }
 }

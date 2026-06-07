@@ -20,6 +20,10 @@ pub mod ids;
 pub mod types;
 pub mod config;
 pub mod hash;
+pub mod stores;
+
+pub use ids::{BodyId, CraftId, SlotMap};
+pub use stores::{BodyStore, Effective, NavState, ShipStore, effective_params};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.
