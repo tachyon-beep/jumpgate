@@ -151,6 +151,42 @@ mod tests {
     }
 
     #[test]
+    fn command_sort_key_relies_on_stable_sort_for_collisions() {
+        // A Craft and a Body with identical slot/gen deliberately map to the
+        // SAME sort key (2,7,1). Canonical apply ordering therefore depends on
+        // `sort_by_key` being STABLE — an unstable sort could reorder these and
+        // the existing total-order test (all-distinct keys) would not catch it.
+        let craft = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
+            slot: 7,
+            gen: 1,
+        })));
+        let body = dest_cmd(Target::Entity(EntityRef::Body(BodyId {
+            slot: 7,
+            gen: 1,
+        })));
+
+        // Both collide on the exact same key.
+        assert_eq!(command_sort_key(&craft), (2, 7, 1));
+        assert_eq!(command_sort_key(&body), (2, 7, 1));
+        assert_eq!(command_sort_key(&craft), command_sort_key(&body));
+        // ...yet the commands themselves are distinct (different entity kind).
+        assert_ne!(craft, body);
+
+        // Insertion order craft-then-body must be preserved after the stable sort.
+        let mut v1 = [craft, body];
+        v1.sort_by_key(command_sort_key);
+        assert_eq!(v1[0], craft, "stable sort keeps the first-inserted craft first");
+        assert_eq!(v1[1], body);
+
+        // The reverse insertion order is likewise preserved (proves it is the
+        // insertion order, not an accidental tie-break on content).
+        let mut v2 = [body, craft];
+        v2.sort_by_key(command_sort_key);
+        assert_eq!(v2[0], body, "stable sort keeps the first-inserted body first");
+        assert_eq!(v2[1], craft);
+    }
+
+    #[test]
     fn enums_round_trip_via_partial_eq() {
         let c = CraftId { slot: 7, gen: 2 };
 
