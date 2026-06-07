@@ -1,0 +1,17 @@
+# Tier-B determinism floor: ban every non-reproducible entropy/clock/env source.
+# Enforced via `cargo clippy --all-targets -- -D warnings`.
+#
+# RNG PATHS ARE 0.10-FAMILY NAMES. In rand 0.10 `thread_rng` was renamed to
+# `rand::rng()` and the `from_entropy` constructors were removed (entropy now
+# enters only via `from_rng(&mut SysRng)` / `make_rng`). Banning the old 0.9
+# names would be INERT (clippy ignores unresolvable paths) — a false floor.
+# Verified: clippy 1.95 emits "use of a disallowed method `rand::rng`" /
+# "`rand::make_rng`" on a violation; the std bans fire identically.
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "wall clock breaks Tier-B replay; derive time from tick*dt" },
+    { path = "std::time::Instant::now", reason = "wall clock breaks Tier-B replay; derive time from tick*dt" },
+    { path = "rand::rng", reason = "thread-local entropy RNG (0.9 `thread_rng`) breaks replay; use a named ChaCha8Rng sub-stream seeded from the master u64" },
+    { path = "rand::make_rng", reason = "entropy-seeded RNG (0.10 replacement for `from_entropy`) breaks replay; seed deterministically via from_seed/seed_from_u64" },
+    { path = "std::env::var", reason = "env reads make runs config-dependent off the hashed run-config" },
+    { path = "std::env::vars", reason = "env reads make runs config-dependent off the hashed run-config" },
+]

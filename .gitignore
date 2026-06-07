@@ -1,0 +1,17 @@
+archive/
+
+# Rust
+/target/
+**/target/
+Cargo.lock.orig
+
+# Python / maturin
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/

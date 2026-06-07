@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.12,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "jumpgate"
+version = "0.1.0"
+description = "jumpgate deterministic Newtonian space sim + Gymnasium env"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3.12",
+]
+
+[tool.maturin]
+module-name = "jumpgate._native"
+python-source = "../../python"
+features = ["pyo3/extension-module"]

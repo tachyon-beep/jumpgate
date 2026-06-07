@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/jumpgate-core",
+    "crates/jumpgate-py",
+]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Pinned EXACT for Tier-B same-binary reproducibility, ALL on the rand 0.10
+# family so a single rand_core 0.10.1 node is shared (verified via cargo tree).
+# ChaCha8Rng from a pinned rand_chacha is version-stable; StdRng is not.
+# `rand` is the determinism LINT activator (dev-dep in core) — banning its
+# entropy entry points is inert unless the crate actually depends on it.
+rand_chacha = "=0.10.0"
+rand_core = "=0.10.1"
+rand = "=0.10.1"
+# PyO3 0.23 + numpy 0.23 per the shared type contract (verbatim). abi3-py312
+# so the cdylib needs no interpreter at build time.
+pyo3 = { version = "=0.23.5", default-features = false }
+numpy = "=0.23.0"
+
+[profile.release]
+# Deterministic-friendly release profile. No fast-math; default opt.
+lto = false
+codegen-units = 1

@@ -1,0 +1,15 @@
+[package]
+name = "jumpgate-py"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "jumpgate PyO3/maturin ML+gym facade (FFI; unsafe allowed here, not in core)"
+
+[lib]
+name = "jumpgate"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+jumpgate-core = { path = "../jumpgate-core" }
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }
+numpy = { workspace = true }

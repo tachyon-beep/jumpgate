@@ -1,0 +1,19 @@
+[package]
+name = "jumpgate-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "jumpgate deterministic Newtonian space core (Tier-B replayable)"
+
+[dependencies]
+rand_chacha = { workspace = true }
+rand_core = { workspace = true }
+
+[dev-dependencies]
+# Lint ACTIVATOR ONLY. Banning rand::rng / rand::make_rng (clippy.toml) is inert
+# unless this crate depends on `rand`. As a dev-dep, the ban goes live for test
+# targets under `cargo clippy --all-targets`; engine code never references rand.
+rand = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
