@@ -134,6 +134,31 @@ pub fn ingest_into(
     }
 }
 
+/// THE single ingestion path against the real `World`. Sorts by `command_sort_key`
+/// (total over World/Sim/entity scopes), resolves each `NavDest` into a concrete
+/// `NavState::Seeking`, logs (resolved values, never re-rolled intentions — the
+/// lever invariant), and emits `ActionIngested`. v1's only `CommandKind` is
+/// `Destination`. Writes through three narrow World mutators (`log_mut`,
+/// `set_nav`, `events_mut`) rather than touching another module's private fields.
+pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut Vec<Command>) {
+    cmds.sort_by_key(command_sort_key);
+    for &cmd in cmds.iter() {
+        world.log_mut().record(tick, cmd);
+        // Only craft targets carry a v1 nav effect; World/Sim/Body targets are
+        // logged + ActionIngested-emitted (the seam) but otherwise inert.
+        if let Target::Entity(EntityRef::Craft(id)) = cmd.target {
+            let CommandKind::Destination { dest, burn_budget } = cmd.kind;
+            let dv = burn_budget.unwrap_or(f64::INFINITY);
+            world.set_nav(id, NavState::Seeking { dest, dv_remaining: dv });
+        }
+        world.events_mut().emit(Event {
+            tick,
+            kind: EventKind::ActionIngested { target: cmd.target },
+        });
+    }
+    cmds.clear();
+}
+
 /// Fuel-derived Δv fallback when no explicit budget is given:
 /// Tsiolkovsky Δv = v_e * ln((dry + fuel) / dry), using effective params (§5.5).
 fn dv_from_fuel(ship: &ShipStore, idx: usize) -> f64 {

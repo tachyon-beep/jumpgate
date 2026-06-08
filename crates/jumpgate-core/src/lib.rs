@@ -31,6 +31,7 @@ pub mod ship;
 pub mod stores;
 pub mod time;
 pub mod types;
+pub mod world;
 
 // Crate-root re-export surface. Downstream tasks (and the jumpgate-py facade)
 // import seam/physics/config types through `jumpgate_core::{...}` rather than
@@ -56,6 +57,7 @@ pub use ship::thrust_accel_and_burn;
 pub use stores::{BodyStore, Effective, NavState, ShipStore, effective_params};
 pub use time::{Dt, Tick, sim_time};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, Target};
+pub use world::{FullObserver, Observer, View, World};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.
