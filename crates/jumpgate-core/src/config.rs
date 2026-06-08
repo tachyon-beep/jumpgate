@@ -110,20 +110,32 @@ impl RunConfig {
     /// order (counts folded in first so two scenarios with different cardinality
     /// can never collide). DISTINCT from the per-tick state hash.
     pub fn config_hash(&self) -> ConfigHash {
+        // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
+        // until it is explicitly folded below (D10/M6 — closes the silent-omission
+        // provenance hole). Field FOLD ORDER below is unchanged (value-preserving).
+        let RunConfig {
+            master_seed,
+            dt,
+            softening,
+            substep_cfg,
+            ephemeris_window,
+            bodies,
+            craft,
+        } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
-        h.write_u64(self.master_seed);
-        h.write_u64(self.dt.bits());
-        h.write_u64(self.softening.to_bits());
-        h.write_u64(self.substep_cfg.accel_ref.to_bits());
-        h.write_u64(self.substep_cfg.max_substeps as u64);
-        h.write_u64(self.ephemeris_window);
+        h.write_u64(*master_seed);
+        h.write_u64(dt.bits());
+        h.write_u64(softening.to_bits());
+        h.write_u64(substep_cfg.accel_ref.to_bits());
+        h.write_u64(substep_cfg.max_substeps as u64);
+        h.write_u64(*ephemeris_window);
         // Counts folded BEFORE field values so cardinality changes always move
         // the hash even if the new elements are all-zero.
-        h.write_u64(self.bodies.len() as u64);
-        h.write_u64(self.craft.len() as u64);
+        h.write_u64(bodies.len() as u64);
+        h.write_u64(craft.len() as u64);
         // Bodies in declaration order; each field in fixed order.
-        for b in &self.bodies {
+        for b in bodies {
             h.write_u64(b.mass.to_bits());
             h.write_u64(b.elements.a.to_bits());
             h.write_u64(b.elements.e.to_bits());
@@ -133,7 +145,7 @@ impl RunConfig {
             h.write_u64(b.elements.m0.to_bits());
         }
         // Craft in declaration order; spec, pos, vel, fuel in fixed order.
-        for c in &self.craft {
+        for c in craft {
             h.write_u64(c.spec.base_dry_mass.to_bits());
             h.write_u64(c.spec.base_max_thrust.to_bits());
             h.write_u64(c.spec.base_exhaust_velocity.to_bits());
@@ -155,6 +167,8 @@ impl RunConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GOLDEN_CONFIG_HASH: u64 = 0x9767_52c4_8d05_053c; // captured from sample().config_hash()
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -189,6 +203,20 @@ mod tests {
                 fuel_mass: 0.5,
             }],
         }
+    }
+
+    #[test]
+    fn config_hash_golden_anchor_is_stable() {
+        // Drift-lock: the sample config's hash must not move under a refactor that
+        // is meant to be value-preserving (e.g. the exhaustive-destructure change).
+        // If a NEW field is added and folded, this value SHOULD change and be re-pinned
+        // deliberately (mirrors the state_hash golden discipline).
+        let got = sample().config_hash();
+        assert_eq!(
+            got,
+            ConfigHash(GOLDEN_CONFIG_HASH),
+            "config_hash drifted: re-pin only if intentional"
+        );
     }
 
     #[test]
