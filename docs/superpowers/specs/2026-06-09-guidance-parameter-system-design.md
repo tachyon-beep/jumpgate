@@ -814,7 +814,7 @@ settleable from code alone (§14).
 - **Fleet/taskforce structure** (see `docs/glossary.md`). `GuidanceParams` is *fleet-wide*
   policy; in v1 there is no fleet aggregate, so it lives **run-level** in `RunConfig` (one
   implicit fleet per run). When the **fleet** concept lands it migrates to a per-fleet
-  attribute and the reset guard reads `ship.fleet.guidance.k_brake`; the **taskforce**
+  attribute and the reset guard reads `craft.fleet.guidance.k_brake`; the **taskforce**
   layer (command delays at the `ingest.rs` seam) is a further-future echelon. None of this
   changes v1; the run-level placement is forward-compatible (the migration is RunConfig →
   Fleet, the same Class-2 config-hashed value moving down one level).

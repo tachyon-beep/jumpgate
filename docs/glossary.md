@@ -1,23 +1,34 @@
 # Jumpgate — terminology
 
-Canonical names for the command/organisation hierarchy. The hierarchy is naval:
-**ship → fleet → taskforce**, commanded by **commodore → admiral**.
+Canonical names for the command/organisation hierarchy:
+**craft → fleet → taskforce**, commanded by **captain → commodore → admiral**.
 
-## Ship
-The discrete mobile unit — "just a ship." The atomic actor the engine integrates
-(position, velocity, fuel, nav state).
+## Craft
+The discrete mobile unit — the engine's atomic actor (position, velocity, fuel,
+nav state). **`craft` is the generic term on purpose: it spans the entire size
+range, from drones up to titans.** "Ship" was rejected precisely because it
+implies a mid-range class; a drone is not a ship and neither is a titan, but both
+are craft.
 
-> **Naming note:** the codebase currently mixes two names — the storage type is
-> `ShipStore` but the id type and the public `StateView`/contract accessors are
-> `Craft*` (`CraftId`, `craft_pos`, `craft_ids`, `CraftInit`, …). **`ship` is
-> canonical**; the `Craft*` symbols are legacy to be renamed (tracked separately;
-> a behaviour-preserving, hash-neutral rename of the contract surface). Use *ship*
-> in all new design/code. ("Craft" is rejected as the generic term: the hierarchy
-> is naval and ship-centric; stations/probes/drones, if ever modelled, get their
-> own names rather than making the unit generic.)
+**Every craft has a captain** — the per-craft command authority — *regardless of
+whether anyone is aboard*. The captain may be a human on the flight deck, a remote
+operator, or a drone's onboard chip. The captain is uniform across the size range
+(it is the decision-maker for that craft); it links to the unified Person model
+(see the Person+Ship design). This means "craft" and "is commanded" are
+inseparable: there is no captain-less craft.
+
+> **Naming note:** the public id type and `StateView`/contract accessors already
+> use `craft` correctly (`CraftId`, `craft_pos`, `craft_ids`, `CraftInit`, …) —
+> these stay. The one inconsistency is the *internal* storage type `ShipStore`
+> (and a few `ship` locals), which should be renamed **`CraftStore`** for
+> consistency. It is `pub(crate)`, not on the public surface, so the rename is
+> small, internal, and behaviour-/hash-neutral.
+
+Craft span a size/class spectrum (drone … titan); the specific class names and
+breakpoints are TBD and out of scope here.
 
 ## Fleet
-A group of ships under a **commodore** (or higher rank) that manoeuvre and operate
+A group of craft under a **commodore** (or higher rank) that manoeuvre and operate
 as one **cohesive group**. Splitting up = no longer the same fleet (a fleet is
 defined by cohesion, not a static roster).
 
@@ -42,6 +53,6 @@ T takes effect at T + delay deterministically.
 
 | Level | Unit | Commander | Notes |
 |---|---|---|---|
-| Ship | one mobile unit | (pilot) | engine's atomic actor |
-| Fleet | cohesive group of ships | Commodore | unit of shared guidance policy |
+| Craft | one mobile unit (drone … titan) | Captain | always commanded — human aboard / remote operator / drone chip |
+| Fleet | cohesive group of craft | Commodore | unit of shared guidance policy |
 | Taskforce | all fleets in a system | Admiral | command delays apply |
