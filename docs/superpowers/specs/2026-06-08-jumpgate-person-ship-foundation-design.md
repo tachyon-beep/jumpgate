@@ -92,7 +92,7 @@ pub struct PersonStore {
     pub location:    Vec<Location>,      // [LIVE] discriminant + container id; position derived
     pub skills:      Vec<SkillVector>,   // [LIVE-as-data] full vector stored+hashed; Engine+Leadership wired
     pub status:      Vec<PersonStatus>,  // [LIVE] gates succession; changes mid-run → hashed
-    pub brain:       Vec<Brain>,         // [LIVE tag] only None/Autopilot dispatch
+    pub brain:       Vec<Brain>,         // [SHAPED] stored tag; no command dispatch in v1
     pub personality: Vec<Personality>,   // [SHAPED-INERT] stored; passed to compute_crew_mods as ignored arg
     pub agenda:      Vec<Agenda>,        // [SHAPED-INERT] one reserved enum value; no state machine
 }
@@ -126,19 +126,54 @@ one**, but only `Engine` and `Leadership` map to a real codomain in v1.
 
 ```rust
 pub enum PersonStatus { Alive, Incapacitated, Dead }  // [LIVE] Copy, Ord; folded in hash
-pub enum Brain { None, Autopilot, Policy, Fsm, TraitDriven }  // [LIVE: only None/Autopilot dispatch]
+pub enum Brain { None, Autopilot, Policy, Fsm, TraitDriven }  // [SHAPED] no v1 command dispatch
 pub struct Personality(pub u32);  // [SHAPED-INERT] Copy bitflags; pinned bit order; NOT String/Vec
 pub enum Agenda { OnDuty }        // [SHAPED-INERT] one reserved value
 ```
 
-`Brain`'s `Policy`/`Fsm`/`TraitDriven` arms are typed-but-uninhabited-of-logic
-(exactly like `Lod::NpcInteraction` today). **No dispatch code for the dead
-arms.** When `Policy` lands it is a **Command producer at the ingest boundary**,
-never invoked inside `step()` (§5).
+**`Brain` is shaped, not live, as a command source in v1.** *No* `Brain` variant
+produces commands in v1 — not even `Autopilot`/`None`. The ship's existing
+nav-executor (`autopilot.rs`, `NavState → thrust`) is **unchanged and is NOT a
+Person brain**; it always runs, orthogonal to crew. The `Brain` field is a
+reserved tag for the future embodied-control work; when `Policy`/`Fsm`/`TraitDriven`
+land they are **Command producers at the ingest boundary** (recorded, replayable),
+never invoked inside `step()` (§5). The controller slot's *only* LIVE effect in v1
+is the leadership meta-modifier via `resolve_controller` (§4.1).
 
-`status = Dead` rather than freeing the slot: `PersonStore` is the first store
-with real mid-run "removal", so every person lookup returns `Option` via the
-dense-index resolver and **never `expect`s**.
+**v1 command authority (explicit, to kill the `controller=None` vs `Brain::None`
+ambiguity):**
+
+| controller | resolves valid? | brain | v1 behaviour |
+|---|---|---|---|
+| `None` | — | — | existing nav-executor + external/player/test command path; leadership = `NEUTRAL` |
+| `Some(p)` | yes | any | **identical command path**; the *only* difference is `crew_mods` (leadership = `p.skills[Leadership]`) |
+| `Some(p)` | no (stale/dead/other-ship) | any | as `None`: leadership falls back to `NEUTRAL` |
+
+No `Brain` arm has dispatch code in v1; `Policy`/`Fsm`/`TraitDriven` are stored
+tags only.
+
+**Status contribution (binary in v1):** only `Alive` persons contribute — to the
+controller meta-modifier **and** to `domain_sums`. `Incapacitated` and `Dead`
+remain present and hashable but contribute **zero**. (Partial contribution,
+recovery, command penalties are deferred.)
+
+**Finite-value invariant (determinism-critical).** Every `f64` that is hashed or
+enters the formula — all `skills`, `abstracted_crew_competence`, and any
+`Location::InSpace(Vec3)` component — **must be finite (non-NaN, non-±∞) and is
+validated/clamped at creation/load**. A NaN hashed via `to_bits()` poisons sort
+keys, equality, and the determinism story; non-finite skill inputs are **rejected
+at construction**, never silently folded. (Risk 18.)
+
+**Dead vs stale (4 distinct states, never conflated).** A `PersonId` is either:
+(1) present+`Alive`, (2) present+`Incapacitated`, (3) present+`Dead`, or
+(4) absent/stale (generation mismatch / invalid slot). `status = Dead` rather
+than freeing the slot — so a dead person is still **hashable state**, while a
+stale reference is **not present at all**. Every person lookup returns `Option`
+via the dense-index resolver and **never `expect`s**; `resolve_person` (presence),
+`is_effective_crew` (present+`Alive`), and `resolve_controller` (present+`Alive`+
+`Aboard(this_ship)`) are the three distinct gates. Both a stale and a present-but-
+`Dead` roster entry are skipped for crew effect, with well-defined hash treatment
+either way.
 
 ---
 
@@ -186,6 +221,16 @@ auto-promotion exists. (Using a live person's leadership from *another* ship is
 the dangerous case generational-id staleness alone would NOT catch; the
 location+status check is what closes it.)
 
+**Controller ↔ role relationship (stated to avoid later confusion):** the
+controller *may* also occupy a roster slot (e.g. the Captain is both
+`roster[Captain]` and `controller`). When they do, their **non-leadership**
+skills contribute through that role's demand vector exactly like any crew member;
+their leadership contributes **only** through the controller meta-modifier (it has
+0 role-demand weight, §4.3) — so there is no double-count. Crucially,
+**`controller` need not equal `roster[Captain]`**: the controller can be a pilot,
+an acting commander, or (later) an AI. This is precisely what enables the
+"graceless genius promoted into the chair" scenario.
+
 ### 4.2 `compute_crew_mods` — placement, ordering, and feed
 
 `compute_crew_mods` runs as a single canonical pass at the **top of `step()`,
@@ -202,6 +247,15 @@ step():
   (4) copy-forward (prev_fuel …)
   (5) tick++
 ```
+
+**Tick-timing (frozen):** `crew_mods[t]` is computed from **committed world
+state at the start of tick t** — after all commands/events from tick t-1 have
+been applied, and *before* any tick-t command is ingested. Consequence: a
+personnel change (assignment, status, injury, future crew-transfer command)
+ingested *during* tick t takes effect on **tick t+1**, never the same tick. This
+"changes affect next tick" rule is the deterministic default; a pre-step
+personnel-command phase would be the only thing that could change it, and it is
+deliberately not introduced in v1.
 
 **Top-of-step, not between ingest and integrate:** the Δv *budget* and the *burn*
 both read `Effective`. Computing into a persisted column *before* ingest makes
@@ -239,7 +293,7 @@ compute_crew_mods, per ship:
   // PER-DOMAIN accumulation — keep domains separate, never collapse to one scalar.
   domain_sums = [0.0; N_DOMAINS]
   for each occupied roster slot (iterate in fixed Role-index order — canonical):
-      person  = resolve(roster[role])              // Option-aware; skip empty/stale
+      person  = is_effective_crew(roster[role])    // Option-aware; skip empty/stale/non-Alive
       demand  = RoleDemand::demand(role)           // [f64; N_DOMAINS], const
       for d in 0..N_DOMAINS:  domain_sums[d] += person.skills[d] * demand[d]
 
@@ -267,6 +321,13 @@ to the pre-Person build. Concretely, `f(NEUTRAL_LEADERSHIP) == 1.0` and
 `g(0.0, default_competence) == 1.0`. Per the user's calibration choice, any
 monotone four-ops clamped `f`/`g` satisfying this and passing the drop test is
 acceptable; the constants are frozen once chosen so the golden hash is stable.
+**Tuning is deferred; numerical exactness is not** — at implementation time the
+constants, operation order, and clamp order are pinned exactly (with explicit
+min/max bounds), and skill inputs are finite-validated (§3.1). A monotone shape
+is the only gameplay commitment; the arithmetic is otherwise fully specified
+before code lands. Leadership's 0 role-demand weight is enforced by a test
+(`assert RoleDemand::demand(role)[Leadership] == 0.0` for every role), so a future
+contributor cannot reintroduce the double-count by "helpfully" weighting it.
 
 **Leadership enters only as the meta-modifier.** `RoleDemand::demand(role)` has a
 **0.0 weight on the `Leadership` domain for every role** — leadership influences
@@ -307,9 +368,12 @@ reserved `HASH_FIELD_ORDER` words 16+ (words 14–15 stay reserved for
 
 - `person_store.ids.cursor()` (via the existing `write_store_cursor` pattern) —
   without it, two worlds with different Person spawn histories hash equal.
-- Persons **sorted by `PersonId`**: `location` (discriminant + container id;
-  `InSpace` `Vec3` folded only on that arm), `skills` (all N domains via
-  `to_bits()` in enum order), `status`.
+- Persons **sorted by `PersonId`** (all *present* persons regardless of status —
+  a `Dead` person is still hashed state in id order; stale slots are simply
+  absent): `location` (discriminant + container id; `InSpace` `Vec3` folded only
+  on that arm), `skills` (all N domains via `to_bits()` in enum order), `status`.
+  All hashed `f64`s are finite by the §3.1 construction invariant, so `to_bits()`
+  never folds a NaN payload.
 - Ship `roster` (fixed array, Role-index order), `controller` (authoritative link
   direction only), and **`abstracted_crew_competence`** — the last is a mutable
   *input* to `crew_mods` (not transitively pinned by roster/controller), so
@@ -394,8 +458,11 @@ would make event-driven recompute safe to add.)
 - `NEUTRAL_LEADERSHIP` constant + `f`/`g` chosen so the empty state is exactly
   identity.
 - `Location` (Aboard live), `Domain`/`SkillVector` (full vector stored+hashed;
-  Engine+Leadership wired), `PersonStatus`, `Brain` (None/Autopilot dispatch),
-  `Role` + const `RoleDemand` table.
+  Engine+Leadership wired), `PersonStatus` (only `Alive` contributes),
+  `Brain` (enum stored; **no command dispatch in v1**), `Role` + const
+  `RoleDemand` table (Leadership weight 0, test-guarded).
+- Finite-value validation at person construction/load (reject non-finite
+  skills/competence/coords).
 - Hash fold of all live columns + person cursor (version 2); extended
   `command_sort_key`; succession comparator; `Crew` RNG reservation.
 - Tests: controller-swap drops `thrust_factor`; trajectory-equivalence;
@@ -415,7 +482,8 @@ would make event-driven recompute safe to add.)
 
 - Per-domain `Effective` *sets* (multiple `Effective` structs) — one domain
   exists; the `CrewMods` struct seam makes this additive.
-- `agenda` beyond one reserved enum value (no state machine, no docking hooks).
+- `agenda` states beyond the single reserved `OnDuty` value (no state machine,
+  no docking hooks).
 - `Location::InSpace` integrated physics (EVA).
 - A parallel Person-LOD enum.
 - Per-crewman rows for the unmodeled mass (the scalar is the whole
@@ -446,6 +514,10 @@ would make event-driven recompute safe to add.)
 | 15 | Med | `NEUTRAL_LEADERSHIP` unspecified + empty-state ≠ identity → proof-test assertions and golden hash become moving targets. | Freeze `NEUTRAL_LEADERSHIP`; choose `f`,`g` so no-controller/empty-roster/default-competence ⇒ `thrust_factor == 1.0` exactly. (§4.3) |
 | 16 | High | `abstracted_crew_competence` is an unhashed `crew_mods` input → silent replay divergence when it changes. | Fold it into the ship hash alongside roster/controller. (§5) |
 | 17 | Low | Lockstep mutator recomputing `crew_mods` is a redundant 2nd derivation that can disagree with `step()`. | Mutator writes only authoritative columns; `crew_mods` derived solely at top-of-step; `IDENTITY` at reset. (§4.1, §4.2) |
+| 18 | High | NaN/non-finite `f64` in skills/competence/`InSpace` poisons `to_bits()` hash, sort keys, equality. | Finite-validate (reject) at construction/load; nothing non-finite ever folded. (§3.1, §5) |
+| 19 | Med | `controller=None` vs `Brain::None` vs `Brain::Autopilot` semantics muddled → divergent control behaviour. | Explicit v1 command-authority table; no `Brain` produces commands in v1; ship nav-executor is not a Person brain. (§3.1) |
+| 20 | Med | Ambiguous which tick a personnel change affects → non-reproducible crew effects. | Frozen rule: `crew_mods[t]` from start-of-tick-t state; personnel changes take effect t+1. (§4.2) |
+| 21 | Low | `Dead` (hashable) conflated with stale (absent) → inconsistent skip/hash treatment. | Four explicit states + three gates (`resolve_person`/`is_effective_crew`/`resolve_controller`); both skipped, hash well-defined. (§3.1) |
 
 ---
 
@@ -475,6 +547,19 @@ would make event-driven recompute safe to add.)
   exactly (and `NEUTRAL_LEADERSHIP` path yields identity).
 - **Controller validity:** a controller that is dead, or aboard another ship,
   resolves to `None` ⇒ leadership falls back to `NEUTRAL_LEADERSHIP`.
+- **Tested inertness:** flipping *every* `Personality` bit on *every* crew member
+  changes neither `crew_mods` nor trajectory in v1 (proves the seam is genuinely
+  inert, not fake-future architecture).
+- **Leadership-never-in-demand:** `RoleDemand::demand(role)[Leadership] == 0.0`
+  for every `Role`.
+- **Dead vs stale:** a roster entry pointing to a present-but-`Dead` person and
+  one pointing to a stale `PersonId` are both skipped for crew effect, with a
+  well-defined (and stable) state hash.
+- **Incapacitated contributes zero:** an `Incapacitated` crew member yields the
+  same `crew_mods` as an empty slot.
+- **Finite-validation:** constructing a person with a non-finite skill (or
+  non-finite competence / `InSpace` coord) is rejected, never folded into the
+  hash.
 - **Phase:** non-identity fixture ⇒ Δv budget and burn read the same `Effective`.
 - **Determinism:** roster insertion-order shuffle ⇒ identical `state_hash`;
   succession comparator tie-break unit test.
@@ -498,3 +583,33 @@ destruction lands, its handler **must** update aboard-persons (e.g. set
 caught by generational-id staleness (lookup returns `None`, no unsafety) but
 leaves unreachable rows still folded into the hash. This is a destruction-feature
 responsibility, deliberately not built now.
+
+**Persistence note.** There is no save/load system; the world is materialized by
+`reset(RunConfig)` and reproduced by replay-from-log. Persons are therefore
+spawned at `reset` from config (a new `PersonInit` / roster section in
+`RunConfig`, folded into the **config hash** like `CraftInit`), exactly as craft
+are today. "Migration" here means the schema/seam change + the
+`HASH_FORMAT_VERSION` bump, not a data-file migration.
+
+---
+
+## 12. Recommended implementation order
+
+The seam-isolating sequence (each step independently testable; riskiest gate
+first):
+
+1. `CrewMods` + `CrewMods::IDENTITY` + `crew_mods` column; change
+   `effective_params(spec, &CrewMods)` at all call sites.
+2. **Prove trajectory-equivalence** with identity mods (bit-identical to today)
+   *before* anything Person-shaped exists.
+3. `PersonId` + `PersonStore` + `EntityRef::Person` + `command_sort_key`
+   extension + `HASH_FORMAT_VERSION` 1→2 (golden re-derived).
+4. Ship `roster` / `controller` / `abstracted_crew_competence` columns — all
+   still identity in effect.
+5. `compute_crew_mods` (top-of-step, LOD-gated, per-domain) with **exact
+   empty-state identity**; `resolve_controller` + `is_effective_crew` gates;
+   finite-validation at construction.
+6. Proof tests: controller-swap thrust drop, budget/burn same-`Effective`,
+   roster-shuffle hash-invariance, controller-validity, tested inertness,
+   leadership-never-in-demand, dead-vs-stale, incapacitated-zero.
+7. Only then: scenario fixtures with actual crewed ships.
