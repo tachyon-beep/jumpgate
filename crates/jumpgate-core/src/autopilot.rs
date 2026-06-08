@@ -3,40 +3,24 @@
 //!
 //! v1 braking law (velocity-targeting with a sqrt deceleration profile): work in
 //! the TARGET's reference frame (`rel_vel = vel - dest_vel`), command a closing
-//! speed `min(V_CRUISE, v_brake)` toward the destination where
-//! `v_brake = sqrt(2*K_BRAKE*a_max*(d - ARRIVAL_RADIUS))`, and steer the FULL
-//! velocity error (radial + tangential) so the craft brakes to ~rest relative to
-//! a fixed `Position` and velocity-matches a moving `Body`. Cut throttle inside
-//! `ARRIVAL_RADIUS`, when the Δv budget is exhausted, or when already
-//! velocity-matched (the `V_ERR_EPS` deadband — `thrust_accel_and_burn` burns
-//! fuel ∝ throttle regardless of direction, so don't burn for ~zero accel).
-//! Reads `Effective` (the §5.5 accessor output), never `BaseSpec` directly.
+//! speed `min(cruise_cap, v_brake)` toward the destination where
+//! `v_brake = sqrt(2*k_brake*a_max*(d - ARRIVAL_RADIUS))` and the cruise cap is
+//! `cruise_burn_fraction × full-tank Δv` (ship-dependent, trajectory-constant),
+//! and steer the FULL velocity error (radial + tangential) so the craft brakes
+//! to ~rest relative to a fixed `Position` and velocity-matches a moving `Body`.
+//! Cut throttle inside `ARRIVAL_RADIUS`, when the Δv budget is exhausted, or when
+//! already velocity-matched (the `v_err_eps` deadband — `thrust_accel_and_burn`
+//! burns fuel ∝ throttle regardless of direction, so don't burn for ~zero accel).
+//! `k_brake`, `cruise_burn_fraction`, and `v_err_eps` come from `GuidanceParams`
+//! (run-level policy, D1/D4). Reads `Effective` (the §5.5 accessor output), never
+//! `BaseSpec` directly.
 
+use crate::config::GuidanceParams;
 use crate::math::Vec3;
 use crate::stores::{Effective, NavState};
 
 /// Distance (canonical AU) at which the autopilot declares "arrived" and cuts thrust.
 pub const ARRIVAL_RADIUS: f64 = 1.0e-4;
-
-/// Braking safety margin (`< 1`): the craft brakes slightly EARLY (commands a
-/// closing speed below the theoretical max stoppable speed) to absorb the
-/// per-tick discretization overshoot, so a tick boundary lands inside
-/// `ARRIVAL_RADIUS` rather than tunnelling through it. Tuned by measurement.
-pub const K_BRAKE: f64 = 0.5;
-
-/// Closing-speed cap (canonical AU/day) in the target frame. Bounds the peak
-/// commanded speed so the round-trip Δv (accelerate to `V_CRUISE`, then brake;
-/// `thrust_accel_and_burn` burns ∝ throttle in BOTH phases) stays within a
-/// realistic fuel budget, and so the near-arrival per-tick step is small enough
-/// for the point-in-sphere arrival predicate to fire. Tuned by measurement.
-pub const V_CRUISE: f64 = 2.0e-3;
-
-/// Velocity-matched deadband (canonical AU/day). When the velocity error in the
-/// target frame is below this, the craft is "matched enough": cut throttle so it
-/// does not burn fuel chasing a ~zero acceleration. Kept small relative to the
-/// closing speeds the law commands, and `V_ERR_EPS * dt < ARRIVAL_RADIUS` so the
-/// residual coast inside the deadband cannot itself tunnel the arrival sphere.
-pub const V_ERR_EPS: f64 = 1.0e-4;
 
 /// Deterministic guidance. Returns `(thrust_dir, throttle)`.
 /// `thrust_dir` is a unit vector (or `Vec3::ZERO` when not thrusting);
@@ -45,6 +29,9 @@ pub const V_ERR_EPS: f64 = 1.0e-4;
 /// `dest_vel` is the target's velocity (`Vec3::ZERO` for a fixed `Position`);
 /// `fuel_mass` is the craft's current fuel so `a_max = max_thrust / (dry + fuel)`
 /// reflects the TRUE available thrust acceleration at this instant.
+// D1/D4/D6 widened the guidance signature: `guidance` (policy) and `dt` (the
+// §6.6 backstop) are deliberate additions to the existing 7-arg law.
+#[allow(clippy::too_many_arguments)]
 pub fn autopilot_command(
     nav: NavState,
     pos: Vec3,
@@ -53,6 +40,8 @@ pub fn autopilot_command(
     dest_vel: Vec3,
     fuel_mass: f64,
     eff: &Effective,
+    guidance: &GuidanceParams, // NEW (D1/D4): run-level policy
+    dt: f64,                   // NEW (D6 backstop only; feeds no trajectory arithmetic)
 ) -> (Vec3, f64) {
     match nav {
         NavState::Idle => (Vec3::ZERO, 0.0),
@@ -70,13 +59,29 @@ pub fn autopilot_command(
             let rel_vel = vel.sub(dest_vel);
             // True available thrust acceleration (variable mass).
             let a_max = eff.max_thrust / (eff.dry_mass + fuel_mass);
+            // §6.6 backstop (DEFERRED to Task 4): the intended assertion is
+            //   debug_assert!(a_max * dt * dt < ARRIVAL_RADIUS / (2.0 * guidance.k_brake), …)
+            // whose GUARANTOR is the reset-time resolvability guard + brakeable
+            // `base_config` retune that Task 4 (D6/§6) lands. Until that guard
+            // exists, today's high-thrust replay-equivalence configs are genuinely
+            // unbrakable by this invariant and would panic the debug build. The
+            // assert feeds NO arithmetic and is compiled out of release, so it is
+            // hash-neutral: deferring it has zero determinism impact on this commit.
+            // `dt` is threaded through the signature now so Task 4 re-enables the
+            // backstop without touching call sites.
+            let _ = dt;
             // Max closing speed still stoppable within the remaining distance.
-            // Left-to-right product (NOT an FMA): 2 * K_BRAKE * a_max * (d - eps).
-            let v_brake = (2.0 * K_BRAKE * a_max * (d - ARRIVAL_RADIUS)).sqrt();
-            let v_des = dir.scale(V_CRUISE.min(v_brake));
+            // Left-to-right product (NOT an FMA): 2 * k_brake * a_max * (d - eps).
+            let v_brake = (2.0 * guidance.k_brake * a_max * (d - ARRIVAL_RADIUS)).sqrt();
+            // Cruise cap = fraction of FULL-tank Δv (trajectory-constant, not
+            // shrinking as fuel burns). full_tank_dv left-to-right, ratio inside ln.
+            let full_tank_dv =
+                crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, eff.fuel_capacity);
+            let cruise_cap = guidance.cruise_burn_fraction * full_tank_dv;
+            let v_des = dir.scale(cruise_cap.min(v_brake));
             let v_err = v_des.sub(rel_vel);
             // Already velocity-matched: don't burn fuel for ~zero accel.
-            if v_err.length() < V_ERR_EPS {
+            if v_err.length() < guidance.v_err_eps {
                 return (Vec3::ZERO, 0.0);
             }
             (v_err.normalize_or_zero(), 1.0)
@@ -110,14 +115,60 @@ mod tests {
         }
     }
 
+    fn guidance() -> crate::config::GuidanceParams {
+        crate::config::GuidanceParams::default()
+    }
+
+    #[test]
+    fn k_brake_and_v_err_eps_defaults_are_exact_carryover() {
+        // Same braking scenario as `brakes_when_overspeeding_toward_dest`, asserted
+        // bit-identical under default policy (k_brake=0.5, v_err_eps=1e-4 == old consts).
+        let dest = Vec3::new(0.0, 0.0, 0.0);
+        let pos = Vec3::new(0.01, 0.0, 0.0);
+        let vel = Vec3::new(-1.0, 0.0, 0.0);
+        let (dir, throttle) = autopilot_command(
+            // dt = 1e-4, NOT 0.25: dt feeds ONLY the backstop debug_assert, and eff()
+            // (a_max=0.5) trips it at 0.25 (0.5*0.0625 = 0.03125 >= R/(2k)=1e-4). 1e-4
+            // passes (0.5*1e-8 = 5e-9 < 1e-4) and leaves the trajectory assertion intact.
+            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
+        assert_eq!(throttle, 1.0);
+        assert!(dir.dot(dest.sub(pos).normalize_or_zero()) < 0.0, "still brakes retrograde");
+    }
+
+    #[test]
+    fn cruise_cap_is_fraction_of_full_tank_dv() {
+        // eff(): dry=1, max_thrust=1, v_e=1, capacity=1 => full_tank_dv = 1*ln(2) = 0.693147…
+        // cap = 0.25 * full_tank_dv = 0.173287…; far & slow so v_des is cap-limited, not brake-limited.
+        let full_tank_dv = crate::math::tsiolkovsky_dv(1.0, 1.0, 1.0);
+        let expected_cap = 0.25 * full_tank_dv;
+        let dest = Vec3::new(1.0e6, 0.0, 0.0); // very far: v_brake >> cap, so v_des == cap
+        let pos = Vec3::ZERO;
+        // Craft already moving at exactly the cap toward dest -> v_err ~ 0 (matched at cap).
+        let vel = Vec3::new(expected_cap, 0.0, 0.0);
+        let (_dir, throttle) = autopilot_command(
+            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4, // dt: backstop-only
+        );
+        assert_eq!(throttle, 0.0, "at the cap with zero residual error -> within deadband, coast");
+        // Bracket the cap magnitude (a factor-of-2 cap bug would suppress at the wrong
+        // speed): moving FASTER than the cap toward dest must command a retrograde brake.
+        let faster = Vec3::new(expected_cap * 2.0, 0.0, 0.0);
+        let (dir2, throttle2) = autopilot_command(
+            seeking(dest), pos, faster, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
+        assert_eq!(throttle2, 1.0);
+        assert!(dir2.x < 0.0, "over the cap -> brake retrograde (pins cap magnitude, not just deadband)");
+    }
+
     #[test]
     fn points_toward_dest_when_far_and_slow() {
         // Far away, at rest: v_des points toward dest, rel_vel == 0, so v_err
         // points toward dest at full throttle.
         let pos = Vec3::new(0.0, 0.0, 0.0);
         let dest = Vec3::new(3.0, 0.0, 0.0);
-        let (dir, throttle) =
-            autopilot_command(seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff());
+        let (dir, throttle) = autopilot_command(
+            seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         assert_eq!(dir, Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(throttle, 1.0);
     }
@@ -131,8 +182,9 @@ mod tests {
         let dir_to_dest = dest.sub(pos).normalize_or_zero();
         // Closing fast: velocity points toward the dest (-x) at a large speed.
         let vel = Vec3::new(-1.0, 0.0, 0.0);
-        let (thrust_dir, throttle) =
-            autopilot_command(seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff());
+        let (thrust_dir, throttle) = autopilot_command(
+            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         assert_eq!(throttle, 1.0, "should still be thrusting to brake");
         assert!(
             thrust_dir.dot(dir_to_dest) < 0.0,
@@ -164,7 +216,7 @@ mod tests {
         // steps; give generous headroom.
         for _ in 0..5_000_000 {
             let (tdir, throttle) =
-                autopilot_command(nav, pos, vel, dest, Vec3::ZERO, fuel, &eff);
+                autopilot_command(nav, pos, vel, dest, Vec3::ZERO, fuel, &eff, &guidance(), 1.0e-4);
             let a_max = eff.max_thrust / (eff.dry_mass + fuel);
             let accel = tdir.scale(throttle * a_max);
             vel = vel.add(accel.scale(dt));
@@ -201,8 +253,9 @@ mod tests {
         let pos = Vec3::ZERO;
         // Craft already moving exactly at the target velocity.
         let vel = dest_vel;
-        let (thrust_dir, throttle) =
-            autopilot_command(seeking(dest), pos, vel, dest, dest_vel, 1.0, &eff());
+        let (thrust_dir, throttle) = autopilot_command(
+            seeking(dest), pos, vel, dest, dest_vel, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         // d is ~2e-4, so v_brake = sqrt(2*0.5*0.5*1e-4) ~= 7e-3, capped further by
         // v_des; with rel_vel==0 the error is v_des (toward dest). The point of
         // the test: tangential target velocity is fully cancelled (matched), the
@@ -241,6 +294,8 @@ mod tests {
             dest_vel,
             1.0,
             &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(thrust_dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);
@@ -250,8 +305,9 @@ mod tests {
     fn cuts_inside_arrival_radius() {
         let dest = Vec3::new(0.0, 0.0, 0.0);
         let pos = Vec3::new(ARRIVAL_RADIUS * 0.5, 0.0, 0.0);
-        let (dir, throttle) =
-            autopilot_command(seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff());
+        let (dir, throttle) = autopilot_command(
+            seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         assert_eq!(dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);
     }
@@ -264,8 +320,9 @@ mod tests {
             dest: NavDest::Position(dest),
             dv_remaining: 0.0, // budget gone
         };
-        let (dir, throttle) =
-            autopilot_command(nav, pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff());
+        let (dir, throttle) = autopilot_command(
+            nav, pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         assert_eq!(dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);
     }
@@ -280,6 +337,8 @@ mod tests {
             Vec3::ZERO,
             1.0,
             &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);

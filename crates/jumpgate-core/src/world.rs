@@ -218,8 +218,10 @@ impl World {
                 }
                 NavState::Idle => (pos, Vec3::ZERO), // unused (throttle will be 0)
             };
-            let (thrust_dir, throttle) =
-                autopilot_command(self.ships.nav[ci], pos, vel, dest_pos, dest_vel, fuel, &eff);
+            let (thrust_dir, throttle) = autopilot_command(
+                self.ships.nav[ci], pos, vel, dest_pos, dest_vel, fuel, &eff,
+                &self.config.guidance, dt,
+            );
 
             let (thrust_accel, fuel_consumed) =
                 thrust_accel_and_burn(&eff, fuel, thrust_dir, throttle, dt);
