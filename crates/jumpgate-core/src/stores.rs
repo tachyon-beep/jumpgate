@@ -38,8 +38,11 @@ pub fn effective_params(spec: &BaseSpec) -> Effective {
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
 /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
 /// length-parallel. `prev_fuel` / `prev_inside_dest` snapshot the previous tick's
-/// values for edge-triggered event detection (Task 11 copies into them at the end
-/// of `World::step`; hash.rs folds them into the per-tick hash in canonical order).
+/// values for edge-triggered event detection (`detect_boundary_events` reads them;
+/// `World::step` copy-forwards into them at tick end). They are NOT folded into the
+/// per-tick `state_hash` in v1 — they sit at deferred `HASH_FIELD_ORDER` words 14/15
+/// behind a future `HASH_FORMAT_VERSION` bump, and are transitively pinned anyway
+/// (`prev_fuel[t] == fuel[t-1]`, which is hashed at tick t-1).
 pub struct ShipStore {
     pub ids: SlotMap<()>,
     pub pos: Vec<Vec3>,
@@ -185,8 +188,9 @@ mod tests {
         assert_eq!(ship.spec.len(), n);
         assert_eq!(ship.nav.len(), n);
         assert_eq!(ship.lod.len(), n);
-        // the two prev-* arrays reserved for the edge-triggered-event hash path
-        // (Task 11 copies into them; hash.rs writes them) start empty and parallel.
+        // the two prev-* arrays for edge-triggered event detection (deferred
+        // HASH_FIELD_ORDER words 14/15; not folded into state_hash in v1) start
+        // empty and parallel.
         assert_eq!(ship.prev_fuel.len(), n);
         assert_eq!(ship.prev_inside_dest.len(), n);
 
