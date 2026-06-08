@@ -85,7 +85,9 @@ struct ConfigFnv {
 
 impl ConfigFnv {
     fn new() -> Self {
-        let mut h = ConfigFnv { state: CONFIG_FNV_OFFSET };
+        let mut h = ConfigFnv {
+            state: CONFIG_FNV_OFFSET,
+        };
         h.write_u64(0x434f_4e46_4947_5f31); // "CONFIG_1" tag, distinct space
         h
     }
@@ -159,12 +161,20 @@ mod tests {
             master_seed: 42,
             dt: Dt::new(0.5),
             softening: 1e-4,
-            substep_cfg: SubstepCfg { accel_ref: 2.0, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 2.0,
+                max_substeps: 64,
+            },
             ephemeris_window: 10_000,
             bodies: vec![BodyInit {
                 mass: 1.0,
                 elements: OrbitalElements {
-                    a: 1.0, e: 0.0167, i: 0.0, raan: 0.0, argp: 1.0, m0: 0.5,
+                    a: 1.0,
+                    e: 0.0167,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 1.0,
+                    m0: 0.5,
                 },
             }],
             craft: vec![CraftInit {

@@ -21,16 +21,16 @@
 //!  4. body_store.ids.cursor()                 (Task 4/13, slot-map high-water)
 //!  5. ship_store.ids.cursor()                 (Task 4/13, slot-map high-water)
 //!
-//! Bodies, sorted by BodyId (slot, gen):
+//! Bodies, sorted by BodyId (slot, generation):
 //!
-//!  6. body.slot as u64, body.gen as u64       (Task 13)
+//!  6. body.slot as u64, body.generation as u64       (Task 13)
 //!  7. body.mass.to_bits()                     (Task 13)
 //!     (body POSITION is derived from tick via ephemeris, NOT stored, so it is
 //!     NOT hashed independently — it is a pure function of tick already hashed)
 //!
-//! Craft, sorted by CraftId (slot, gen):
+//! Craft, sorted by CraftId (slot, generation):
 //!
-//!  8. craft.slot as u64, craft.gen as u64     (Task 13)
+//!  8. craft.slot as u64, craft.generation as u64     (Task 13)
 //!  9. pos.x,pos.y,pos.z to_bits()             (Task 13)
 //! 10. vel.x,vel.y,vel.z to_bits()             (Task 13)
 //! 11. fuel_mass.to_bits()                     (Task 13)
@@ -64,8 +64,10 @@ const STATE_FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
 impl FnvHasher {
     pub fn new() -> Self {
-        let mut h = FnvHasher { state: STATE_FNV_OFFSET };
-        h.write_u64(HASH_MAGIC);                 // HASH_FIELD_ORDER word 1
+        let mut h = FnvHasher {
+            state: STATE_FNV_OFFSET,
+        };
+        h.write_u64(HASH_MAGIC); // HASH_FIELD_ORDER word 1
         h.write_u64(HASH_FORMAT_VERSION as u64); // HASH_FIELD_ORDER word 2
         h
     }
@@ -128,13 +130,13 @@ mod tests {
         h.write_u64(0); // 3. tick
         h.write_u64(0); // 4. body cursor
         h.write_u64(0); // 5. ship cursor
-        // one body (slot 0, gen 0, mass 0.0):
+        // one body (slot 0, generation 0, mass 0.0):
         h.write_u64(0); // body slot
-        h.write_u64(0); // body gen
+        h.write_u64(0); // body generation
         h.write_u64(0.0f64.to_bits()); // body mass
-        // one craft (slot 0, gen 0; zero pos/vel/fuel; nav Idle=0; lod Player=0):
+        // one craft (slot 0, generation 0; zero pos/vel/fuel; nav Idle=0; lod Player=0):
         h.write_u64(0); // craft slot
-        h.write_u64(0); // craft gen
+        h.write_u64(0); // craft generation
         h.write_u64(0.0f64.to_bits()); // pos.x
         h.write_u64(0.0f64.to_bits()); // pos.y
         h.write_u64(0.0f64.to_bits()); // pos.z

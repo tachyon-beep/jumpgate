@@ -62,14 +62,23 @@ mod tests {
 
     #[test]
     fn entity_ref_distinguishes_craft_from_body() {
-        let c = EntityRef::Craft(CraftId { slot: 0, gen: 0 });
-        let b = EntityRef::Body(BodyId { slot: 0, gen: 0 });
+        let c = EntityRef::Craft(CraftId {
+            slot: 0,
+            generation: 0,
+        });
+        let b = EntityRef::Body(BodyId {
+            slot: 0,
+            generation: 0,
+        });
         assert_ne!(c, b);
     }
 
     #[test]
     fn target_carries_all_scopes() {
-        let e = Target::Entity(EntityRef::Body(BodyId { slot: 2, gen: 1 }));
+        let e = Target::Entity(EntityRef::Body(BodyId {
+            slot: 2,
+            generation: 1,
+        }));
         assert_ne!(e, Target::World);
         assert_ne!(Target::World, Target::Sim);
     }
@@ -77,7 +86,10 @@ mod tests {
     #[test]
     fn navdest_supports_position_and_entity() {
         let p = NavDest::Position(Vec3::new(1.0, 2.0, 3.0));
-        let en = NavDest::Entity(EntityRef::Craft(CraftId { slot: 1, gen: 0 }));
+        let en = NavDest::Entity(EntityRef::Craft(CraftId {
+            slot: 1,
+            generation: 0,
+        }));
         assert_ne!(p, en);
         assert_eq!(p, NavDest::Position(Vec3::new(1.0, 2.0, 3.0)));
     }

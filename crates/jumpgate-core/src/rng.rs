@@ -97,7 +97,10 @@ mod tests {
         let mut s = RngStreams::from_master(42);
         let iv = draw_n(s.stream(RngStream::Intervention), 8);
         let sc = draw_n(s.stream(RngStream::Scenario), 8);
-        assert_ne!(iv, sc, "Intervention and Scenario must not produce the same sequence");
+        assert_ne!(
+            iv, sc,
+            "Intervention and Scenario must not produce the same sequence"
+        );
     }
 
     #[test]
@@ -153,7 +156,13 @@ mod tests {
         let mut s = RngStreams::from_master(0);
         let iv0 = s.stream(RngStream::Intervention).next_u64();
         let sc0 = s.stream(RngStream::Scenario).next_u64();
-        assert_eq!(iv0, 0xa6ab_1181_2ab1_c509, "Intervention[master=0] first draw drifted");
-        assert_eq!(sc0, 0x4f53_8dce_87ab_d2df, "Scenario[master=0] first draw drifted");
+        assert_eq!(
+            iv0, 0xa6ab_1181_2ab1_c509,
+            "Intervention[master=0] first draw drifted"
+        );
+        assert_eq!(
+            sc0, 0x4f53_8dce_87ab_d2df,
+            "Scenario[master=0] first draw drifted"
+        );
     }
 }

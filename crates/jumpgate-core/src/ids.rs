@@ -1,4 +1,4 @@
-//! Generational slot-map ids. `CraftId`/`BodyId` are `{slot, gen}` so a deleted
+//! Generational slot-map ids. `CraftId`/`BodyId` are `{slot, generation}` so a deleted
 //! entity can't be confused with its replacement (spec §4.3). `SlotMap::cursor()`
 //! is HASHED state (spec §6): it is the monotone high-water of slots ever minted,
 //! constant after `reset` in v1 but present so a future `Spawn` doesn't rewrite
@@ -7,13 +7,13 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct CraftId {
     pub slot: u32,
-    pub gen: u32,
+    pub generation: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BodyId {
     pub slot: u32,
-    pub gen: u32,
+    pub generation: u32,
 }
 
 /// Generational slot-map: dense values + per-slot generation + free list + a
@@ -44,7 +44,7 @@ impl<T> SlotMap<T> {
     pub fn cursor(&self) -> u64 {
         self.cursor
     }
-    /// Returns `(slot, gen)` of the inserted value.
+    /// Returns `(slot, generation)` of the inserted value.
     pub fn insert(&mut self, value: T) -> (u32, u32) {
         if let Some(slot) = self.free.pop() {
             let i = slot as usize;
@@ -58,9 +58,9 @@ impl<T> SlotMap<T> {
             (slot, 0)
         }
     }
-    pub fn get(&self, slot: u32, gen: u32) -> Option<&T> {
+    pub fn get(&self, slot: u32, generation: u32) -> Option<&T> {
         let i = slot as usize;
-        if i < self.values.len() && self.gens[i] == gen {
+        if i < self.values.len() && self.gens[i] == generation {
             self.values[i].as_ref()
         } else {
             None
@@ -68,9 +68,9 @@ impl<T> SlotMap<T> {
     }
     /// Removes; bumps the slot generation; pushes the slot to the free list.
     /// Does NOT decrease `cursor`.
-    pub fn remove(&mut self, slot: u32, gen: u32) -> Option<T> {
+    pub fn remove(&mut self, slot: u32, generation: u32) -> Option<T> {
         let i = slot as usize;
-        if i < self.values.len() && self.gens[i] == gen && self.values[i].is_some() {
+        if i < self.values.len() && self.gens[i] == generation && self.values[i].is_some() {
             let taken = self.values[i].take();
             self.gens[i] = self.gens[i].wrapping_add(1);
             self.free.push(slot);
@@ -83,18 +83,18 @@ impl<T> SlotMap<T> {
         self.gens.get(slot as usize).copied()
     }
 
-    /// Dense SoA row index for a live `(slot, gen)`. Under the v1 `slot == row`
-    /// invariant this is the slot itself. Stale gen, removed slot, or out-of-range
+    /// Dense SoA row index for a live `(slot, generation)`. Under the v1 `slot == row`
+    /// invariant this is the slot itself. Stale generation, removed slot, or out-of-range
     /// slot -> `None`.
-    pub fn dense_index(&self, slot: u32, gen: u32) -> Option<usize> {
+    pub fn dense_index(&self, slot: u32, generation: u32) -> Option<usize> {
         let s = slot as usize;
-        if s >= self.values.len() || self.gens[s] != gen || self.values[s].is_none() {
+        if s >= self.values.len() || self.gens[s] != generation || self.values[s].is_none() {
             return None;
         }
         Some(s)
     }
 
-    /// The live `(slot, gen)` occupying dense row `idx`, or `None` if the row is
+    /// The live `(slot, generation)` occupying dense row `idx`, or `None` if the row is
     /// empty/freed or out of range. Generic over `T`, so it returns the raw tuple;
     /// typed stores wrap it into `CraftId`/`BodyId`.
     pub fn id_at(&self, idx: usize) -> Option<(u32, u32)> {
@@ -104,7 +104,7 @@ impl<T> SlotMap<T> {
         Some((idx as u32, self.gens[idx]))
     }
 
-    /// Iterate every live `(slot, gen)` in ascending slot order.
+    /// Iterate every live `(slot, generation)` in ascending slot order.
     pub fn iter_ids(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
         self.values
             .iter()
@@ -125,9 +125,18 @@ mod tests {
 
     #[test]
     fn id_ordering_is_total_and_derivable() {
-        let a = CraftId { slot: 0, gen: 0 };
-        let b = CraftId { slot: 0, gen: 1 };
-        let c = CraftId { slot: 1, gen: 0 };
+        let a = CraftId {
+            slot: 0,
+            generation: 0,
+        };
+        let b = CraftId {
+            slot: 0,
+            generation: 1,
+        };
+        let c = CraftId {
+            slot: 1,
+            generation: 0,
+        };
         assert!(a < b && b < c);
         let mut v = vec![c, a, b];
         v.sort();
@@ -193,17 +202,35 @@ mod tests {
 
     #[test]
     fn ids_are_copy_and_ord() {
-        let a = CraftId { slot: 0, gen: 0 };
-        let b = CraftId { slot: 0, gen: 1 };
-        let c = CraftId { slot: 1, gen: 0 };
+        let a = CraftId {
+            slot: 0,
+            generation: 0,
+        };
+        let b = CraftId {
+            slot: 0,
+            generation: 1,
+        };
+        let c = CraftId {
+            slot: 1,
+            generation: 0,
+        };
         // Copy: using `a` after passing it by value must still work.
         let _copy = a;
-        assert!(a < b, "same slot, lower gen sorts first");
-        assert!(b < c, "lower slot sorts before higher slot regardless of gen");
+        assert!(a < b, "same slot, lower generation sorts first");
+        assert!(
+            b < c,
+            "lower slot sorts before higher slot regardless of generation"
+        );
         assert_eq!(a, a);
 
-        let x = BodyId { slot: 2, gen: 5 };
-        let y = BodyId { slot: 2, gen: 5 };
+        let x = BodyId {
+            slot: 2,
+            generation: 5,
+        };
+        let y = BodyId {
+            slot: 2,
+            generation: 5,
+        };
         assert_eq!(x, y);
     }
 
@@ -264,22 +291,26 @@ mod tests {
         // dense_index: live id -> its row (slot==row in v1); stale/oob -> None.
         assert_eq!(sm.dense_index(s0, g0), Some(0));
         assert_eq!(sm.dense_index(s1, g1), Some(1));
-        assert_eq!(sm.dense_index(s0, 99), None, "stale gen -> None");
+        assert_eq!(sm.dense_index(s0, 99), None, "stale generation -> None");
         assert_eq!(sm.dense_index(7, 0), None, "out-of-range slot -> None");
 
-        // id_at: row -> (slot,gen) of the live occupant; empty/oob row -> None.
+        // id_at: row -> (slot,generation) of the live occupant; empty/oob row -> None.
         assert_eq!(sm.id_at(0), Some((s0, g0)));
         assert_eq!(sm.id_at(1), Some((s1, g1)));
         assert_eq!(sm.id_at(2), None, "out-of-range row -> None");
 
-        // iter_ids: yields every live (slot,gen) in ascending slot order.
+        // iter_ids: yields every live (slot,generation) in ascending slot order.
         let live: Vec<(u32, u32)> = sm.iter_ids().collect();
         assert_eq!(live, vec![(s0, g0), (s1, g1)]);
 
         // after a remove, the freed row is skipped by iter_ids and id_at -> None.
         assert_eq!(sm.remove(s0, g0), Some(10));
         assert_eq!(sm.id_at(0), None, "removed row -> None");
-        assert_eq!(sm.dense_index(s0, g0), None, "stale id after remove -> None");
+        assert_eq!(
+            sm.dense_index(s0, g0),
+            None,
+            "stale id after remove -> None"
+        );
         let live_after: Vec<(u32, u32)> = sm.iter_ids().collect();
         assert_eq!(live_after, vec![(s1, g1)]);
     }

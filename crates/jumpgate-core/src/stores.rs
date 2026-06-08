@@ -35,7 +35,7 @@ pub fn effective_params(spec: &BaseSpec) -> Effective {
     }
 }
 
-/// SoA store for mobile craft. `ids` is the slot/gen authority; every other Vec
+/// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
 /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
 /// length-parallel. `prev_fuel` / `prev_inside_dest` snapshot the previous tick's
 /// values for edge-triggered event detection (Task 11 copies into them at the end
@@ -82,7 +82,7 @@ impl ShipStore {
     /// `lod = Player`, and the prev-* snapshots (`prev_fuel = fuel`,
     /// `prev_inside_dest = false`). Enforces the v1 `slot == row` invariant.
     pub fn push(&mut self, spec: BaseSpec, pos: Vec3, vel: Vec3, fuel: f64) -> CraftId {
-        let (slot, gen) = self.ids.insert(());
+        let (slot, generation) = self.ids.insert(());
         debug_assert_eq!(
             slot as usize,
             self.pos.len(),
@@ -96,22 +96,22 @@ impl ShipStore {
         self.lod.push(Lod::Player);
         self.prev_fuel.push(fuel);
         self.prev_inside_dest.push(false);
-        CraftId { slot, gen }
+        CraftId { slot, generation }
     }
 
     /// The typed `CraftId` occupying dense row `idx`. Panics if `idx` is not a
     /// live row (callers iterate `0..ids.len()` over a no-despawn v1 store).
     pub fn ids_at(&self, idx: usize) -> CraftId {
-        let (slot, gen) = self
+        let (slot, generation) = self
             .ids
             .id_at(idx)
             .expect("ids_at called with a non-live dense row");
-        CraftId { slot, gen }
+        CraftId { slot, generation }
     }
 
     /// Dense SoA row for a live `CraftId`, or `None` for a stale/unknown id.
     pub fn index_of(&self, id: CraftId) -> Option<usize> {
-        self.ids.dense_index(id.slot, id.gen)
+        self.ids.dense_index(id.slot, id.generation)
     }
 
     /// Position of a live craft by id, or `None` if the id is stale.
@@ -196,7 +196,10 @@ mod tests {
             eph_index: Vec::new(),
         };
         let (bslot, bgen) = body.ids.insert(());
-        let bid = BodyId { slot: bslot, gen: bgen };
+        let bid = BodyId {
+            slot: bslot,
+            generation: bgen,
+        };
         body.mass.push(1.0);
         body.eph_index.push(0);
         assert_eq!(bid.slot, bslot);
@@ -215,8 +218,20 @@ mod tests {
         };
         let id0 = ship.push(spec.clone(), Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 40.0);
         let id1 = ship.push(spec.clone(), Vec3::new(2.0, 0.0, 0.0), Vec3::ZERO, 20.0);
-        assert_eq!(id0, CraftId { slot: 0, gen: 0 });
-        assert_eq!(id1, CraftId { slot: 1, gen: 0 });
+        assert_eq!(
+            id0,
+            CraftId {
+                slot: 0,
+                generation: 0
+            }
+        );
+        assert_eq!(
+            id1,
+            CraftId {
+                slot: 1,
+                generation: 0
+            }
+        );
 
         // every SoA array stayed length-parallel, including the prev-* pair.
         let n = ship.ids.len();
@@ -237,8 +252,11 @@ mod tests {
         // index_of resolves a live typed id to its row; stale -> None.
         assert_eq!(ship.index_of(id0), Some(0));
         assert_eq!(ship.index_of(id1), Some(1));
-        let stale = CraftId { slot: 0, gen: 99 };
-        assert_eq!(ship.index_of(stale), None, "stale gen -> None");
+        let stale = CraftId {
+            slot: 0,
+            generation: 99,
+        };
+        assert_eq!(ship.index_of(stale), None, "stale generation -> None");
 
         // craft_pos_by_id reads the row's position; stale -> None.
         assert_eq!(ship.craft_pos_by_id(id0), Some(Vec3::new(1.0, 0.0, 0.0)));

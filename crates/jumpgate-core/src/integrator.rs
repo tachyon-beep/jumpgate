@@ -8,7 +8,7 @@
 
 use crate::config::SubstepCfg;
 use crate::contract::Integrator;
-use crate::math::{Vec3, G_CANONICAL};
+use crate::math::{G_CANONICAL, Vec3};
 
 /// Softened gravitational acceleration at point `p` summed over `body_positions`
 /// (each `(body_pos, body_mass)`), using the kernel `G·M·d / (|d|² + ε²)^1.5`
@@ -193,13 +193,23 @@ mod tests {
         let eps = 0.0_f64; // no softening => pure Newtonian
         let a = gravity_accel(Vec3::ZERO, &[(Vec3::new(r, 0.0, 0.0), m)], eps);
         let expected_mag = G_CANONICAL * m / (r * r); // along +x
-        assert!((a.x - expected_mag).abs() < 1e-12, "ax={} expected={}", a.x, expected_mag);
+        assert!(
+            (a.x - expected_mag).abs() < 1e-12,
+            "ax={} expected={}",
+            a.x,
+            expected_mag
+        );
         assert!(a.y.abs() < 1e-15 && a.z.abs() < 1e-15);
 
         // Softening strictly reduces the magnitude vs the unsoftened case.
         let eps2 = 1.0_f64;
         let a_soft = gravity_accel(Vec3::ZERO, &[(Vec3::new(r, 0.0, 0.0), m)], eps2);
-        assert!(a_soft.x < a.x && a_soft.x > 0.0, "softened {} should be in (0, {})", a_soft.x, a.x);
+        assert!(
+            a_soft.x < a.x && a_soft.x > 0.0,
+            "softened {} should be in (0, {})",
+            a_soft.x,
+            a.x
+        );
     }
 
     #[test]
@@ -218,9 +228,24 @@ mod tests {
         let a2 = gravity_accel(p, &[b2], softening);
         let a_sum = a1.add(a2); // same order as the two-body slice: b1 then b2
 
-        assert!((a_both.x - a_sum.x).abs() < 1e-15, "x: {} vs {}", a_both.x, a_sum.x);
-        assert!((a_both.y - a_sum.y).abs() < 1e-15, "y: {} vs {}", a_both.y, a_sum.y);
-        assert!((a_both.z - a_sum.z).abs() < 1e-15, "z: {} vs {}", a_both.z, a_sum.z);
+        assert!(
+            (a_both.x - a_sum.x).abs() < 1e-15,
+            "x: {} vs {}",
+            a_both.x,
+            a_sum.x
+        );
+        assert!(
+            (a_both.y - a_sum.y).abs() < 1e-15,
+            "y: {} vs {}",
+            a_both.y,
+            a_sum.y
+        );
+        assert!(
+            (a_both.z - a_sum.z).abs() < 1e-15,
+            "z: {} vs {}",
+            a_both.z,
+            a_sum.z
+        );
         // Empty slice => zero acceleration (no bodies, no NaN).
         assert_eq!(gravity_accel(p, &[], softening), Vec3::ZERO);
     }
@@ -229,52 +254,89 @@ mod tests {
     fn substep_count_boundary_cases_never_zero() {
         // max_substeps == 0 must clamp UP to 1, never return 0 (the old
         // max(1).min(0)=0 footgun) and never panic.
-        let cfg0 = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 0 };
+        let cfg0 = SubstepCfg {
+            accel_ref: 1.0e-4,
+            max_substeps: 0,
+        };
         assert_eq!(substep_count(1.0e-4, cfg0), 1);
-        assert_eq!(substep_count(1.0e300, cfg0), 1, "huge accel, cap=0 => still 1");
+        assert_eq!(
+            substep_count(1.0e300, cfg0),
+            1,
+            "huge accel, cap=0 => still 1"
+        );
         assert_eq!(substep_count(0.0, cfg0), 1);
 
         // max_substeps == 1 => always exactly 1, regardless of acceleration.
-        let cfg1 = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 1 };
+        let cfg1 = SubstepCfg {
+            accel_ref: 1.0e-4,
+            max_substeps: 1,
+        };
         assert_eq!(substep_count(1.0e-4, cfg1), 1);
         assert_eq!(substep_count(1.0, cfg1), 1);
         assert_eq!(substep_count(1.0e300, cfg1), 1);
 
         // Cap saturation: a huge ratio returns exactly max_substeps.
-        let cfg_cap = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 7 };
+        let cfg_cap = SubstepCfg {
+            accel_ref: 1.0e-4,
+            max_substeps: 7,
+        };
         assert_eq!(substep_count(1.0e300, cfg_cap), 7);
         // One past the last representable octave still saturates at the cap.
         assert_eq!(substep_count(cfg_cap.accel_ref * 64.0, cfg_cap), 7);
 
         // Bad-config guards: non-positive / non-finite accel_ref degrade to 1.
-        let cfg_bad = SubstepCfg { accel_ref: 0.0, max_substeps: 64 };
-        assert_eq!(substep_count(1.0, cfg_bad), 1, "ratio = x/0 = inf guarded => 1");
-        let cfg_neg = SubstepCfg { accel_ref: -1.0e-4, max_substeps: 64 };
-        assert_eq!(substep_count(1.0, cfg_neg), 1, "negative ratio guarded => 1");
-        let cfg_nan = SubstepCfg { accel_ref: f64::NAN, max_substeps: 64 };
+        let cfg_bad = SubstepCfg {
+            accel_ref: 0.0,
+            max_substeps: 64,
+        };
+        assert_eq!(
+            substep_count(1.0, cfg_bad),
+            1,
+            "ratio = x/0 = inf guarded => 1"
+        );
+        let cfg_neg = SubstepCfg {
+            accel_ref: -1.0e-4,
+            max_substeps: 64,
+        };
+        assert_eq!(
+            substep_count(1.0, cfg_neg),
+            1,
+            "negative ratio guarded => 1"
+        );
+        let cfg_nan = SubstepCfg {
+            accel_ref: f64::NAN,
+            max_substeps: 64,
+        };
         assert_eq!(substep_count(1.0, cfg_nan), 1, "NaN ratio guarded => 1");
     }
 
     #[test]
     fn substep_count_reference_accel_grounded() {
         // PRODUCTION-REGIME reference acceleration (AU/day^2), NOT a log base.
-        let cfg = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 64 };
+        let cfg = SubstepCfg {
+            accel_ref: 1.0e-4,
+            max_substeps: 64,
+        };
 
         // Grounded schedule sweep: each entry is (mag, expected N) on the exact
         // octave ladder. (A same-process `f(x)==f(x)` check proves nothing about
         // cross-build replay; the cross-build invariant is that this fixed ladder
         // holds, which the integer-doubling impl guarantees.)
         for &(mult, want) in &[
-            (1.0_f64, 1u32),   // == accel_ref
-            (1.999, 1),        // just under first octave
+            (1.0_f64, 1u32), // == accel_ref
+            (1.999, 1),      // just under first octave
             (2.0, 2),
             (4.0, 3),
             (8.0, 4),
             (16.0, 5),
-            (1024.0, 11),      // 2^10 => 1 + 10
+            (1024.0, 11), // 2^10 => 1 + 10
         ] {
             let n = substep_count(cfg.accel_ref * mult, cfg);
-            assert_eq!(n, want, "mag = accel_ref*{} expected N={} got {}", mult, want, n);
+            assert_eq!(
+                n, want,
+                "mag = accel_ref*{} expected N={} got {}",
+                mult, want, n
+            );
         }
 
         // At/below the reference accel, exactly 1 substep.
@@ -294,7 +356,11 @@ mod tests {
         let m = 1.0_f64;
         let g_1au = gravity_accel(Vec3::ZERO, &[(Vec3::new(1.0, 0.0, 0.0), m)], 0.0).length();
         let g_01au = gravity_accel(Vec3::ZERO, &[(Vec3::new(0.1, 0.0, 0.0), m)], 0.0).length();
-        assert_eq!(substep_count(g_1au, cfg), 2, "1 AU should escalate past 1 substep");
+        assert_eq!(
+            substep_count(g_1au, cfg),
+            2,
+            "1 AU should escalate past 1 substep"
+        );
         assert_eq!(substep_count(g_01au, cfg), 9, "0.1 AU close approach");
 
         // Monotonic non-decreasing across increasing acceleration; in range.
@@ -322,7 +388,12 @@ mod tests {
         for &n in &[1u32, 4, 16] {
             let (p1, v1) = v.step_craft(pos, vel, &zero_field, dt, n);
             let expected = pos.add(vel.scale(dt));
-            assert!((p1.sub(expected)).length() < 1e-12, "n={} pos drift {:?}", n, p1);
+            assert!(
+                (p1.sub(expected)).length() < 1e-12,
+                "n={} pos drift {:?}",
+                n,
+                p1
+            );
             assert!((v1.sub(vel)).length() < 1e-12, "n={} vel drift {:?}", n, v1);
         }
         assert_eq!(v.name(), "velocity_verlet");
@@ -338,7 +409,12 @@ mod tests {
         for &n in &[1u32, 4, 16] {
             let (p1, v1) = r.step_craft(pos, vel, &zero_field, dt, n);
             let expected = pos.add(vel.scale(dt));
-            assert!((p1.sub(expected)).length() < 1e-12, "n={} pos drift {:?}", n, p1);
+            assert!(
+                (p1.sub(expected)).length() < 1e-12,
+                "n={} pos drift {:?}",
+                n,
+                p1
+            );
             assert!((v1.sub(vel)).length() < 1e-12, "n={} vel drift {:?}", n, v1);
         }
         assert_eq!(r.name(), "rk4");
@@ -348,7 +424,10 @@ mod tests {
     fn near_circular_orbit_stays_bounded() {
         let v = VelocityVerlet;
         // Production-regime reference accel (AU/day^2): a 1 AU orbit gets n=2 here.
-        let cfg = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 64 };
+        let cfg = SubstepCfg {
+            accel_ref: 1.0e-4,
+            max_substeps: 64,
+        };
         let m = 1.0_f64; // central mass (M_sun)
         let radius = 1.0_f64; // 1 AU
         let softening = 1.0e-6_f64;
@@ -361,7 +440,10 @@ mod tests {
 
         // Confirm the schedule actually escalates at this orbit (guards the redesign).
         let g0 = gravity_accel(pos, &[(body_pos, m)], softening).length();
-        assert!(substep_count(g0, cfg) >= 2, "reference-accel schedule did not engage at 1 AU");
+        assert!(
+            substep_count(g0, cfg) >= 2,
+            "reference-accel schedule did not engage at 1 AU"
+        );
 
         let mut r_min = f64::INFINITY;
         let mut r_max = 0.0_f64;
@@ -379,7 +461,12 @@ mod tests {
             r_max = r_max.max(r);
         }
         // Bounded, not golden: radius stays within ±5% of 1 AU over 2000 days.
-        assert!(r_min > 0.95 && r_max < 1.05, "orbit unbounded: r in [{}, {}]", r_min, r_max);
+        assert!(
+            r_min > 0.95 && r_max < 1.05,
+            "orbit unbounded: r in [{}, {}]",
+            r_min,
+            r_max
+        );
     }
 
     #[test]
@@ -452,6 +539,10 @@ mod tests {
         };
         let ratio = err(64) / err(128);
         // 2nd order => ~4x; a single-eval (O(dt)) Verlet gives ~2x and trips this.
-        assert!(ratio > 3.0, "verlet convergence ratio {} (want ~4; <3 = collapsed to first order)", ratio);
+        assert!(
+            ratio > 3.0,
+            "verlet convergence ratio {} (want ~4; <3 = collapsed to first order)",
+            ratio
+        );
     }
 }

@@ -67,8 +67,7 @@ mod tests {
     #[test]
     fn zero_throttle_yields_zero_accel_and_zero_burn() {
         let eff = eff_fixture();
-        let (a, consumed) =
-            thrust_accel_and_burn(&eff, 2.0, Vec3::new(1.0, 0.0, 0.0), 0.0, 0.1);
+        let (a, consumed) = thrust_accel_and_burn(&eff, 2.0, Vec3::new(1.0, 0.0, 0.0), 0.0, 0.1);
         assert_eq!(a, Vec3::ZERO);
         assert_eq!(consumed, 0.0);
     }
@@ -80,8 +79,14 @@ mod tests {
         let fuel = 0.001_f64;
         let (_a, consumed) =
             thrust_accel_and_burn(&eff, fuel, Vec3::new(1.0, 0.0, 0.0), 1.0, 100.0);
-        assert!(consumed <= fuel, "consumed {consumed} must not exceed fuel {fuel}");
-        assert!((consumed - fuel).abs() < 1e-12, "should consume exactly the tank");
+        assert!(
+            consumed <= fuel,
+            "consumed {consumed} must not exceed fuel {fuel}"
+        );
+        assert!(
+            (consumed - fuel).abs() < 1e-12,
+            "should consume exactly the tank"
+        );
     }
 
     #[test]
@@ -94,7 +99,10 @@ mod tests {
         // dry=1,max_thrust=1: full -> 1/(1+2)=0.333..., low -> 1/(1+0.5)=0.666...
         assert!((a_full.x - (1.0 / 3.0)).abs() < 1e-12);
         assert!((a_low.x - (1.0 / 1.5)).abs() < 1e-12);
-        assert!(a_low.length() > a_full.length(), "accel must rise as fuel drops");
+        assert!(
+            a_low.length() > a_full.length(),
+            "accel must rise as fuel drops"
+        );
     }
 
     #[test]

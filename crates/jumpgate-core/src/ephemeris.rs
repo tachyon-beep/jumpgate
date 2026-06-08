@@ -12,7 +12,7 @@
 //! and `kepler_state`.
 
 use crate::config::BodyInit;
-use crate::math::{Vec3, G_CANONICAL};
+use crate::math::{G_CANONICAL, Vec3};
 use crate::time::{Dt, Tick};
 
 /// Semi-major axes below this (canonical AU) are treated as a body fixed at the
@@ -77,7 +77,12 @@ impl Ephemeris {
             vel.push(vcol);
         }
 
-        Ephemeris { pos, vel, n_samples, dt }
+        Ephemeris {
+            pos,
+            vel,
+            n_samples,
+            dt,
+        }
     }
 
     /// O(1) array lookup of a body position at an integer tick (clamped to window).
@@ -355,9 +360,15 @@ mod tests {
         let eph = Ephemeris::precompute(&[circular_body()], dt, window);
         let last = eph.body_pos(0, Tick(window));
         let past = eph.body_pos(0, Tick(window + 1000));
-        assert_eq!(past, last, "past-window lookup must clamp to the final sample");
+        assert_eq!(
+            past, last,
+            "past-window lookup must clamp to the final sample"
+        );
         let sub_past = eph.body_pos_subtick(0, Tick(window + 1000), 1.0);
-        assert_eq!(sub_past, last, "past-window sub-tick must clamp to final sample");
+        assert_eq!(
+            sub_past, last,
+            "past-window sub-tick must clamp to final sample"
+        );
     }
 
     /// An INCLINED, ECCENTRIC orbit (e=0.3, i=0.5, raan=0.7, argp=0.4). This is
@@ -444,7 +455,10 @@ mod tests {
         let any_z = sample_ticks
             .iter()
             .any(|&t| eph.body_pos(0, Tick(t)).z.abs() > 1e-6);
-        assert!(any_z, "inclined orbit (i=0.5) never left z=0 plane (rotation lost)");
+        assert!(
+            any_z,
+            "inclined orbit (i=0.5) never left z=0 plane (rotation lost)"
+        );
     }
 
     /// REGRESSION (holistic plan-2 cross-module defect): the Task-8 integrator

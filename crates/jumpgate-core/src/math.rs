@@ -14,7 +14,11 @@ pub struct Vec3 {
 
 impl Vec3 {
     /// The zero vector. Associated const so `Vec3::ZERO` reads cleanly.
-    pub const ZERO: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
+    pub const ZERO: Vec3 = Vec3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     #[inline]
     pub fn new(x: f64, y: f64, z: f64) -> Vec3 {
@@ -27,18 +31,30 @@ impl Vec3 {
     #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn add(self, o: Vec3) -> Vec3 {
-        Vec3 { x: self.x + o.x, y: self.y + o.y, z: self.z + o.z }
+        Vec3 {
+            x: self.x + o.x,
+            y: self.y + o.y,
+            z: self.z + o.z,
+        }
     }
 
     #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn sub(self, o: Vec3) -> Vec3 {
-        Vec3 { x: self.x - o.x, y: self.y - o.y, z: self.z - o.z }
+        Vec3 {
+            x: self.x - o.x,
+            y: self.y - o.y,
+            z: self.z - o.z,
+        }
     }
 
     #[inline]
     pub fn scale(self, s: f64) -> Vec3 {
-        Vec3 { x: self.x * s, y: self.y * s, z: self.z * s }
+        Vec3 {
+            x: self.x * s,
+            y: self.y * s,
+            z: self.z * s,
+        }
     }
 
     #[inline]

@@ -28,13 +28,13 @@ pub struct Command {
 }
 
 /// Total, deterministic ordering across World/Sim/Entity scopes for canonical
-/// apply. Returns `(scope_rank, slot, gen)` with `Sim=0, World=1, Entity=2`.
+/// apply. Returns `(scope_rank, slot, generation)` with `Sim=0, World=1, Entity=2`.
 pub fn command_sort_key(c: &Command) -> (u8, u32, u32) {
     match c.target {
         Target::Sim => (0, 0, 0),
         Target::World => (1, 0, 0),
-        Target::Entity(EntityRef::Craft(id)) => (2, id.slot, id.gen),
-        Target::Entity(EntityRef::Body(id)) => (2, id.slot, id.gen),
+        Target::Entity(EntityRef::Craft(id)) => (2, id.slot, id.generation),
+        Target::Entity(EntityRef::Body(id)) => (2, id.slot, id.generation),
     }
 }
 
@@ -42,15 +42,30 @@ pub fn command_sort_key(c: &Command) -> (u8, u32, u32) {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventKind {
-    Arrival { craft: CraftId, dest: NavDest },
-    FuelEmpty { craft: CraftId },
-    ThrustApplied { craft: CraftId, dv: f64 },
-    ActionIngested { target: Target },
-    Reward { craft: CraftId, value: f64 },
+    Arrival {
+        craft: CraftId,
+        dest: NavDest,
+    },
+    FuelEmpty {
+        craft: CraftId,
+    },
+    ThrustApplied {
+        craft: CraftId,
+        dv: f64,
+    },
+    ActionIngested {
+        target: Target,
+    },
+    Reward {
+        craft: CraftId,
+        value: f64,
+    },
     /// Emitted by the LOD-dispatch seam in `World::step` on a
     /// Dormant -> Active transition (the §3.2 wake hook). The
     /// emitting branch is Task 12; the variant is pinned here.
-    Wake { craft: CraftId },
+    Wake {
+        craft: CraftId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -121,15 +136,15 @@ mod tests {
         let world = dest_cmd(Target::World);
         let craft_a = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
             slot: 5,
-            gen: 0,
+            generation: 0,
         })));
         let craft_b = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
             slot: 2,
-            gen: 1,
+            generation: 1,
         })));
         let body = dest_cmd(Target::Entity(EntityRef::Body(BodyId {
             slot: 3,
-            gen: 0,
+            generation: 0,
         })));
 
         // Scope ranks: Sim=0, World=1, Entity=2.
@@ -140,7 +155,7 @@ mod tests {
         assert_eq!(command_sort_key(&body), (2, 3, 0));
 
         // Sorting a shuffled mix yields a total, deterministic order:
-        // Sim, World, then entities by (slot, gen).
+        // Sim, World, then entities by (slot, generation).
         let mut v = [craft_a, body, sim, craft_b, world];
         v.sort_by_key(command_sort_key);
         let keys: Vec<(u8, u32, u32)> = v.iter().map(command_sort_key).collect();
@@ -152,17 +167,17 @@ mod tests {
 
     #[test]
     fn command_sort_key_relies_on_stable_sort_for_collisions() {
-        // A Craft and a Body with identical slot/gen deliberately map to the
+        // A Craft and a Body with identical slot/generation deliberately map to the
         // SAME sort key (2,7,1). Canonical apply ordering therefore depends on
         // `sort_by_key` being STABLE — an unstable sort could reorder these and
         // the existing total-order test (all-distinct keys) would not catch it.
         let craft = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
             slot: 7,
-            gen: 1,
+            generation: 1,
         })));
         let body = dest_cmd(Target::Entity(EntityRef::Body(BodyId {
             slot: 7,
-            gen: 1,
+            generation: 1,
         })));
 
         // Both collide on the exact same key.
@@ -175,20 +190,29 @@ mod tests {
         // Insertion order craft-then-body must be preserved after the stable sort.
         let mut v1 = [craft, body];
         v1.sort_by_key(command_sort_key);
-        assert_eq!(v1[0], craft, "stable sort keeps the first-inserted craft first");
+        assert_eq!(
+            v1[0], craft,
+            "stable sort keeps the first-inserted craft first"
+        );
         assert_eq!(v1[1], body);
 
         // The reverse insertion order is likewise preserved (proves it is the
         // insertion order, not an accidental tie-break on content).
         let mut v2 = [body, craft];
         v2.sort_by_key(command_sort_key);
-        assert_eq!(v2[0], body, "stable sort keeps the first-inserted body first");
+        assert_eq!(
+            v2[0], body,
+            "stable sort keeps the first-inserted body first"
+        );
         assert_eq!(v2[1], craft);
     }
 
     #[test]
     fn enums_round_trip_via_partial_eq() {
-        let c = CraftId { slot: 7, gen: 2 };
+        let c = CraftId {
+            slot: 7,
+            generation: 2,
+        };
 
         // Command equality (PartialEq, holds f64 via burn_budget).
         let cmd = Command {
@@ -258,13 +282,7 @@ mod tests {
         assert_eq!(obj.name(), "dummy");
 
         let zero_accel = |_p: Vec3, _t: f64| Vec3::ZERO;
-        let (p, v) = obj.step_craft(
-            Vec3::ZERO,
-            Vec3::new(1.0, 0.0, 0.0),
-            &zero_accel,
-            2.0,
-            1,
-        );
+        let (p, v) = obj.step_craft(Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), &zero_accel, 2.0, 1);
         assert_eq!(p, Vec3::new(2.0, 0.0, 0.0)); // pos += vel*dt
         assert_eq!(v, Vec3::new(1.0, 0.0, 0.0)); // vel unchanged (zero accel)
     }
@@ -298,7 +316,12 @@ mod tests {
         fn craft_fuel_capacity(&self, id: CraftId) -> Option<f64> {
             // Trivial backing: a known id resolves to a capacity, others None.
             // The real impl (Task 12) returns effective_params(&spec).fuel_capacity.
-            if id == (CraftId { slot: 0, gen: 0 }) {
+            if id
+                == (CraftId {
+                    slot: 0,
+                    generation: 0,
+                })
+            {
                 Some(100.0)
             } else {
                 None
@@ -337,13 +360,28 @@ mod tests {
         assert_eq!(obj.dt().get(), 1.0);
         assert_eq!(obj.recent_commands(Tick(0)).len(), 1);
         assert_eq!(obj.recent_events(Tick(0)).len(), 1);
-        assert_eq!(obj.lod(CraftId { slot: 0, gen: 0 }), Some(Lod::Player));
+        assert_eq!(
+            obj.lod(CraftId {
+                slot: 0,
+                generation: 0
+            }),
+            Some(Lod::Player)
+        );
 
         // New surface (fix #2): craft_fuel_capacity is Option-typed and present.
         assert_eq!(
-            obj.craft_fuel_capacity(CraftId { slot: 0, gen: 0 }),
+            obj.craft_fuel_capacity(CraftId {
+                slot: 0,
+                generation: 0
+            }),
             Some(100.0)
         );
-        assert_eq!(obj.craft_fuel_capacity(CraftId { slot: 9, gen: 9 }), None);
+        assert_eq!(
+            obj.craft_fuel_capacity(CraftId {
+                slot: 9,
+                generation: 9
+            }),
+            None
+        );
     }
 }
