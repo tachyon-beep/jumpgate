@@ -13,6 +13,13 @@ use crate::math::{Vec3, G_CANONICAL};
 /// Softened gravitational acceleration at point `p` summed over `body_positions`
 /// (each `(body_pos, body_mass)`), using the kernel `G·M·d / (|d|² + ε²)^1.5`
 /// with `d = body_pos − p`. A hard distance cutoff is FORBIDDEN.
+///
+/// `softening > 0` is REQUIRED: a body coincident with `p` at `softening == 0`
+/// yields `0 · ∞ = NaN`. Production always passes a positive softening.
+///
+/// Bodies are summed in the GIVEN slice order. f64 add is non-associative, so
+/// the iteration order IS the canonical (replay-deterministic) reduction form —
+/// callers must not sort or reorder the slice between record and replay.
 pub fn gravity_accel(p: Vec3, body_positions: &[(Vec3, f64)], softening: f64) -> Vec3 {
     let eps_sq = softening * softening;
     let mut acc = Vec3::ZERO;
@@ -28,11 +35,27 @@ pub fn gravity_accel(p: Vec3, body_positions: &[(Vec3, f64)], softening: f64) ->
 
 /// `N` = pure fn of the QUANTIZED total local acceleration magnitude
 /// (gravity + thrust). Identical on replay. Monotonic non-decreasing in
-/// `total_accel_mag`, clamped to `[1, cfg.max_substeps]`.
+/// `total_accel_mag`, result always in `[1, max(1, cfg.max_substeps)]`.
 ///
 /// Reference-acceleration schedule (fixed log base 2):
 ///   n = 1 + floor(log2(max(1, mag / cfg.accel_ref)))
 /// `cfg.accel_ref` is a physical reference acceleration in AU/day².
+///
+/// DETERMINISM: the `floor(log2(...))` octave count is computed with an EXACT
+/// integer-doubling loop (`threshold *= 2.0`, exact in f64) and `>=` compares —
+/// NOT `f64::log2().floor()`. `log2` is an unpinned transcendental: a 1-ULP libm
+/// difference near an octave boundary, after `floor()`, would flip N and produce
+/// a replay-divergent trajectory. This is the same "pin one canonical arithmetic
+/// form" principle that bans `mul_add` (spec §6). The doubling loop is
+/// bit-identical across platforms and equals `floor(log2)` mathematically.
+///
+/// The loop's `octaves + 1 < cfg.max_substeps` bound subsumes the upper clamp,
+/// and the unconditional `1 +` keeps the result `>= 1` even when
+/// `cfg.max_substeps == 0` (never returns 0; never panics).
+///
+/// ASSUMPTION: config validation guarantees `cfg.accel_ref > 0` and finite. A
+/// non-finite-or-non-positive `ratio` is nonetheless guarded here (→ n = 1) so a
+/// bad config degrades safely rather than looping or producing garbage.
 pub fn substep_count(total_accel_mag: f64, cfg: SubstepCfg) -> u32 {
     // Non-finite or non-positive accel => the floor of 1 substep.
     // (Phrased positively to avoid clippy's neg_cmp_op_on_partial_ord; NaN is
@@ -42,15 +65,24 @@ pub fn substep_count(total_accel_mag: f64, cfg: SubstepCfg) -> u32 {
         return 1;
     }
     // Reference-acceleration ratio. accel_ref is AU/day^2 (a physical scale),
-    // NOT a log base. Production configs use accel_ref < 1, so clamping the
-    // ratio to >= 1 keeps n >= 1 instead of pinning to 1 for every realistic
-    // acceleration (the false-green the old log-base form produced).
-    let ratio = (total_accel_mag / cfg.accel_ref).max(1.0);
-    // Fixed log base 2: one extra substep per octave above the reference.
-    let octaves = ratio.log2().floor();
-    let n = 1.0 + octaves; // octaves >= 0 since ratio >= 1
-    let n = n.max(1.0).min(cfg.max_substeps as f64);
-    n as u32
+    // NOT a log base. Production configs use accel_ref < 1, so ratios >= 1 are
+    // the norm; ratio < 2 => 0 octaves => n = 1. Guard a bad-config ratio
+    // (non-finite or non-positive) by treating it as n = 1.
+    let ratio = total_accel_mag / cfg.accel_ref;
+    if !(ratio.is_finite() && ratio > 0.0) {
+        return 1;
+    }
+    // floor(log2(max(1, ratio))) via exact doubling. `threshold` starts at 2
+    // (the first octave boundary) and only ever doubles, which is exact in f64.
+    // `octaves + 1 < max_substeps` caps octaves so the final n never exceeds
+    // max_substeps; the unconditional `1 +` keeps n >= 1 (max_substeps == 0 → 1).
+    let mut octaves: u32 = 0;
+    let mut threshold = 2.0_f64;
+    while octaves + 1 < cfg.max_substeps && ratio >= threshold {
+        octaves += 1;
+        threshold *= 2.0;
+    }
+    1 + octaves
 }
 
 /// Default integrator: 1 force eval per substep, two field samples (t_n, t_{n+1}).
@@ -171,13 +203,79 @@ mod tests {
     }
 
     #[test]
+    fn gravity_two_body_superposition_in_slice_order() {
+        // Sum over two bodies must equal the component-wise sum of the two
+        // single-body results, computed in the SAME slice order. Guards the
+        // fixed-order reduction (a regression that summed only the first body,
+        // or reordered, would be caught).
+        let p = Vec3::new(0.4, -0.7, 0.25);
+        let b1 = (Vec3::new(1.5, 0.0, 0.0), 2.0_f64);
+        let b2 = (Vec3::new(-0.3, 2.1, -0.9), 0.7_f64);
+        let softening = 1.0e-3_f64;
+
+        let a_both = gravity_accel(p, &[b1, b2], softening);
+        let a1 = gravity_accel(p, &[b1], softening);
+        let a2 = gravity_accel(p, &[b2], softening);
+        let a_sum = a1.add(a2); // same order as the two-body slice: b1 then b2
+
+        assert!((a_both.x - a_sum.x).abs() < 1e-15, "x: {} vs {}", a_both.x, a_sum.x);
+        assert!((a_both.y - a_sum.y).abs() < 1e-15, "y: {} vs {}", a_both.y, a_sum.y);
+        assert!((a_both.z - a_sum.z).abs() < 1e-15, "z: {} vs {}", a_both.z, a_sum.z);
+        // Empty slice => zero acceleration (no bodies, no NaN).
+        assert_eq!(gravity_accel(p, &[], softening), Vec3::ZERO);
+    }
+
+    #[test]
+    fn substep_count_boundary_cases_never_zero() {
+        // max_substeps == 0 must clamp UP to 1, never return 0 (the old
+        // max(1).min(0)=0 footgun) and never panic.
+        let cfg0 = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 0 };
+        assert_eq!(substep_count(1.0e-4, cfg0), 1);
+        assert_eq!(substep_count(1.0e300, cfg0), 1, "huge accel, cap=0 => still 1");
+        assert_eq!(substep_count(0.0, cfg0), 1);
+
+        // max_substeps == 1 => always exactly 1, regardless of acceleration.
+        let cfg1 = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 1 };
+        assert_eq!(substep_count(1.0e-4, cfg1), 1);
+        assert_eq!(substep_count(1.0, cfg1), 1);
+        assert_eq!(substep_count(1.0e300, cfg1), 1);
+
+        // Cap saturation: a huge ratio returns exactly max_substeps.
+        let cfg_cap = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 7 };
+        assert_eq!(substep_count(1.0e300, cfg_cap), 7);
+        // One past the last representable octave still saturates at the cap.
+        assert_eq!(substep_count(cfg_cap.accel_ref * 64.0, cfg_cap), 7);
+
+        // Bad-config guards: non-positive / non-finite accel_ref degrade to 1.
+        let cfg_bad = SubstepCfg { accel_ref: 0.0, max_substeps: 64 };
+        assert_eq!(substep_count(1.0, cfg_bad), 1, "ratio = x/0 = inf guarded => 1");
+        let cfg_neg = SubstepCfg { accel_ref: -1.0e-4, max_substeps: 64 };
+        assert_eq!(substep_count(1.0, cfg_neg), 1, "negative ratio guarded => 1");
+        let cfg_nan = SubstepCfg { accel_ref: f64::NAN, max_substeps: 64 };
+        assert_eq!(substep_count(1.0, cfg_nan), 1, "NaN ratio guarded => 1");
+    }
+
+    #[test]
     fn substep_count_reference_accel_grounded() {
         // PRODUCTION-REGIME reference acceleration (AU/day^2), NOT a log base.
         let cfg = SubstepCfg { accel_ref: 1.0e-4, max_substeps: 64 };
 
-        // Deterministic: same quantized input => same output, every call.
-        let a = 3.21e-3_f64;
-        assert_eq!(substep_count(a, cfg), substep_count(a, cfg));
+        // Grounded schedule sweep: each entry is (mag, expected N) on the exact
+        // octave ladder. (A same-process `f(x)==f(x)` check proves nothing about
+        // cross-build replay; the cross-build invariant is that this fixed ladder
+        // holds, which the integer-doubling impl guarantees.)
+        for &(mult, want) in &[
+            (1.0_f64, 1u32),   // == accel_ref
+            (1.999, 1),        // just under first octave
+            (2.0, 2),
+            (4.0, 3),
+            (8.0, 4),
+            (16.0, 5),
+            (1024.0, 11),      // 2^10 => 1 + 10
+        ] {
+            let n = substep_count(cfg.accel_ref * mult, cfg);
+            assert_eq!(n, want, "mag = accel_ref*{} expected N={} got {}", mult, want, n);
+        }
 
         // At/below the reference accel, exactly 1 substep.
         assert_eq!(substep_count(0.0, cfg), 1);
