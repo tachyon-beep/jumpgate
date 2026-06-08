@@ -787,6 +787,11 @@ behavioural change to every multi-body orbit (`HASH_FORMAT`-neutral but recorded
 rebaseline) and is a **product decision** (correctness target), filed separately and not
 settleable from code alone (§14).
 
+> **RESOLVED 2026-06-09:** varied star types are a design goal, so the fix direction is
+> chosen — `μ = G·(M_central + m_body)`. Tracked as **jumpgate-fca8c9e0c0** (P2 bug),
+> implemented as a *separate* task from the guidance-param work. Full barycentric wobble
+> remains deferred.
+
 ---
 
 ## 13. Out of scope
@@ -819,10 +824,13 @@ settleable from code alone (§14).
    `cfg.guidance.k_brake` instead (and the §6 derivation re-states with that value). For
    default-only `k_brake`, the constant is correct. Confirm whether per-run `k_brake` is a v1
    capability.
-3. **Body-mass/μ correctness fix direction** (§12.4): leave on-rails orbits μ-canonical and
-   *document* that mass affects only craft gravity, **or** make the ephemeris use
-   `μ = G·(M_central + m_body)` (a determinism change to every multi-body orbit;
-   `HASH_FORMAT`-neutral but recorded-run rebaseline). Product decision.
+3. **Body-mass/μ correctness fix direction** (§12.4): **RESOLVED 2026-06-09** — varied star
+   types are a design goal, so the ephemeris will use `μ = G·(M_central + m_body)` (heavier
+   star → faster/tighter orbits). Tracked as **jumpgate-fca8c9e0c0** (P2 bug), a *separate*
+   correctness task — **not** folded into the guidance-param implementation. Full barycentric
+   two-body (central-star wobble) stays deferred (imperceptible at planet:star ratios; would
+   break the `a=0`-fixed-at-focus invariant). Re-derives the physics arrival/rendezvous
+   goldens (a>0 orbits shift slightly), not the tick-0 state golden; no committed recordings.
 4. **Moving-body target approximation** (§5.6 / §10.2): `C_prev`/`C_now` are the body's
    *quantized* tick-endpoint positions, not its sub-tick path. Confirmed adequate by reasoning
    at `R`-scale; to be confirmed empirically by the moving-body rendezvous test. If a body's
