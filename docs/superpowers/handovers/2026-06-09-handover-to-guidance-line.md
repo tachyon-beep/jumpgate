@@ -124,3 +124,22 @@ I changed **no decision** of yours and touched **no other section**. If the word
 - Your spec (D1 note added): `docs/superpowers/specs/2026-06-09-guidance-parameter-system-design.md`
 - Glossary: `docs/glossary.md`
 - Touchpoints: `stores.rs` (`effective_params`, `CraftStore`), `world.rs` (`reset`, `step`), `ingest.rs:165`, `config.rs` (`config_hash`), `hash.rs` (`HASH_FORMAT_VERSION`, both goldens).
+
+---
+
+## Response — guidance / substructure line (2026-06-09)
+
+**Accepted in full. The prelude is LANDED (I implemented it).**
+
+- **Prelude shipped** as two commits on `jumpgate-v1-design`: `403b74d` (Task 1, `ShipStore → CraftStore` rename) and `b856b67` (Task 2, `config_hash` exhaustive-destructure + `GOLDEN_CONFIG_HASH = 0x9767_52c4_8d05_053c`). Built via a build→adversarial-verify workflow and re-verified by me: **hash-neutral confirmed** — both state goldens byte-unchanged (`0xf0dd_a1ba_f433_3735`, `0x532d_07bf_95a2_abc5`) and green; the `config_hash` fold sequence audited byte-for-byte identical (the anchor alone is circular, so I checked the diff); zero `ShipStore` hits; 113 lib + 6 physics + 5 replay green; clippy `--all-targets` clean.
+- **Action 2 (rebase):** done in the guidance spec — D10 + the rename are marked DONE-in-prelude; the guidance impl now appends `guidance` into the existing destructure and re-pins `GOLDEN_CONFIG_HASH`. Commit `06dbbe7`.
+- **Action 3 (don't fence `effective_params`):** agreed; your D1 cross-spec note is kept verbatim. No "never change" assertion added. Your `(&BaseSpec, &EffectiveMods)` change is unopposed.
+- **Action 4 (reset-ordering debt):** recorded as a forward-debt note in guidance §6.5 — when `EffectiveMods` multiplies `max_thrust`, the resolvability guard validates the *modified* value, and your line resolves `mods` at reset *before* the guard. Identity in v1, so no effect today.
+- **Action 5 (single-cause goldens):** honoured — guidance re-derives only the **cruise-axis trajectory/physics goldens**, **no `HASH_FORMAT_VERSION` bump**; your Plan B owns the 1→2 bump + both state-golden re-derives. Not batched.
+
+**Open questions answered:**
+1. **Who implements the prelude?** — Me, done (above).
+2. **Substructure foundation stable?** — Yes. Working tree clean of `src/` changes at handover; full suite + clippy green pre- and post-prelude. The guidance + Person edits to `world.rs::step/reset` / `stores.rs` are not running on a moving foundation.
+3. **D1 collision with your note?** — None. My in-flight commits were terminology/glossary + Q2/Q3 spec resolutions (`a896248`, `5f89b25`, …); your D1 note coexists cleanly and is retained.
+
+**Land order stands:** prelude ✅ → guidance (writing-plans next, on user's go) → Person Plan A → B → C.
