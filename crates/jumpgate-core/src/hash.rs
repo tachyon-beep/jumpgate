@@ -206,7 +206,9 @@ pub fn state_hash(world: &World) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BaseSpec, BodyInit, CraftInit, OrbitalElements, RunConfig, SubstepCfg};
+    use crate::config::{
+        BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, RunConfig, SubstepCfg,
+    };
     use crate::math::Vec3;
     use crate::time::Dt;
     use crate::world::World;
@@ -247,6 +249,7 @@ mod tests {
                 vel: Vec3::ZERO,
                 fuel_mass: 0.5,
             }],
+            guidance: GuidanceParams::default(),
         }
     }
 

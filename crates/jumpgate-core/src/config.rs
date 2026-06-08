@@ -55,6 +55,29 @@ pub struct SubstepCfg {
     pub max_substeps: u32,
 }
 
+/// Class-2 run-level guidance POLICY (config-hashed). Dimensionless tunables a
+/// caller may legitimately vary per run; folded into `config_hash` so a changed
+/// value yields a different config whose recordings are correctly rejected at the
+/// replay config-hash guard. (In a future fleet layer this migrates to a per-fleet
+/// attribute; v1 holds it run-level — see spec §13.)
+#[derive(Clone, Copy, Debug)]
+pub struct GuidanceParams {
+    /// Closing-speed cap as a FRACTION of full-tank Tsiolkovsky Δv
+    /// (`exhaust_velocity * ln((dry + capacity)/dry)`). Replaces the absolute
+    /// `V_CRUISE = 2e-3`. Default 0.25 (D5 derivation note).
+    pub cruise_burn_fraction: f64,
+    /// Brake-early safety margin (< 1). Exact carryover of the old `K_BRAKE`.
+    pub k_brake: f64,
+    /// Velocity-matched deadband (canonical AU/day). Exact carryover of `V_ERR_EPS`.
+    pub v_err_eps: f64,
+}
+
+impl Default for GuidanceParams {
+    fn default() -> Self {
+        GuidanceParams { cruise_burn_fraction: 0.25, k_brake: 0.5, v_err_eps: 1.0e-4 }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -67,6 +90,8 @@ pub struct RunConfig {
     pub ephemeris_window: u64,
     pub bodies: Vec<BodyInit>,
     pub craft: Vec<CraftInit>,
+    /// Class-2 guidance policy (D4). Folded at the TAIL of config_hash.
+    pub guidance: GuidanceParams,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -109,6 +134,15 @@ impl RunConfig {
     /// ephemeris window, and every numeric field of every body/craft in a FIXED
     /// order (counts folded in first so two scenarios with different cardinality
     /// can never collide). DISTINCT from the per-tick state hash.
+    ///
+    /// CONFIG_FIELD_ORDER (config_hash fold order — append-only; re-pin the golden on change):
+    ///   1. master_seed                       9.  per-body: mass + 6 elements
+    ///   2. dt.bits()                         10. per-craft: 4 spec + pos[3] + vel[3] + fuel
+    ///   3. softening.to_bits()               11. guidance.cruise_burn_fraction   (D4)
+    ///   4. substep_cfg.accel_ref.to_bits()   12. guidance.k_brake                (D4)
+    ///   5. substep_cfg.max_substeps          13. guidance.v_err_eps              (D4)
+    ///   6. ephemeris_window
+    ///   7. bodies.len()   8. craft.len()
     pub fn config_hash(&self) -> ConfigHash {
         // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
         // until it is explicitly folded below (D10/M6 — closes the silent-omission
@@ -121,6 +155,7 @@ impl RunConfig {
             ephemeris_window,
             bodies,
             craft,
+            guidance, // NEW (D4): destructure forces folding below
         } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
@@ -160,6 +195,12 @@ impl RunConfig {
             h.write_u64(v[2]);
             h.write_u64(c.fuel_mass.to_bits());
         }
+        // GUIDANCE (D4/D9) at the TAIL: the existing byte stream above stays
+        // byte-identical; config_hash only EXTENDS. Order: cruise_burn_fraction,
+        // k_brake, v_err_eps (CONFIG_FIELD_ORDER words below).
+        h.write_u64(guidance.cruise_burn_fraction.to_bits());
+        h.write_u64(guidance.k_brake.to_bits());
+        h.write_u64(guidance.v_err_eps.to_bits());
         ConfigHash(h.finish())
     }
 }
@@ -168,7 +209,7 @@ impl RunConfig {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0x9767_52c4_8d05_053c; // captured from sample().config_hash()
+    const GOLDEN_CONFIG_HASH: u64 = 0x278c_5d91_b75a_9e5a; // RE-PINNED: +guidance fold (D4). Was 0x9767_52c4_8d05_053c.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -202,6 +243,7 @@ mod tests {
                 vel: Vec3::new(0.0, 1.0, 0.0),
                 fuel_mass: 0.5,
             }],
+            guidance: GuidanceParams::default(),
         }
     }
 
@@ -263,6 +305,27 @@ mod tests {
     fn changing_craft_position_changes_hash() {
         let mut c = sample();
         c.craft[0].pos = Vec3::new(1.5, 0.0, 0.0);
+        assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_cruise_burn_fraction_changes_hash() {
+        let mut c = sample();
+        c.guidance.cruise_burn_fraction = 0.30;
+        assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_k_brake_changes_hash() {
+        let mut c = sample();
+        c.guidance.k_brake = 0.6;
+        assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_v_err_eps_changes_hash() {
+        let mut c = sample();
+        c.guidance.v_err_eps = 2.0e-4;
         assert_ne!(sample().config_hash(), c.config_hash());
     }
 

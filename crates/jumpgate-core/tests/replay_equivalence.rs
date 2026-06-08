@@ -1,7 +1,7 @@
 use jumpgate_core::{
     record_run, replay_run, BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt,
-    EntityRef, EventKind, NavDest, OrbitalElements, Provenance, RunConfig, StateView, SubstepCfg,
-    Target, Tick, Vec3, World,
+    EntityRef, EventKind, GuidanceParams, NavDest, OrbitalElements, Provenance, RunConfig,
+    StateView, SubstepCfg, Target, Tick, Vec3, World,
 };
 
 /// A 2-body, 1-craft scenario big enough to exercise gravity + a thrust burn.
@@ -33,6 +33,7 @@ fn base_config() -> RunConfig {
             vel: Vec3::new(0.0, 0.9, 0.0),
             fuel_mass: 5.0e-10,
         }],
+        guidance: GuidanceParams::default(),
     }
 }
 

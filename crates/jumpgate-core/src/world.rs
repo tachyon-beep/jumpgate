@@ -417,7 +417,7 @@ impl StateView for World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BaseSpec, BodyInit, CraftInit, OrbitalElements, SubstepCfg};
+    use crate::config::{BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, SubstepCfg};
     use crate::contract::StateView;
     use crate::types::CommandKind;
 
@@ -459,6 +459,7 @@ mod tests {
                 vel: Vec3::new(0.0, 0.0172, 0.0),
                 fuel_mass: 1e-12,
             }],
+            guidance: GuidanceParams::default(),
         }
     }
 
@@ -503,6 +504,7 @@ mod tests {
                 vel: Vec3::ZERO, // start at REST: no orbital-velocity Δv tax
                 fuel_mass: 1e-9,
             }],
+            guidance: GuidanceParams::default(),
         }
     }
 

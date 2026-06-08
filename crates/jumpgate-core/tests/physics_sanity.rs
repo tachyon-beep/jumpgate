@@ -50,8 +50,8 @@
 
 use jumpgate_core::{
     BaseSpec, BodyInit, Command, CommandKind, CraftInit, Dt, EntityRef, EventKind,
-    G_CANONICAL, NavDest, OrbitalElements, RunConfig, StateView, SubstepCfg, Target,
-    Tick, Vec3, World,
+    G_CANONICAL, GuidanceParams, NavDest, OrbitalElements, RunConfig, StateView, SubstepCfg,
+    Target, Tick, Vec3, World,
 };
 
 // ---- resolved v1 tuning defaults ----
@@ -74,6 +74,7 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
             elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
         }],
         craft,
+        guidance: GuidanceParams::default(),
     }
 }
 
@@ -331,6 +332,7 @@ fn transfer_to_moving_body_rendezvous() {
             },
         ],
         craft,
+        guidance: GuidanceParams::default(),
     };
 
     let (mut world, _h) = World::reset(cfg);
