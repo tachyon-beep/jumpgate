@@ -24,6 +24,17 @@
 
 ---
 
+> **PRELUDE LANDED 2026-06-09.** The `ShipStore → CraftStore` rename and the D10/M6
+> `config_hash` exhaustive-destructure (+ `GOLDEN_CONFIG_HASH = 0x9767_52c4_8d05_053c`
+> anchor) shipped as the shared prelude — commits `403b74d` (rename) and `b856b67`
+> (destructure), per `plans/2026-06-09-jumpgate-prelude-craftstore-confighash.md`.
+> **They are DONE; do not re-implement them.** D10 (§9) and the rename references in
+> §11 are retained as *rationale only*. The guidance implementation now: (a) targets
+> `CraftStore`; (b) **appends `guidance: GuidanceParams` into the existing exhaustive
+> destructure** in `config_hash` (the destructure will force it — compile error
+> otherwise) and **re-pins `GOLDEN_CONFIG_HASH`** (its value legitimately moves when
+> the field is added — an intentional re-pin, same discipline as the state golden).
+
 ## 1. Scope
 
 **In scope (this spec → implementation plan):**
@@ -37,7 +48,9 @@
    segment-vs-(moving-)sphere closest-approach test; and
    (b) add a `World::reset` **resolvability validation** that rejects ship/dt configs whose
    worst-case (empty-tank) braking cannot bring the craft to rest at the target.
-3. The structural `config_hash` fix (M6: exhaustive destructure, no rest-pattern).
+3. ~~The structural `config_hash` fix (M6: exhaustive destructure, no rest-pattern).~~
+   **DONE in the prelude (`b856b67`).** Guidance only appends `guidance` into the
+   destructure + re-pins `GOLDEN_CONFIG_HASH`.
 4. The shared `tsiolkovsky_dv` helper + the M5 ingest dv-budget reconciliation.
 5. **Catalogue** the remaining danger-set as debt (do **not** migrate yet): `ARRIVAL_RADIUS`,
    the Kepler iteration budget, the octave/noise base, and the new `ARRIVAL_SPEED` gate.
@@ -508,6 +521,15 @@ rejection predicate: `!(dry > 0.0 && a_max_empty.is_finite() && a_max_empty * dt
 On success wrap the existing return in `Ok((world, hash))`. `Display` reports `craft_index`,
 `a_max_empty * dt^2`, the `limit`, and the remediation (lower `max_thrust`, raise `dry_mass`,
 or shrink `dt`). A silent tunnel becomes a loud config error.
+
+> **Cross-spec forward-debt (Person+Ship line, handover 2026-06-09).** This guard reads
+> the **base** `max_thrust` today. When the Person line's `EffectiveMods` lands (it
+> multiplies `max_thrust` via `effective_params(spec, &mods)`), the guard must validate the
+> **modified** `max_thrust`, not bare base — otherwise a crew-boosted craft could pass reset
+> and tunnel. The Person line resolves the `mods` column **at reset, before this guard
+> runs**, so honour that ordering: populate `mods` → then validate `a_max_empty` from
+> `effective_params(spec, &reset_mods).max_thrust`. In v1 `mods` is identity, so the guard is
+> unaffected today (see the D1 cross-spec note).
 
 **`ResetError` placement.** `World::reset` is part of the recorded contract surface
 (`replay.rs:47,105` call it and assert its returned hash; replay crosses the trust boundary).
