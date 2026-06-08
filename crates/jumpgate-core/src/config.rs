@@ -47,7 +47,11 @@ pub struct CraftInit {
 /// N substeps = pure fn of QUANTIZED total local acceleration magnitude (Task 7).
 #[derive(Clone, Copy, Debug)]
 pub struct SubstepCfg {
-    pub accel_bin_base: f64,
+    /// Reference acceleration (AU/day²) for the substep schedule, NOT a log base:
+    /// `substep_count` (Task 8) uses `n = 1 + floor(log2(max(1, mag/accel_ref)))`,
+    /// clamped to `[1, max_substeps]`. At/below `accel_ref` → 1 substep; every
+    /// doubling of `mag` above it adds one substep.
+    pub accel_ref: f64,
     pub max_substeps: u32,
 }
 
@@ -109,7 +113,7 @@ impl RunConfig {
         h.write_u64(self.master_seed);
         h.write_u64(self.dt.bits());
         h.write_u64(self.softening.to_bits());
-        h.write_u64(self.substep_cfg.accel_bin_base.to_bits());
+        h.write_u64(self.substep_cfg.accel_ref.to_bits());
         h.write_u64(self.substep_cfg.max_substeps as u64);
         h.write_u64(self.ephemeris_window);
         // Counts folded BEFORE field values so cardinality changes always move
@@ -155,7 +159,7 @@ mod tests {
             master_seed: 42,
             dt: Dt::new(0.5),
             softening: 1e-4,
-            substep_cfg: SubstepCfg { accel_bin_base: 2.0, max_substeps: 64 },
+            substep_cfg: SubstepCfg { accel_ref: 2.0, max_substeps: 64 },
             ephemeris_window: 10_000,
             bodies: vec![BodyInit {
                 mass: 1.0,

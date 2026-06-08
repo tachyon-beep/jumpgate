@@ -24,8 +24,25 @@ pub mod rng;
 pub mod contract;
 pub mod stores;
 
+// Crate-root re-export surface. Downstream tasks (and the jumpgate-py facade)
+// import seam/physics/config types through `jumpgate_core::{...}` rather than
+// deep module paths; each module-providing task APPENDS its public symbols here
+// as it lands (plan-2: Ephemeris/VelocityVerlet/Rk4/substep_count/gravity_accel/
+// thrust_accel_and_burn/autopilot_command; plan-3: World/Observer/FullObserver/
+// View/ActionLog/EventStream/state_hash/replay symbols).
+pub use config::{
+    BaseSpec, BodyInit, ConfigHash, CraftInit, OrbitalElements, RunConfig, SubstepCfg,
+};
+pub use contract::{
+    command_sort_key, Command, Event, EventKind, Integrator, StateView,
+};
+pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC};
 pub use ids::{BodyId, CraftId, SlotMap};
-pub use stores::{BodyStore, Effective, NavState, ShipStore, effective_params};
+pub use math::{Vec3, G_CANONICAL};
+pub use rng::{RngStream, RngStreams};
+pub use stores::{effective_params, BodyStore, Effective, NavState, ShipStore};
+pub use time::{sim_time, Dt, Tick};
+pub use types::{CommandKind, EntityRef, Lod, NavDest, Target};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.

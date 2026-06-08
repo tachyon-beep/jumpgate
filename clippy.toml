@@ -14,4 +14,6 @@ disallowed-methods = [
     { path = "rand::make_rng", reason = "entropy-seeded RNG (0.10 replacement for `from_entropy`) breaks replay; seed deterministically via from_seed/seed_from_u64" },
     { path = "std::env::var", reason = "env reads make runs config-dependent off the hashed run-config" },
     { path = "std::env::vars", reason = "env reads make runs config-dependent off the hashed run-config" },
+    { path = "f64::mul_add", reason = "spec §6: pin ONE canonical arithmetic form in the hashed path. mul_add is BANNED so reductions are explicit `a * b + c` (separate mul then add), not implementation-dependent fused-multiply-add codegen. Mandate side was rejected (harder to enforce uniformly)." },
+    { path = "f32::mul_add", reason = "spec §6: see f64::mul_add. Banned defensively — core math is f64, but the f32 observation path must not introduce FMA either." },
 ]
