@@ -117,8 +117,27 @@ pub fn autopilot_command(
 ) -> (Vec3, f64)
 ```
 
-`effective_params` is unchanged. `Effective` is unchanged (`dry_mass`, `max_thrust`,
-`exhaust_velocity`, `fuel_capacity`; stores.rs:20–26).
+`effective_params` is unchanged **by this (guidance) spec**, and `Effective` is
+unchanged (`dry_mass`, `max_thrust`, `exhaust_velocity`, `fuel_capacity`;
+stores.rs:20–26).
+
+> **Cross-spec note (2026-06-09):** "unchanged" is scoped to *guidance's* diff, NOT a
+> permanent invariant. The Person+Ship spec legitimately changes
+> `effective_params(&BaseSpec)` → `effective_params(&BaseSpec, &EffectiveMods)` to
+> carry **capability** modifiers (crew/wear scaling of `max_thrust`) — the founding
+> `Effective = base × component-mods × wear` intent. That is orthogonal to this
+> spec: capability → `effective_params`; **policy** (cruise/brake, dt/arrival-aware)
+> → `autopilot_command` (here). Do not cite this line to reject the Person two-arg
+> change. The `ShipStore→CraftStore` rename and the D10 `config_hash` destructure are
+> being **extracted into a shared prelude** (`plans/2026-06-09-jumpgate-prelude-craftstore-confighash.md`)
+> that lands before this spec, so this spec builds on `CraftStore` + the destructure
+> rather than owning them.
+>
+> **Forward-debt (reset ordering):** once `EffectiveMods` multiplies `max_thrust`,
+> the D6/§6.5 reset resolvability guard must read the **crew-modified** `max_thrust`.
+> The Person spec resolves the `mods` column **at reset, before this guard runs**;
+> keep that ordering when both land (guard reads `effective_params(spec, &reset_mods)`,
+> not the bare base `max_thrust`).
 
 ### D2 — `K_BRAKE` and `V_ERR_EPS` are exact literal carryovers
 

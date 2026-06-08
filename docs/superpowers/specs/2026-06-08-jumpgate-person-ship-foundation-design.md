@@ -14,6 +14,53 @@ discipline) whose findings are reconciled here.
 
 ---
 
+## 0. Terminology & cross-spec reconciliation (2026-06-09 addendum)
+
+This addendum supersedes wording below it; the body is otherwise unchanged.
+
+**Terminology (per `docs/glossary.md`).** The canonical unit is **craft** (generic,
+drone→titan); "ship" is rejected as a class word. Throughout this doc read:
+- "ship" (the unit) → **craft**; the internal store `ShipStore` → **`CraftStore`**
+  (renamed in the prelude, below).
+- **`CrewMods` → `EffectiveMods`** — and it is now a **general modifier bundle**,
+  not a crew-only struct. Founding intent is `Effective = base × component-mods ×
+  wear` (three factor sources); `EffectiveMods` pre-reduces all of them into one
+  struct so `effective_params` never changes signature again when wear/component
+  mods land. v1 carries only `thrust_factor` (the crew contribution); `compute_crew_mods`
+  writes the crew part, a future `compute_wear` folds into the SAME bundle. The
+  derived craft-store column is named **`mods`** (not `crew_mods`).
+- **Captain** = the per-craft command authority (glossary), which is exactly the
+  **controller** slot here; `controller = None` is the drone-chip/autopilot captain.
+
+**Capability vs policy seam split (cross-spec, with the Guidance-Parameter spec).**
+`EffectiveMods` carries **capability** (what a craft *can* do — `max_thrust` after
+crew/wear scaling) and goes **into `effective_params`** because the integrator's
+burn reads `Effective`. `GuidanceParams` (cruise/brake tuning) carries **policy**
+(dt- and arrival-dependent) and stays in **`autopilot_command`**. Orthogonal; both
+correct. (Guidance D1's "effective_params is unchanged" is time-scoped to *its* diff;
+this spec is the sanctioned channel that changes it for capability mods.)
+
+**Sequencing (cross-spec review — architecture-critic + determinism-reviewer).**
+Land order is **prelude → Guidance-Parameter spec → this spec's Plan A → B → C**:
+- **Prelude** (`plans/2026-06-09-jumpgate-prelude-craftstore-confighash.md`):
+  `ShipStore→CraftStore` rename + `config_hash` exhaustive destructure. Owned by
+  neither spec; both depend on it. The destructure makes a forgotten config field
+  (this spec's `PersonInit`) a **compile error**, not a silent provenance hole.
+- **Guidance first** so Plan A's trajectory-equivalence proof lands on a *settled*
+  cruise baseline (guidance re-derives the cruise-axis *trajectory* goldens).
+
+**Two determinism deltas folded into §5 below:**
+1. **Resolve `mods` at reset**, before the Guidance `World::reset` resolvability
+   guard runs (the guard reads effective `max_thrust`; once `mods` is non-identity
+   it must read the modified value, and reset precedes any step). Identity in Plan A,
+   so trivially satisfied; the ordering is fixed now.
+2. **Plan B re-derives BOTH state goldens** (`GOLDEN_ZERO_STATE_HASH` *and* the
+   cfg-with-craft `0x532d…`) on the `HASH_FORMAT_VERSION` 1→2 bump — the version word
+   seeds the hasher, so both move. Keep this single-cause and separate from guidance's
+   trajectory re-derivation.
+
+---
+
 ## 1. Goal & the central tension
 
 Support the realism we will want later — crew on a flight deck, CK3-style
@@ -268,12 +315,17 @@ The column feeds `effective_params` as an already-reduced struct — so
 `effective_params` stays Person-agnostic *and* carries the mods:
 
 ```rust
-pub struct CrewMods {        // named fields, NOT a bare f64
-    pub thrust_factor: f64,  // [LIVE] the one wired channel
-    // reserved (default 1.0): gunnery_factor, sensor_factor, … — adding a field, never a signature change
+pub struct EffectiveMods {   // general modifier BUNDLE (not crew-only); named fields, NOT a bare f64
+    pub thrust_factor: f64,  // [LIVE] crew contribution to the thrust channel
+    // reserved (default 1.0): wear/component factors, future per-domain factors —
+    // adding a field is additive, NEVER a change to effective_params's signature.
 }
-impl CrewMods { pub const IDENTITY: CrewMods = CrewMods { thrust_factor: 1.0 }; }
+impl EffectiveMods { pub const IDENTITY: EffectiveMods = EffectiveMods { thrust_factor: 1.0 }; }
 ```
+
+`compute_crew_mods` writes the *crew* contribution into this bundle; a future
+`compute_wear` folds wear into the **same** bundle (pre-reduced, one multiply in
+`effective_params`). The craft-store column is `mods: Vec<EffectiveMods>`.
 
 `crew_mods` is set to `CrewMods::IDENTITY` at `reset()` (so pre-first-step
 projection reads are well-defined) and overwritten by `compute_crew_mods` at the
