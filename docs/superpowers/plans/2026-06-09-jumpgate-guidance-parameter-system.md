@@ -34,7 +34,7 @@ Treat the spec's counts (24 reset sites, 8 autopilot sites, 7 literals) as a che
 |---|---|---|
 | `math.rs` | `tsiolkovsky_dv` helper (pure scalar Δv) | 1 |
 | `config.rs` | `GuidanceParams` struct + `Default`; `RunConfig.guidance`; fold into `config_hash`; re-pin golden; perturbation tests; `CONFIG_FIELD_ORDER` doc | 2 |
-| `autopilot.rs` | delete the 3 consts; `autopilot_command` reads `guidance` + `dt`; cruise cap = fraction × full-tank Δv; backstop `debug_assert` | 3 |
+| `autopilot.rs` | delete the 3 consts; `autopilot_command` reads `guidance` + `dt`; cruise cap = fraction × full-tank Δv (`dt` threaded); §6.6 backstop `debug_assert` **deferred to Task 4 Step 4c** | 3 (sig+cap); 4 (backstop) |
 | `world.rs` | `reset → Result<_, ResetError>` + guard; `ResetError`; autopilot call site; `prev_pos` init + copy-forward | 3,4,6 |
 | `ingest.rs` | live-path dv budget INFINITY → fuel-derived | 5 |
 | `events.rs` | `ARRIVAL_SPEED` const; `arrival_swept` replaces `arrival_crossed`; resolve `c_prev`/`c_now`/`rel_speed` | 6 |
@@ -322,10 +322,10 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Task 3: wire `GuidanceParams` + `dt` into `autopilot_command`; delete the consts (D1 / D2 / §4)
 
-Change the autopilot to read the cruise cap as `cruise_burn_fraction × full-tank Δv` (ship-dependent, trajectory-constant) and read `k_brake`/`v_err_eps` from policy. Delete the three module consts (`ARRIVAL_RADIUS` is kept). Add the `dt` parameter and the §6.6 backstop `debug_assert`. **The cruise-cap change re-derives the cruise-axis physics tests** (`physics_sanity.rs`); the per-tick state goldens do NOT move (golden configs use `Idle` nav, which never invokes the cap).
+Change the autopilot to read the cruise cap as `cruise_burn_fraction × full-tank Δv` (ship-dependent, trajectory-constant) and read `k_brake`/`v_err_eps` from policy. Delete the three module consts (`ARRIVAL_RADIUS` is kept). Add the `dt` parameter; the §6.6 backstop `debug_assert` is **threaded but DEFERRED to Task 4 Step 4c** (see the deferral note after Step 3 — the assert's guarantor is Task 4's reset guard + `base_config` retune, so as-built `autopilot.rs` carries `let _ = dt;` in its place; this is hash-neutral). **The cruise-cap change re-derives the cruise-axis physics tests** (`physics_sanity.rs`); the per-tick state goldens do NOT move (golden configs use `Idle` nav, which never invokes the cap).
 
 **Files:**
-- Modify: `crates/jumpgate-core/src/autopilot.rs` (delete `K_BRAKE`/`V_CRUISE`/`V_ERR_EPS`; new signature; cap derivation; backstop; module doc; 8 in-module test call sites)
+- Modify: `crates/jumpgate-core/src/autopilot.rs` (delete `K_BRAKE`/`V_CRUISE`/`V_ERR_EPS`; new signature; cap derivation; `dt` threaded with `let _ = dt;` placeholder — §6.6 backstop `debug_assert` itself is deferred to Task 4 Step 4c; module doc; 8 in-module test call sites)
 - Modify: `crates/jumpgate-core/src/world.rs` (the `autopilot_command(...)` call site passes `&self.config.guidance`, `dt`)
 - Test: `crates/jumpgate-core/src/autopilot.rs` (carryover + cruise-cap tests)
 
@@ -442,6 +442,8 @@ pub fn autopilot_command(
 
 > **Grouping note:** `cruise_cap = guidance.cruise_burn_fraction * full_tank_dv` is a single plain `*`; `cruise_cap.min(v_brake)` matches the old `V_CRUISE.min(v_brake)` shape. No `mul_add`.
 
+> **⚠ Backstop DEFERRED to Task 4 (recorded so plan and code do not silently diverge).** As implemented (commit 9200982), the §6.6 `debug_assert!` above is **not** present in `autopilot.rs`; in its place is the forward-referencing comment block plus `let _ = dt;` to consume the threaded `dt`. The deferral is necessary and hash-neutral: until Task 4's reset-time resolvability guard + brakeable `base_config` retune land, the high-thrust replay-equivalence config is genuinely unbrakable by this invariant (`a_max·dt² ≈ 166.67 ≫ R/(2·k_brake) = 1e-4`), so enabling the assert panics all 5 `replay_equivalence` tests in debug/test builds. The assert is debug-only and feeds no arithmetic, so deferral has **zero determinism impact**. `dt` is wired through the signature and every call site now, so re-enabling needs no call-site changes. **Restoration is a durable, numbered step in Task 4 (new Step 4c, after the `base_config` retune in Step 4b).** A secondary trigger is the filigree edge `jumpgate-a0ca9881ff` (blocked_by `jumpgate-6983d8f476`); the Task 4 Step 4c instruction is the primary trigger so a Task-4 implementer reading only this plan still restores it.
+
 - [ ] **Step 4: Update the 8 in-module autopilot test call sites**
 
 Every existing `autopilot_command(...)` call in `autopilot.rs` tests gains two trailing args: `&guidance()` and a `dt`. **Pass `dt = 1.0e-4` to every `eff()`-based call site — NOT the `0.25` engine cadence.** The `eff()` fixture has `a_max = 0.5`, and at `dt = 0.25` the backstop `debug_assert!(a_max·dt² < R/(2·k_brake))` evaluates `0.5·0.0625 = 0.03125 ≥ 1e-4` and **panics in debug/test builds**, killing every test that reaches the `Seeking` branch. `dt` feeds *only* the `debug_assert`, so trajectory assertions are unchanged; at `1e-4` the bound is `0.5·1e-8 = 5e-9 < 1e-4` and passes. The fine-step loop in `arrives_with_low_relative_speed` already uses its own `dt = 1.0e-4` and is unaffected. Run `rg 'autopilot_command\(' crates/jumpgate-core/src/autopilot.rs` to enumerate all 8 sites; each must receive `dt = 1.0e-4`.
@@ -483,13 +485,14 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Task 4: reset-time resolvability guard + `ResetError` (D6 / §6)
+## Task 4: reset-time resolvability guard + `ResetError` (D6 / §6); restore the §6.6 autopilot backstop deferred from Task 3
 
-`World::reset` becomes fallible and rejects any craft whose worst-case (empty-tank) braking cannot resolve the arrival sphere at the run's `dt` — turning a silent tunnel into a loud config error. Determinism-neutral: the guard runs before tick 0 and reads only config inputs already in `config_hash`.
+`World::reset` becomes fallible and rejects any craft whose worst-case (empty-tank) braking cannot resolve the arrival sphere at the run's `dt` — turning a silent tunnel into a loud config error. Determinism-neutral: the guard runs before tick 0 and reads only config inputs already in `config_hash`. This task ALSO restores the §6.6 runtime autopilot `debug_assert` that Task 3 deferred (Step 4c) — the reset guard + `base_config` retune are exactly its guarantor, so the two land together.
 
 **Files:**
 - Modify: `crates/jumpgate-core/src/world.rs` (`ResetError` enum + `Display`; `reset → Result<(World, ConfigHash), ResetError>`; the guard loop)
 - Modify: `crates/jumpgate-core/src/lib.rs` (export `ResetError`)
+- Modify: `crates/jumpgate-core/src/autopilot.rs` (restore the §6.6 runtime backstop `debug_assert` deferred from Task 3 — Step 4c below)
 - Modify: every `World::reset(...)` caller (production uses `?`/`.expect`; tests use `.expect("resolvable config")`)
 - Test: `crates/jumpgate-core/src/world.rs` (reject high-thrust; accept resolvable; golden-zero Ok)
 
@@ -614,6 +617,16 @@ Two existing fixtures have unphysical thrust/mass ratios that the guard correctl
 
 The companion guard test from Step 1 (`reset_accepts_resolvable_thrusting_craft` using `one_body_one_thrusting_craft`: `dry=1e-9`, `max_thrust=1e-12` → `a_max·dt²=6.25e-5 < 1e-4`) already passes the guard — leave it as-is.
 
+- [ ] **Step 4c: Restore the §6.6 autopilot runtime backstop deferred from Task 3 (REQUIRED — do AFTER 4b)**
+
+Task 3 (commit 9200982) wired `dt` through `autopilot_command` but **deferred** the §6.6 runtime backstop `debug_assert`, because the pre-retune high-thrust `base_config` is unbrakable (`a_max·dt² ≈ 166.67 ≫ R/(2·k_brake) = 1e-4`) and the assert would panic all 5 `replay_equivalence` tests. Step 4b makes `base_config` brakeable, so the backstop can now be restored. This MUST happen here — there is no other trigger in this markdown plan, and a Task-4 implementer reading only the plan would otherwise leave the runtime anti-tunnel assertion permanently absent (the filigree edge `jumpgate-a0ca9881ff` is only a secondary trigger).
+
+In `crates/jumpgate-core/src/autopilot.rs`, inside `autopilot_command`'s `Seeking` branch, **delete the `let _ = dt;` line and its forward-referencing comment block** and in their place restore the §6.6 backstop **exactly as written in the Task 3 Step 3 code block above** (the `debug_assert!(a_max * dt * dt < ARRIVAL_RADIUS / (2.0 * guidance.k_brake), …)` plus its `// §6.6 backstop:` comment). That Step 3 block is the **single canonical copy** — do NOT paste a duplicate of the assert here, precisely so this Step 4c cannot drift from Task 3 (a second frozen copy in the plan is exactly the divergence class this plan-pass exists to eliminate).
+
+The restored assertion is debug-only, feeds no arithmetic, and is compiled out of release builds — **determinism-neutral, moves no golden.** Once it is restored, `let _ = dt;` is gone (the param is now consumed by the assert), and the filigree task `jumpgate-a0ca9881ff` should be closed.
+
+**Verification (this is the half that proves 4b actually worked):** the §6.6 backstop is now live in debug/test builds, so the full suite at Step 6 must stay green *with the assert enabled* — in particular all 5 `replay_equivalence` tests must pass (they would panic if `base_config` were still unbrakable). If any `Seeking`-reaching test panics with `unbrakable config reached autopilot`, the 4b retune (or a unit-test `dt`) still violates `a_max·dt² < R/(2·k_brake)`; fix that fixture rather than re-deferring the assert. (The `eff()`-based unit tests in `autopilot.rs` already pass `dt = 1.0e-4`, chosen by Task 3 precisely so they satisfy this bound — leave them.)
+
 - [ ] **Step 5: Update every `World::reset` caller**
 
 Run `rg 'World::reset\(' crates/`. For each:
@@ -625,7 +638,7 @@ The compiler error `mismatched types: expected tuple, found Result` is your chec
 - [ ] **Step 6: Run the guard tests + full suite**
 
 Run: `cargo test -p jumpgate-core`
-Expected: the two guard tests PASS. **Do NOT assume every pre-existing fixture passes unchanged** — `one_body_one_craft` and `replay_equivalence`'s `base_config` both required recalibration in Step 4b (they were latent tunnels). After Step 4b, every golden/replay/coast test is green again. If any *other* fixture trips the guard, it too was a latent tunnel — recalibrate it the same way (lower `max_thrust`, raise `dry_mass`, or shrink `dt`), and re-pin only its `config_hash` if it asserts one.
+Expected: the two guard tests PASS, **and** — because Step 4c re-enabled the §6.6 runtime backstop `debug_assert` — all 5 `replay_equivalence` tests still PASS in this debug/test build (they would panic `unbrakable config reached autopilot` if the Step 4b `base_config` retune had not actually made the craft brakeable). This green run is the proof that 4b + 4c are mutually consistent. **Do NOT assume every pre-existing fixture passes unchanged** — `one_body_one_craft` and `replay_equivalence`'s `base_config` both required recalibration in Step 4b (they were latent tunnels). After Step 4b, every golden/replay/coast test is green again. If any *other* fixture trips the guard, it too was a latent tunnel — recalibrate it the same way (lower `max_thrust`, raise `dry_mass`, or shrink `dt`), and re-pin only its `config_hash` if it asserts one.
 
 Then `cargo clippy --all-targets` → clean.
 
@@ -641,7 +654,7 @@ pub use world::{FullObserver, Observer, ResetError, View, World};
 
 ```bash
 git add -A
-git commit -m "feat(core): World::reset resolvability guard + ResetError (anti-tunnel half b) (D6)
+git commit -m "feat(core): World::reset resolvability guard + ResetError; restore §6.6 autopilot backstop deferred from Task 3 (anti-tunnel half b) (D6)
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -1002,7 +1015,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Self-review (run by the plan author before handoff)
 
 **1. Spec coverage** — every decision maps to a task:
-- D1 (policy at autopilot) → Task 3. D2 (k_brake/v_err_eps carryover) → Task 3. D3 (`ARRIVAL_RADIUS` catalogued) → Task 7. D4/D5 (`GuidanceParams` + 0.25 default) → Task 2. D6 (reset guard + dt backstop) → Tasks 4 (guard) + 3 (backstop). D7 (swept) → Task 6. D8 (`tsiolkovsky_dv`) → Task 1. D9 (ingest reconciliation) → Task 5. D10 (config destructure) → **prelude, done**; Task 2 only appends. D11 (`ARRIVAL_SPEED`) → Task 6 + catalogue Task 7. D12 (μ correctness) → **done (`bf97147`)**; Task 7 catalogue note. D13 (config golden + `CONFIG_FIELD_ORDER`) → Task 2.
+- D1 (policy at autopilot) → Task 3. D2 (k_brake/v_err_eps carryover) → Task 3. D3 (`ARRIVAL_RADIUS` catalogued) → Task 7. D4/D5 (`GuidanceParams` + 0.25 default) → Task 2. D6 (reset guard + dt backstop) → Task 4 (guard + the §6.6 backstop, which Task 3 threads `dt` for but defers — Step 4c); Task 3 lands the signature/cap only. D7 (swept) → Task 6. D8 (`tsiolkovsky_dv`) → Task 1. D9 (ingest reconciliation) → Task 5. D10 (config destructure) → **prelude, done**; Task 2 only appends. D11 (`ARRIVAL_SPEED`) → Task 6 + catalogue Task 7. D12 (μ correctness) → **done (`bf97147`)**; Task 7 catalogue note. D13 (config golden + `CONFIG_FIELD_ORDER`) → Task 2.
 
 **2. Placeholder scan** — the only intentional blank is `GOLDEN_CONFIG_HASH = 0x____` in Task 2 Step 7, which is filled from the measured failure output (golden re-pin is inherently measure-then-pin, like the state golden); not a placeholder defect.
 
