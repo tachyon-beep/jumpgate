@@ -24,8 +24,8 @@ pub const KEPLER_A_EPSILON: f64 = 1e-12;
 pub struct Ephemeris {
     /// `pos[body_idx][tick]` — sampled at integer ticks `0..=window`.
     pos: Vec<Vec<Vec3>>,
-    /// `vel[body_idx][tick]` — same indexing; reserved for cubic-Hermite seam.
-    #[allow(dead_code)] // SEAM: read by the cubic-Hermite drop-in in body_pos_subtick.
+    /// `vel[body_idx][tick]` — same indexing; read via `body_vel` (and the
+    /// cubic-Hermite drop-in seam in `body_pos_subtick`).
     vel: Vec<Vec<Vec3>>,
     /// Number of integer-tick samples per body (== window + 1).
     n_samples: usize,
@@ -81,17 +81,41 @@ impl Ephemeris {
     }
 
     /// O(1) array lookup of a body position at an integer tick (clamped to window).
+    /// `try_from`+`unwrap_or(usize::MAX)` (rather than `as usize`) means a tick
+    /// that overflows `usize` on a 32-bit target still CLAMPS to the last sample
+    /// instead of silently truncating to a wrong-but-in-range index.
     pub fn body_pos(&self, body_idx: usize, tick: Tick) -> Vec3 {
-        let i = (tick.0 as usize).min(self.n_samples.saturating_sub(1));
+        let i = usize::try_from(tick.0)
+            .unwrap_or(usize::MAX)
+            .min(self.n_samples.saturating_sub(1));
         self.pos[body_idx][i]
     }
 
+    /// O(1) array lookup of a body velocity at an integer tick (clamped to window).
+    /// Same clamp discipline as `body_pos`. Exposed so callers (and this task's
+    /// vis-viva test) can read the stored velocity table on the public surface;
+    /// also the input to the cubic-Hermite seam in `body_pos_subtick`.
+    pub fn body_vel(&self, body_idx: usize, tick: Tick) -> Vec3 {
+        let i = usize::try_from(tick.0)
+            .unwrap_or(usize::MAX)
+            .min(self.n_samples.saturating_sub(1));
+        self.vel[body_idx][i]
+    }
+
     /// Deterministic sub-tick position between sample `tick` and `tick+1`.
-    /// v1 = LINEAR; `frac` in [0,1]. SEAM: cubic-Hermite drops in here using
-    /// `self.vel[body_idx][i]` and `self.vel[body_idx][i+1]` (Hermite basis on
-    /// `dt.get()` days) without changing this signature or any caller.
+    /// `frac` MUST be in `[0, 1]` — this is a caller-guaranteed contract (the
+    /// Task-8 integrator advances `frac` strictly within a single tick). Values
+    /// outside the range would silently EXTRAPOLATE and launder a wrong position
+    /// into the state hash, so a `debug_assert` traps a caller bug in dev/test
+    /// builds (deliberately not a silent clamp, which would mask the bug).
+    /// SEAM: cubic-Hermite drops in here using `self.vel[body_idx][i]` and
+    /// `self.vel[body_idx][i+1]` (Hermite basis on `dt.get()` days) without
+    /// changing this signature or any caller.
     pub fn body_pos_subtick(&self, body_idx: usize, tick: Tick, frac: f64) -> Vec3 {
-        let i = (tick.0 as usize).min(self.n_samples.saturating_sub(1));
+        debug_assert!((0.0..=1.0).contains(&frac), "frac must be in [0,1]");
+        let i = usize::try_from(tick.0)
+            .unwrap_or(usize::MAX)
+            .min(self.n_samples.saturating_sub(1));
         let j = (i + 1).min(self.n_samples - 1);
         let a = self.pos[body_idx][i];
         let b = self.pos[body_idx][j];
@@ -324,5 +348,92 @@ mod tests {
         assert_eq!(past, last, "past-window lookup must clamp to the final sample");
         let sub_past = eph.body_pos_subtick(0, Tick(window + 1000), 1.0);
         assert_eq!(sub_past, last, "past-window sub-tick must clamp to final sample");
+    }
+
+    /// An INCLINED, ECCENTRIC orbit (e=0.3, i=0.5, raan=0.7, argp=0.4). This is
+    /// the test that actually exercises the physics: e != 0 forces the Newton
+    /// solve to do real work (E != M) and makes `sqrt(1 - e^2) != 1`, while the
+    /// non-zero (i, raan, argp) make the PQW->inertial rotation non-identity, so
+    /// a sign/scale error in any of r11..r32 (which the circular zero-inclination
+    /// tests cannot see) shows up here. It also reads the VELOCITY table on the
+    /// public surface via `body_vel` and couples it to position through vis-viva.
+    fn inclined_eccentric_body() -> BodyInit {
+        BodyInit {
+            mass: 1.0,
+            elements: OrbitalElements {
+                a: 1.0,
+                e: 0.3,
+                i: 0.5,
+                raan: 0.7,
+                argp: 0.4,
+                m0: 0.0,
+            },
+        }
+    }
+
+    #[test]
+    fn inclined_eccentric_obeys_vis_viva_and_actually_moves() {
+        let dt = Dt::new(1.0);
+        let window = 100u64; // a ~ 1 AU => period ~365 d; 100 d sweeps ~100 deg
+        let a = 1.0_f64;
+        let e = 0.3_f64;
+        // mu convention matches kepler_state: n = sqrt(mu/a^3) with mu = G_CANONICAL
+        // (central mass M_sun = 1 folded in). vis-viva: v^2 = mu*(2/r - 1/a).
+        let mu = G_CANONICAL;
+        let r_peri = a * (1.0 - e); // 0.7 AU
+        let r_apo = a * (1.0 + e); // 1.3 AU
+
+        let eph = Ephemeris::precompute(&[inclined_eccentric_body()], dt, window);
+
+        let sample_ticks = [0u64, 25, 50, 75, 100];
+        for &t in &sample_ticks {
+            let p = eph.body_pos(0, Tick(t));
+            let v = eph.body_vel(0, Tick(t));
+            assert!(
+                p.x.is_finite() && p.y.is_finite() && p.z.is_finite(),
+                "non-finite pos {p:?} at tick {t}"
+            );
+            assert!(
+                v.x.is_finite() && v.y.is_finite() && v.z.is_finite(),
+                "non-finite vel {v:?} at tick {t}"
+            );
+
+            let r = p.length();
+            // r must stay within the radial band [a(1-e), a(1+e)] (small tol).
+            assert!(
+                r >= r_peri - 1e-9 && r <= r_apo + 1e-9,
+                "radius {r} at tick {t} outside [{r_peri}, {r_apo}] (e=0.3 band)"
+            );
+
+            // vis-viva couples the position and velocity tables. Exact-sample
+            // read => holds to ~machine precision (relative tol 1e-9).
+            let v2 = v.length_sq();
+            let vis_viva = mu * (2.0 / r - 1.0 / a);
+            let rel_err = (v2 - vis_viva).abs() / vis_viva;
+            assert!(
+                rel_err < 1e-9,
+                "vis-viva broken at tick {t}: v^2={v2}, mu*(2/r-1/a)={vis_viva}, \
+                 rel_err={rel_err} (catches rotation sign/scale AND velocity errors)"
+            );
+        }
+
+        // The body must actually MOVE: distinct ticks => distinct directions.
+        // (kills the 'frozen body still passes |r| in band' false-green.)
+        let p_a = eph.body_pos(0, Tick(0));
+        let p_b = eph.body_pos(0, Tick(25));
+        let dir_a = p_a.normalize_or_zero();
+        let dir_b = p_b.normalize_or_zero();
+        // cos of the angle between the two direction vectors; must be < 1 if moved.
+        let cos_ang = dir_a.dot(dir_b);
+        assert!(
+            cos_ang < 1.0 - 1e-6,
+            "body did not move: dir(t=0).dir(t=25) cos = {cos_ang} (~1 means frozen)"
+        );
+
+        // The orbit must leave the ecliptic plane (i = 0.5 != 0): some z != 0.
+        let any_z = sample_ticks
+            .iter()
+            .any(|&t| eph.body_pos(0, Tick(t)).z.abs() > 1e-6);
+        assert!(any_z, "inclined orbit (i=0.5) never left z=0 plane (rotation lost)");
     }
 }
