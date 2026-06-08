@@ -161,14 +161,30 @@ pub abstracted_crew_competence: Vec<f64>,          // [LIVE] one scalar for the 
 role is *derived* by reverse-lookup from the roster, never stored on the Person.
 `Location::Aboard(CraftId)` records *which ship*; the roster records *which
 chair*. Crew transfer goes through **one lockstep mutator** that writes both ends
-(`person.location = Aboard(ship)` + `ship.roster[role] = Some(person)`) and
-recomputes `crew_mods` synchronously. The hash folds only the authoritative
-direction.
+(`person.location = Aboard(ship)` + `ship.roster[role] = Some(person)`). The
+mutator does **not** recompute `crew_mods` — that is the exclusive job of the
+top-of-step pass (§4.2), which runs every tick (per-tick continuous wear, §6).
+A synchronous recompute in the mutator would be a redundant second derivation
+that could disagree with `step()`'s; the single derivation point is the
+invariant. (`crew_mods` is initialized to `CrewMods::IDENTITY` at reset so any
+projection read before the first `step()` is well-defined.) The hash folds only
+the authoritative direction.
 
 The controller is exposed only behind a
 `controller_for_domain(domain) -> Option<PersonId>` accessor (returning the one
 controller for every domain in v1). When per-domain controllers arrive, the
 accessor changes; the readers do not.
+
+**Controller validity is resolved, never assumed.** A `controller: Some(p)` is
+only *effective* if `p` is `Aboard(this_ship)` **and** `status == Alive`. A
+`resolve_controller(ship) -> Option<PersonId>` accessor enforces this and is the
+only path `compute_crew_mods` uses; a controller who is stale, dead/incapacitated,
+or aboard another ship resolves to `None` and the leadership term falls back to
+`NEUTRAL_LEADERSHIP` (§4.3). This makes a leaderless or dead-captain ship degrade
+to the no-leader baseline — a passive foretaste of the cascade before
+auto-promotion exists. (Using a live person's leadership from *another* ship is
+the dangerous case generational-id staleness alone would NOT catch; the
+location+status check is what closes it.)
 
 ### 4.2 `compute_crew_mods` — placement, ordering, and feed
 
@@ -205,6 +221,11 @@ pub struct CrewMods {        // named fields, NOT a bare f64
 impl CrewMods { pub const IDENTITY: CrewMods = CrewMods { thrust_factor: 1.0 }; }
 ```
 
+`crew_mods` is set to `CrewMods::IDENTITY` at `reset()` (so pre-first-step
+projection reads are well-defined) and overwritten by `compute_crew_mods` at the
+top of every `step()`. It is **derived** state: never mutated anywhere else,
+never folded into the hash (§5).
+
 ### 4.3 The live v1 formula (single thrust channel) + the inert multi-domain half
 
 `Effective` has one functional output channel (thrust/fuel) today. So:
@@ -215,13 +236,44 @@ impl CrewMods { pub const IDENTITY: CrewMods = CrewMods { thrust_factor: 1.0 }; 
 
 ```text
 compute_crew_mods, per ship:
-  for each occupied roster slot:  contribution[role] = dot(person.skills, RoleDemand::for(role))
-  crew_sum   = Σ contribution[role]            // iterate roster in fixed Role-index order (canonical)
-  leadership = controller.map(|p| skills[Leadership]).unwrap_or(NEUTRAL)
-  thrust_factor = clamp( f(leadership) · g(crew_sum, abstracted_crew_competence) )
-  // Only Engine demand-weight + the Leadership meta-multiply map to a real codomain.
-  // Nav/Gunnery/Sensors demand-weights are 0.0 (dead config).
+  // PER-DOMAIN accumulation — keep domains separate, never collapse to one scalar.
+  domain_sums = [0.0; N_DOMAINS]
+  for each occupied roster slot (iterate in fixed Role-index order — canonical):
+      person  = resolve(roster[role])              // Option-aware; skip empty/stale
+      demand  = RoleDemand::demand(role)           // [f64; N_DOMAINS], const
+      for d in 0..N_DOMAINS:  domain_sums[d] += person.skills[d] * demand[d]
+
+  leadership   = resolve_controller(ship)          // §4.1: Aboard(this_ship) && Alive
+                   .map(|p| p.skills[Leadership])
+                   .unwrap_or(NEUTRAL_LEADERSHIP)
+  thrust_factor = clamp( f(leadership) * g(domain_sums[Engine], abstracted_crew_competence) )
+  // v1 reads ONLY domain_sums[Engine] and the leadership meta-multiply.
+  // Nav/Gunnery/Sensors sums are accumulated but UNREAD (dead config) until those
+  // domains gain a codomain — then it's `gunnery_factor = h(leadership, domain_sums[Gunnery])`,
+  // a NEW CrewMods field, NEVER a change to this summation. (Additivity preserved.)
 ```
+
+**Per-domain, not scalar.** Accumulating into `domain_sums[d]` rather than a
+single `crew_sum` is what keeps multi-domain additive: adding a live domain later
+reads its own sum into a new `CrewMods` field without restructuring the loop. Same
+cost, derived (unhashed), proof test unchanged.
+
+**`NEUTRAL_LEADERSHIP` is frozen, and the empty state is identity.** Define
+`const NEUTRAL_LEADERSHIP: f64` and choose `f`, `g` so that with **no effective
+controller, an empty roster, and default `abstracted_crew_competence`**,
+`thrust_factor == 1.0` *exactly*. This is forced by the trajectory-equivalence
+invariant (§5): the `controller=None`/empty-roster default must be bit-identical
+to the pre-Person build. Concretely, `f(NEUTRAL_LEADERSHIP) == 1.0` and
+`g(0.0, default_competence) == 1.0`. Per the user's calibration choice, any
+monotone four-ops clamped `f`/`g` satisfying this and passing the drop test is
+acceptable; the constants are frozen once chosen so the golden hash is stable.
+
+**Leadership enters only as the meta-modifier.** `RoleDemand::demand(role)` has a
+**0.0 weight on the `Leadership` domain for every role** — leadership influences
+the ship solely through the controller meta-multiply `f(leadership)`, never via
+`domain_sums`. This removes the double-count (controller's leadership counted both
+as meta-modifier and as a crew-sum contributor) by construction. `domain_sums`
+[Leadership] is therefore always 0 in v1.
 
 `RoleDemand` is **const data** (`fn demand(role) -> [f64; N_DOMAINS]`), not
 match-arm code, so succession is pure data substitution into a fixed formula. It
@@ -258,8 +310,11 @@ reserved `HASH_FIELD_ORDER` words 16+ (words 14–15 stay reserved for
 - Persons **sorted by `PersonId`**: `location` (discriminant + container id;
   `InSpace` `Vec3` folded only on that arm), `skills` (all N domains via
   `to_bits()` in enum order), `status`.
-- Ship `roster` (fixed array, Role-index order) and `controller` (authoritative
-  link direction only).
+- Ship `roster` (fixed array, Role-index order), `controller` (authoritative link
+  direction only), and **`abstracted_crew_competence`** — the last is a mutable
+  *input* to `crew_mods` (not transitively pinned by roster/controller), so
+  omitting it would silently diverge replay the first time it changes (e.g. an
+  unmodeled-crew casualty). Constant in v1; the column is folded regardless.
 
 **Hash the inputs, never the derived `crew_mods` cache** — it is transitively
 pinned by its inputs exactly as `prev_fuel[t] == fuel[t-1]` is. Hash inputs
@@ -329,11 +384,15 @@ would make event-driven recompute safe to add.)
 - `PersonStore` SoA + `EntityRef::Person` + `PersonId` (with `Ord`).
 - `effective_params(spec, &CrewMods)` + `CrewMods` named-field struct (identity
   v1) + `crew_mods` column. *(The one non-additive gate.)*
-- `compute_crew_mods` top-of-step stage, LOD-gated, full
-  `skill × role-demand × leadership` formula on the thrust channel.
+- `compute_crew_mods` top-of-step stage, LOD-gated; **per-domain** accumulation
+  (`domain_sums[N_DOMAINS]`), v1 reading only `[Engine]` + the leadership meta;
+  `crew_mods` initialized to `IDENTITY` at reset.
 - Ship `roster` (fixed array), `controller: Option<PersonId>` (default None),
-  `abstracted_crew_competence`, `controller_for_domain` accessor, the lockstep
-  transfer mutator (**test-only API in v1** — no Command triggers it yet).
+  `abstracted_crew_competence`, `controller_for_domain` + `resolve_controller`
+  (`Aboard && Alive`) accessors, the lockstep transfer mutator (**test-only API
+  in v1** — no Command triggers it yet; writes authoritative columns only).
+- `NEUTRAL_LEADERSHIP` constant + `f`/`g` chosen so the empty state is exactly
+  identity.
 - `Location` (Aboard live), `Domain`/`SkillVector` (full vector stored+hashed;
   Engine+Leadership wired), `PersonStatus`, `Brain` (None/Autopilot dispatch),
   `Role` + const `RoleDemand` table.
@@ -382,6 +441,11 @@ would make event-driven recompute safe to add.)
 | 10 | Med | Succession tie-break unspecified → silent divergence. | `argmax` over `(skill_bits DESC, PersonId ASC)`, defined+tested now. (§5) |
 | 11 | Med | `InSpace(pos)` adds a second integrated body, contradicting "skills never touch the integrator." | `InSpace` set-once/inert, never integrated/woken; only that arm's Vec3 hashed. (§3.1, §7) |
 | 12 | Med | `PersonStore` is first store with real mid-run removal; `expect` on dead lookup breaks on cascade. | `status = Dead` over slot-freeing; Option-returning resolver, never `expect`; hash by sorted live id. (§3.1) |
+| 13 | High | Scalar `crew_sum` collapses domains → making a 2nd domain live forces a non-additive formula refactor (breaks the additivity promise). | Accumulate per-domain `domain_sums[d]`; v1 reads only `[Engine]`; new domain = new `CrewMods` field, never a loop change. (§4.3) |
+| 14 | High | Controller assumed valid → uses leadership of a stale/dead/other-ship person; silent wrong physics. | `resolve_controller` = `Aboard(this_ship) && Alive`, else `NEUTRAL_LEADERSHIP`; sole path `compute_crew_mods` uses. (§4.1, §4.3) |
+| 15 | Med | `NEUTRAL_LEADERSHIP` unspecified + empty-state ≠ identity → proof-test assertions and golden hash become moving targets. | Freeze `NEUTRAL_LEADERSHIP`; choose `f`,`g` so no-controller/empty-roster/default-competence ⇒ `thrust_factor == 1.0` exactly. (§4.3) |
+| 16 | High | `abstracted_crew_competence` is an unhashed `crew_mods` input → silent replay divergence when it changes. | Fold it into the ship hash alongside roster/controller. (§5) |
+| 17 | Low | Lockstep mutator recomputing `crew_mods` is a redundant 2nd derivation that can disagree with `step()`. | Mutator writes only authoritative columns; `crew_mods` derived solely at top-of-step; `IDENTITY` at reset. (§4.1, §4.2) |
 
 ---
 
@@ -407,6 +471,10 @@ would make event-driven recompute safe to add.)
   recomputed (never trust a subagent's gate claim).
 - **Proof-of-cascade:** controller swap (good captain → graceless genius) drops
   `thrust_factor`.
+- **Empty-state identity:** no controller + empty roster ⇒ `thrust_factor == 1.0`
+  exactly (and `NEUTRAL_LEADERSHIP` path yields identity).
+- **Controller validity:** a controller that is dead, or aboard another ship,
+  resolves to `None` ⇒ leadership falls back to `NEUTRAL_LEADERSHIP`.
 - **Phase:** non-identity fixture ⇒ Δv budget and burn read the same `Effective`.
 - **Determinism:** roster insertion-order shuffle ⇒ identical `state_hash`;
   succession comparator tie-break unit test.
@@ -422,3 +490,11 @@ the autonomous off-duty agenda state machine; trait-driven and FSM brains; the
 live DRL `Policy` brain (the *seam* is shaped; the model is a later deliverable);
 automatic succession/promotion logic; per-domain `Effective` sets; per-crewman
 modeling of the abstracted mass.
+
+**Forward-constraint — ship destruction.** v1 has no mid-run ship despawn
+(`ShipStore` keeps `slot == row`), so persons cannot be orphaned in v1. When
+destruction lands, its handler **must** update aboard-persons (e.g. set
+`status = Dead` or relocate them) — a dangling `Location::Aboard(dead_craft)` is
+caught by generational-id staleness (lookup returns `None`, no unsafety) but
+leaves unreachable rows still folded into the hash. This is a destruction-feature
+responsibility, deliberately not built now.
