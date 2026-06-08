@@ -221,8 +221,11 @@ mod tests {
 
     #[test]
     fn velocity_matched_rendezvous_fires() {
-        // rel_vel ~ 0 -> dd ~ 0 degenerate branch -> endpoint test fires (would NaN-out
-        // without the dd<=DD_EPS guard, §5.3).
+        // Two independent facts clear arrival here. (1) prev_pos == pos, so the
+        // target-frame chord is zero-length -> dd ~ 0 -> the `dd <= DD_EPS` endpoint
+        // branch is taken (this is what would NaN-out without the DD_EPS guard, §5.3;
+        // dd is the squared chord length, NOT the rel_speed). (2) the independently
+        // passed rel_speed (|v| = 1e-6) clears the `rel_speed <= ARRIVAL_SPEED` gate.
         let dest = Vec3::ZERO;
         let inside = Vec3::new(0.5e-4, 0.0, 0.0); // within R
         assert!(swept_fixed(inside, inside, dest, Vec3::new(1.0e-6, 0.0, 0.0), false));
@@ -259,23 +262,25 @@ mod tests {
 
     #[test]
     fn arrival_crossing_contract_documented() {
-        use crate::math::Vec3;
+        // The once-only crossing latch, routed through the live `arrival_swept`
+        // predicate (via `swept_fixed`). Geometry drives the verdict: low rel_speed
+        // clears the gate so only the inside/prev_inside transition decides. This
+        // pins the latch contract (outside->inside fires; inside->inside does not;
+        // outside never fires) against the REAL predicate, not a re-implemented
+        // point-in-sphere closure.
         let dest = Vec3::new(10.0, 0.0, 0.0);
-        let radius = 0.5_f64;
+        // Zero-length chords at fixed offsets from `dest`; `slow` clears ARRIVAL_SPEED.
+        let slow = Vec3::new(1.0e-6, 0.0, 0.0);
+        let inside_pt = dest.add(Vec3::new(ARRIVAL_RADIUS * 0.5, 0.0, 0.0));
+        let outside_pt = dest.add(Vec3::new(ARRIVAL_RADIUS * 10.0 + 1.0, 0.0, 0.0));
 
-        // Helper mirrors arrival_crossed but with an explicit radius for the test.
-        let crossed = |pos: Vec3, prev_inside: bool| {
-            let inside = pos.sub(dest).length() <= radius;
-            inside && !prev_inside
-        };
-
-        // Outside last tick, inside now -> crossing, fires.
-        assert!(crossed(Vec3::new(10.2, 0.0, 0.0), false));
-        // Inside last tick, inside now -> no new crossing.
-        assert!(!crossed(Vec3::new(10.1, 0.0, 0.0), true));
-        // Outside now -> never fires regardless of prior.
-        assert!(!crossed(Vec3::new(11.0, 0.0, 0.0), false));
-        assert!(!crossed(Vec3::new(11.0, 0.0, 0.0), true));
+        // Inside now, was outside last tick -> crossing, fires.
+        assert!(swept_fixed(inside_pt, inside_pt, dest, slow, false));
+        // Inside now, was inside last tick -> latch suppresses a second fire.
+        assert!(!swept_fixed(inside_pt, inside_pt, dest, slow, true));
+        // Outside now -> never fires, regardless of prior inside state.
+        assert!(!swept_fixed(outside_pt, outside_pt, dest, slow, false));
+        assert!(!swept_fixed(outside_pt, outside_pt, dest, slow, true));
     }
 
     #[test]
