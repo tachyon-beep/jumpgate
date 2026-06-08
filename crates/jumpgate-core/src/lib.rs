@@ -9,23 +9,25 @@
 //! surface. `#![forbid(unsafe_code)]` — no `unsafe` in the engine.
 //!
 //! This file is the scaffold floor; the engine modules (math, time, types, ids,
-//! config, contract, stores, ephemeris, integrator, ship, autopilot, ingest,
-//! events, world, hash, replay) land in subsequent tasks, declared in lib.rs
-//! ONLY once each file exists (no forward `pub mod` for not-yet-created files).
+//! config, contract, stores, ephemeris, integrator, ship, provenance, autopilot,
+//! ingest, events, world, hash, replay) land in subsequent tasks, declared in
+//! lib.rs ONLY once each file exists (no forward `pub mod` for not-yet-created
+//! files).
 #![forbid(unsafe_code)]
 
-pub mod math;
-pub mod time;
-pub mod ids;
-pub mod types;
 pub mod config;
-pub mod hash;
-pub mod rng;
 pub mod contract;
-pub mod stores;
 pub mod ephemeris;
+pub mod hash;
+pub mod ids;
 pub mod integrator;
+pub mod math;
+pub mod provenance;
+pub mod rng;
 pub mod ship;
+pub mod stores;
+pub mod time;
+pub mod types;
 
 // Crate-root re-export surface. Downstream tasks (and the jumpgate-py facade)
 // import seam/physics/config types through `jumpgate_core::{...}` rather than
@@ -36,18 +38,17 @@ pub mod ship;
 pub use config::{
     BaseSpec, BodyInit, ConfigHash, CraftInit, OrbitalElements, RunConfig, SubstepCfg,
 };
-pub use contract::{
-    command_sort_key, Command, Event, EventKind, Integrator, StateView,
-};
+pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
 pub use ephemeris::Ephemeris;
-pub use integrator::{gravity_accel, substep_count, Rk4, VelocityVerlet};
 pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC};
 pub use ids::{BodyId, CraftId, SlotMap};
-pub use math::{Vec3, G_CANONICAL};
+pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
+pub use math::{G_CANONICAL, Vec3};
+pub use provenance::{PROVENANCE, Provenance};
 pub use rng::{RngStream, RngStreams};
 pub use ship::thrust_accel_and_burn;
-pub use stores::{effective_params, BodyStore, Effective, NavState, ShipStore};
-pub use time::{sim_time, Dt, Tick};
+pub use stores::{BodyStore, Effective, NavState, ShipStore, effective_params};
+pub use time::{Dt, Tick, sim_time};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, Target};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
