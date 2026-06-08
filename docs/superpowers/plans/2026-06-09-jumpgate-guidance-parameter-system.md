@@ -87,15 +87,19 @@ Add to `math.rs` (module scope, near `G_CANONICAL`):
 ```rust
 /// Ideal-rocket (Tsiolkovsky) Δv: `Δv = v_e · ln((dry + prop) / dry)`.
 ///
-/// Precondition: `dry_mass > 0.0` (a massless dry hull has unbounded Δv and is
-/// non-physical). Returns `0.0` for `dry_mass <= 0.0` or `propellant_mass <= 0.0`
-/// (no tank / no budget) rather than NaN/Inf; a `debug_assert!` traps producer bugs.
+/// Returns `0.0` for the degenerate `dry_mass <= 0.0` (massless hull → unbounded Δv,
+/// non-physical) or `propellant_mass <= 0.0` (no propellant → no budget, the normal
+/// empty-tank case) rather than NaN/Inf. This is a faithful drop-in for the prior
+/// inline `dv_from_fuel`, which returned `0.0` on exactly these degenerate inputs with
+/// NO panic — so re-pointing `dv_from_fuel` here is behaviour- and bit-identical.
+/// (No `debug_assert` on `dry_mass`: that would add new debug-build panic behaviour on
+/// the live nav-budget path the old inline code never had, breaking the hash-neutral
+/// drop-in and contradicting the `0.0`-return contract this function promises.)
 ///
 /// Pinned numerics: the product is LEFT-TO-RIGHT (`v_e * ln(...)`), the mass ratio
 /// is formed inside the `ln` argument, NO `mul_add`/FMA — the exact grouping the
 /// recorded hashes were captured under (matches the prior inline `dv_from_fuel`).
 pub fn tsiolkovsky_dv(exhaust_velocity: f64, dry_mass: f64, propellant_mass: f64) -> f64 {
-    debug_assert!(dry_mass > 0.0, "tsiolkovsky_dv requires dry_mass > 0");
     if dry_mass <= 0.0 || propellant_mass <= 0.0 {
         0.0
     } else {
@@ -103,6 +107,8 @@ pub fn tsiolkovsky_dv(exhaust_velocity: f64, dry_mass: f64, propellant_mass: f64
     }
 }
 ```
+
+> **Plan-coherence note (resolved 2026-06-09):** an earlier draft had a `debug_assert!(dry_mass > 0.0)` that panicked the shipped degenerate test (debug-assertions are ON in the test profile) and added a latent debug-panic on the live `dv_from_fuel` path. Removed — the `0.0`-return is the contract, and it is what makes the re-point hash-neutral.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
