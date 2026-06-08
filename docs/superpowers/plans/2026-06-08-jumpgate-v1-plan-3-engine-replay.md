@@ -7,7 +7,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2024 edition (rustc/cargo 1.95; the slot-map generation field is named `generation` to sidestep the edition-2024 reserved keyword; a toolchain/edition/RNG-pin bump is a reviewed determinism rebaseline — see spec §6 and `provenance.rs`); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 **This plan covers Tasks 10–15.** Prerequisite: Plan 1, Plan 2 complete.
 
@@ -88,7 +88,7 @@ This task **defines `ActionLog` in its FINAL shape** — there is no Task-12/Tas
       #[test]
       fn since_returns_tick_tail() {
           let mut s = EventStream::new();
-          let cid = CraftId { slot: 0, gen: 1 };
+          let cid = CraftId { slot: 0, generation: 1 };
           s.emit(Event { tick: Tick(1), kind: EventKind::FuelEmpty { craft: cid } });
           s.emit(Event { tick: Tick(3), kind: EventKind::FuelEmpty { craft: cid } });
           s.emit(Event { tick: Tick(3), kind: EventKind::FuelEmpty { craft: cid } });
@@ -459,9 +459,9 @@ This task **defines `ActionLog` in its FINAL shape** — there is no Task-12/Tas
       #[test]
       fn log_records_queries_by_tick_and_since() {
           let mut log = ActionLog::new(cfg_hash());
-          log.record(Tick(5), dest_for(CraftId { slot: 0, gen: 1 }, 1.0));
-          log.record(Tick(5), dest_for(CraftId { slot: 1, gen: 1 }, 2.0));
-          log.record(Tick(6), dest_for(CraftId { slot: 0, gen: 1 }, 3.0));
+          log.record(Tick(5), dest_for(CraftId { slot: 0, generation: 1 }, 1.0));
+          log.record(Tick(5), dest_for(CraftId { slot: 1, generation: 1 }, 2.0));
+          log.record(Tick(6), dest_for(CraftId { slot: 0, generation: 1 }, 3.0));
           assert_eq!(log.at(Tick(5)).len(), 2);
           assert_eq!(log.at(Tick(6)).len(), 1);
           assert_eq!(log.at(Tick(7)).len(), 0);
@@ -733,7 +733,7 @@ pub const FUEL_EMPTY_EPS: f64 = 1e-9;
       use crate::ids::CraftId;
 
       fn craft(slot: u32) -> CraftId {
-          CraftId { slot, gen: 0 }
+          CraftId { slot, generation: 0 }
       }
 
       #[test]
@@ -974,7 +974,7 @@ Assemble the `World` aggregate: `reset` (build ephemeris, seed rng, spawn craft/
 This task is the consumer that finally instantiates `World`, so it also (a) re-points the contract's `ingest_commands(world: &mut World, …)` at the real type, and calls `detect_boundary_events(&self.ships, &self.bodies, &self.eph, …)` with the by-store-reference signature Task 11 actually defines, (b) consumes the single canonical `ActionLog` (`entries`/`commands_flat`/`config_hash` + `since_commands`) defined once in Task 10 — it does NOT redefine the struct, and (c) exercises the Lod must-shape seam (skip physics for dormant craft, emit `Wake` on dormant→active).
 
 **Two cross-task contract facts this task DEPENDS ON (must already exist at entry, per the contract-surface doc):**
-- `SlotMap<T>` (Task 2, `ids.rs`) exposes `insert(value: T) -> (u32, u32)` returning `(slot, gen)`, `iter_ids() -> impl Iterator<Item = (u32, u32)>` (live `(slot, gen)` pairs), `dense_index(slot: u32, gen: u32) -> Option<usize>`, and `id_at(dense_index: usize) -> (u32, u32)`. Task 2's own test suite covers all four (per the PROVIDER-defines-and-tests rule).
+- `SlotMap<T>` (Task 2, `ids.rs`) exposes `insert(value: T) -> (u32, u32)` returning `(slot, generation)`, `iter_ids() -> impl Iterator<Item = (u32, u32)>` (live `(slot, generation)` pairs), `dense_index(slot: u32, generation: u32) -> Option<usize>`, and `id_at(dense_index: usize) -> (u32, u32)`. Task 2's own test suite covers all four (per the PROVIDER-defines-and-tests rule).
 - `ShipStore` (Task 4, `stores.rs`) carries the two ADDITIVE boundary-edge SoA arrays `prev_fuel: Vec<f64>` and `prev_inside_dest: Vec<bool>` (spec §5.5 blesses "new per-ship scalars attach as additional SoA arrays"). They are written by `detect_boundary_events` (Task 11) reading the *new* quantized state vs. the *previous* tick, and copy-forwarded at the end of `step()` here. They are folded into `state_hash` at the position recorded in `HASH_FIELD_ORDER` (the canonical numbered field-order doc established by the plan-level FNV fix; the golden-hash test in Task 7 pins their zero-init contribution).
 - `EventKind::Wake { craft: CraftId }` exists (added to `contract.rs` in Task 6 per the plan-level Lod fix). `Integrator` is defined ONCE in `contract.rs`; this task imports `crate::contract::Integrator` (never a second same-shaped trait).
 
@@ -1271,10 +1271,10 @@ impl World {
     }
 
     fn ship_index(&self, id: CraftId) -> Option<usize> {
-        self.ships.ids.dense_index(id.slot, id.gen)
+        self.ships.ids.dense_index(id.slot, id.generation)
     }
     fn body_index(&self, id: BodyId) -> Option<usize> {
-        self.bodies.ids.dense_index(id.slot, id.gen)
+        self.bodies.ids.dense_index(id.slot, id.generation)
     }
     fn craft_id_at(&self, dense_index: usize) -> CraftId {
         // SlotMap::id_at returns Option; delegate to the ShipStore wrapper
@@ -1295,7 +1295,7 @@ impl StateView for World {
             .ships
             .ids
             .iter_ids()
-            .map(|(slot, gen)| CraftId { slot, gen })
+            .map(|(slot, generation)| CraftId { slot, generation })
             .collect();
         v.sort();
         v
@@ -1320,7 +1320,7 @@ impl StateView for World {
             .bodies
             .ids
             .iter_ids()
-            .map(|(slot, gen)| BodyId { slot, gen })
+            .map(|(slot, generation)| BodyId { slot, generation })
             .collect();
         v.sort();
         v
@@ -1790,7 +1790,7 @@ Files:
 Design constraints (pinned before drafting):
 - **FNV-1a is byte-wise.** `write_u64` decomposes the value into 8 little-endian bytes and runs the canonical per-byte loop `h = (h ^ byte) * PRIME`. Constants: offset basis `0xcbf29ce484222325`, prime `0x100000001b3`. NOT a word-at-a-time XOR-multiply.
 - **`HASH_FIELD_ORDER` is the drift-lock.** The exact sequence of words mixed into `state_hash` is documented as a numbered list in a module-level doc comment, each entry tagged with the task that introduced it. Any task that adds a hashed field appends to this list AND bumps `HASH_FORMAT_VERSION` AND updates the golden-hash constant in Step 6. The golden test is the enforcement.
-- **NavState (word 12) is the under-pinned field — test it explicitly.** The golden zero-world test only exercises `NavState::Idle`, so the entire multi-word `Seeking` encoding would otherwise be unpinned. Add a unit test asserting the encoding is self-delimiting and collision-free: a craft whose resolved dest is `NavDest::Position(Vec3::new(x,0,0))` and one whose resolved dest is `NavDest::Entity(Craft(CraftId{slot:x as u32, gen:0}))` MUST produce DIFFERENT `state_hash` values (the NavDest discriminant must be folded before the payload). Also add a `Seeking`-state golden so word 12's full word-stream is pinned, not just `Idle`'s single discriminant.
+- **NavState (word 12) is the under-pinned field — test it explicitly.** The golden zero-world test only exercises `NavState::Idle`, so the entire multi-word `Seeking` encoding would otherwise be unpinned. Add a unit test asserting the encoding is self-delimiting and collision-free: a craft whose resolved dest is `NavDest::Position(Vec3::new(x,0,0))` and one whose resolved dest is `NavDest::Entity(Craft(CraftId{slot:x as u32, generation:0}))` MUST produce DIFFERENT `state_hash` values (the NavDest discriminant must be folded before the payload). Also add a `Seeking`-state golden so word 12's full word-stream is pinned, not just `Idle`'s single discriminant.
 - **Bodies are on-rails.** Body positions derive from `tick` (already hashed), so `state_hash` does NOT hash body positions — only the `BodyStore` slot-map cursor and (sorted) body ids/masses-via-id. Ship state (pos/vel/fuel) is hashed in full.
 - **TDD fail-first ordering for the cursor.** Step 4's first `state_hash` impl deliberately OMITS the slot-map cursors. The cursor-participation golden test (Step 6) is written to FAIL against that impl, then Step 7 adds the cursor writes to make it pass. This is the only sequence that honors fail-first for the cursor requirement.
 
@@ -1835,23 +1835,23 @@ Design constraints (pinned before drafting):
   //!  4. body_store.ids.cursor()                 (Task 4/13, slot-map high-water)
   //!  5. ship_store.ids.cursor()                 (Task 4/13, slot-map high-water)
   //!
-  //! Bodies, sorted by BodyId (slot, gen):
+  //! Bodies, sorted by BodyId (slot, generation):
   //!
-  //!  6. body.slot as u64, body.gen as u64       (Task 13)
+  //!  6. body.slot as u64, body.generation as u64       (Task 13)
   //!  7. body.mass.to_bits()                     (Task 13)
   //!     (body POSITION is derived from tick via ephemeris, NOT stored, so it is
   //!     NOT hashed independently — it is a pure function of tick already hashed)
   //!
-  //! Craft, sorted by CraftId (slot, gen):
+  //! Craft, sorted by CraftId (slot, generation):
   //!
-  //!  8. craft.slot as u64, craft.gen as u64     (Task 13)
+  //!  8. craft.slot as u64, craft.generation as u64     (Task 13)
   //!  9. pos.x,pos.y,pos.z to_bits()             (Task 13)
   //! 10. vel.x,vel.y,vel.z to_bits()             (Task 13)
   //! 11. fuel_mass.to_bits()                     (Task 13)
   //! 12. nav discriminant as u64 (+ resolved dest/dv_remaining bits)  (Task 13)
   //!     Encoding (Step 5/6 expand this placeholder): Idle => disc 0;
   //!     Seeking => disc 1, then the NavDest discriminant (Position => disc 0
-  //!     then pos.x/.y/.z bits; Entity => disc 1, then (kind, slot, gen)), then
+  //!     then pos.x/.y/.z bits; Entity => disc 1, then (kind, slot, generation)), then
   //!     dv_remaining bits. The NavDest discriminant is folded BEFORE its payload
   //!     so Position(x,0,0) != Entity(slot=x). burn_budget is NOT hashed here.
   //! 13. lod discriminant as u64                 (Task 13)
@@ -1946,10 +1946,10 @@ Design constraints (pinned before drafting):
           h.write_u64(0); // 4. body cursor
           h.write_u64(0); // 5. ship cursor
           h.write_u64(0); // body slot
-          h.write_u64(0); // body gen
+          h.write_u64(0); // body generation
           h.write_u64(0.0f64.to_bits()); // body mass
           h.write_u64(0); // craft slot
-          h.write_u64(0); // craft gen
+          h.write_u64(0); // craft generation
           h.write_u64(0.0f64.to_bits()); // pos.x
           h.write_u64(0.0f64.to_bits()); // pos.y
           h.write_u64(0.0f64.to_bits()); // pos.z
@@ -2052,7 +2052,7 @@ Design constraints (pinned before drafting):
       fn seeking_navdest_discriminant_is_folded_before_payload() {
           // Word 12 must fold the NavDest discriminant BEFORE its payload, so a craft
           // Seeking Position(Vec3::new(x,0,0)) MUST hash differently from one Seeking
-          // Entity(Craft(CraftId{slot: x as u32, gen: 0})). Build two otherwise-identical
+          // Entity(Craft(CraftId{slot: x as u32, generation: 0})). Build two otherwise-identical
           // worlds, set the single craft's nav through the ingestion path, and assert
           // the two state hashes differ. (Pins word 12's encoding, which the Idle-only
           // golden zero-world test would otherwise leave unexercised.)
@@ -2077,7 +2077,7 @@ Design constraints (pinned before drafting):
               tick: we.tick(),
               target: Target::Entity(EntityRef::Craft(ce)),
               kind: CommandKind::Destination {
-                  dest: NavDest::Entity(EntityRef::Craft(CraftId { slot: x as u32, gen: 0 })),
+                  dest: NavDest::Entity(EntityRef::Craft(CraftId { slot: x as u32, generation: 0 })),
                   burn_budget: None,
               },
           }];
@@ -2140,14 +2140,14 @@ Design constraints (pinned before drafting):
       // HASH_FIELD_ORDER words 4-5 (body-store then ship-store cursor): added in
       // Step 7, BOTH immediately after the tick word and BEFORE the body loop.
 
-      // HASH_FIELD_ORDER words 6-7: bodies, sorted by id — slot, gen, mass.
+      // HASH_FIELD_ORDER words 6-7: bodies, sorted by id — slot, generation, mass.
       // (Body POSITIONS are tick-derived via ephemeris, so they are NOT hashed.)
       let mut bodies = world.body_ids();
       bodies.sort();
       for b in bodies {
           h.write_u64(b.slot as u64);
-          h.write_u64(b.gen as u64);
-          let bi = world.bodies.ids.dense_index(b.slot, b.gen).unwrap();
+          h.write_u64(b.generation as u64);
+          let bi = world.bodies.ids.dense_index(b.slot, b.generation).unwrap();
           h.write_u64(world.bodies.mass[bi].to_bits()); // word 7: body mass
       }
 
@@ -2156,7 +2156,7 @@ Design constraints (pinned before drafting):
       craft.sort();
       for c in craft {
           h.write_u64(c.slot as u64);
-          h.write_u64(c.gen as u64);
+          h.write_u64(c.generation as u64);
           if let Some(p) = world.craft_pos(c) {
               write_vec3(&mut h, p);
           }
@@ -2170,7 +2170,7 @@ Design constraints (pinned before drafting):
           // Read the dense row via the public SlotMap accessor (ship_index is private
           // to world.rs). The NavDest discriminant is folded BEFORE its payload so
           // Position(x,0,0) and Entity(slot=x) cannot collide.
-          let idx = world.ships.ids.dense_index(c.slot, c.gen).unwrap();
+          let idx = world.ships.ids.dense_index(c.slot, c.generation).unwrap();
           match world.ships.nav[idx] {
               NavState::Idle => h.write_u64(0),
               NavState::Seeking { dest, dv_remaining } => {
@@ -2187,13 +2187,13 @@ Design constraints (pinned before drafting):
                           h.write_u64(1);
                           h.write_u64(0); // kind: craft
                           h.write_u64(id.slot as u64);
-                          h.write_u64(id.gen as u64);
+                          h.write_u64(id.generation as u64);
                       }
                       NavDest::Entity(EntityRef::Body(id)) => {
                           h.write_u64(1);
                           h.write_u64(1); // kind: body
                           h.write_u64(id.slot as u64);
-                          h.write_u64(id.gen as u64);
+                          h.write_u64(id.generation as u64);
                       }
                   }
                   h.write_u64(dv_remaining.to_bits());
@@ -2232,7 +2232,7 @@ Design constraints (pinned before drafting):
       /// test below diverges and forces the author to bump HASH_FORMAT_VERSION.
       fn recompute_with_cursors(w: &World) -> u64 {
           // Mirrors the committed HASH_FIELD_ORDER exactly: new() folds words 1-2,
-          // then tick(3), body cursor(4), ship cursor(5), per-body slot/gen/mass(6-7),
+          // then tick(3), body cursor(4), ship cursor(5), per-body slot/generation/mass(6-7),
           // per-craft(8-13). Do NOT re-write the header — new() already did.
           let mut h = FnvHasher::new();
           h.write_u64(w.tick().0); // word 3
@@ -2242,15 +2242,15 @@ Design constraints (pinned before drafting):
           bodies.sort();
           for b in bodies {
               h.write_u64(b.slot as u64);
-              h.write_u64(b.gen as u64);
-              let bi = w.bodies.ids.dense_index(b.slot, b.gen).unwrap();
+              h.write_u64(b.generation as u64);
+              let bi = w.bodies.ids.dense_index(b.slot, b.generation).unwrap();
               h.write_u64(w.bodies.mass[bi].to_bits()); // word 7: body mass
           }
           let mut craft = w.craft_ids();
           craft.sort();
           for c in craft {
               h.write_u64(c.slot as u64);
-              h.write_u64(c.gen as u64);
+              h.write_u64(c.generation as u64);
               let p = w.craft_pos(c).unwrap();
               let [px, py, pz] = p.to_bits();
               h.write_u64(px);
@@ -2265,7 +2265,7 @@ Design constraints (pinned before drafting):
               // HASH_FIELD_ORDER word 12: NavState (discriminant-first, self-delimiting).
               // Map the sorted CraftId back to its dense row; ship_index is private to
               // world.rs, so resolve the row via the public SlotMap accessor.
-              let idx = w.ships.ids.dense_index(c.slot, c.gen).unwrap();
+              let idx = w.ships.ids.dense_index(c.slot, c.generation).unwrap();
               match w.ships.nav[idx] {
                   NavState::Idle => h.write_u64(0),
                   NavState::Seeking { dest, dv_remaining } => {
@@ -2282,13 +2282,13 @@ Design constraints (pinned before drafting):
                               h.write_u64(1);
                               h.write_u64(0); // kind: craft
                               h.write_u64(id.slot as u64);
-                              h.write_u64(id.gen as u64);
+                              h.write_u64(id.generation as u64);
                           }
                           NavDest::Entity(EntityRef::Body(id)) => {
                               h.write_u64(1);
                               h.write_u64(1); // kind: body
                               h.write_u64(id.slot as u64);
-                              h.write_u64(id.gen as u64);
+                              h.write_u64(id.generation as u64);
                           }
                       }
                       h.write_u64(dv_remaining.to_bits());
@@ -2370,13 +2370,13 @@ Design constraints (pinned before drafting):
       write_store_cursor(&mut h, &world.bodies.ids);
       write_store_cursor(&mut h, &world.ships.ids);
 
-      // HASH_FIELD_ORDER words 6-7: bodies, sorted by id — slot, gen, mass.
+      // HASH_FIELD_ORDER words 6-7: bodies, sorted by id — slot, generation, mass.
       let mut bodies = world.body_ids();
       bodies.sort();
       for b in bodies {
           h.write_u64(b.slot as u64);
-          h.write_u64(b.gen as u64);
-          let bi = world.bodies.ids.dense_index(b.slot, b.gen).unwrap();
+          h.write_u64(b.generation as u64);
+          let bi = world.bodies.ids.dense_index(b.slot, b.generation).unwrap();
           h.write_u64(world.bodies.mass[bi].to_bits());
       }
   ```
@@ -2489,7 +2489,7 @@ The Task-14 corruption test is only meaningful if the recorded run actually *doe
 - `EventKind::ThrustApplied` (asserted in a precondition test that the recorded run truly thrusts).
 
 **CROSS-TASK CONTRACT SURFACE consumed here** (see the Task-3 contract-surface document; this task is a *consumer* of every symbol below and adds nothing other tasks consume except the two `Recording` fields + three `fn`s in the verbatim block):
-- The single craft minted by `World::reset` in v1 is deterministically `CraftId { slot: 0, gen: 0 }` (slot-map allocates slot 0 first; a fresh slot starts at `gen == 0`). Task 14 does **not** hardcode this — it discovers the id via `World::reset(...).0.craft_ids()[0]` and *asserts* the stable value, so a divergence in Task 4's gen convention fails loudly here rather than silently mis-routing commands.
+- The single craft minted by `World::reset` in v1 is deterministically `CraftId { slot: 0, generation: 0 }` (slot-map allocates slot 0 first; a fresh slot starts at `generation == 0`). Task 14 does **not** hardcode this — it discovers the id via `World::reset(...).0.craft_ids()[0]` and *asserts* the stable value, so a divergence in Task 4's generation convention fails loudly here rather than silently mis-routing commands.
 - `ingest_commands` treats `Target::Sim` as a no-op in v1 (no `CommandKind` variant is Sim-scoped); only `Target::Entity(EntityRef::Craft(_))` sets a `NavState::Seeking`. This is the property the corruption test relies on being *false* for craft-targeted commands.
 
 **Contract types introduced here (verbatim):**
@@ -2557,17 +2557,17 @@ fn base_config() -> RunConfig {
     }
 }
 
-/// The single v1 craft is deterministically `CraftId { slot: 0, gen: 0 }`.
+/// The single v1 craft is deterministically `CraftId { slot: 0, generation: 0 }`.
 /// Discover it from a fresh reset rather than hardcoding, and assert the stable
-/// value so a slot-map gen-convention drift (Task 4) fails HERE, loudly.
+/// value so a slot-map generation-convention drift (Task 4) fails HERE, loudly.
 fn discover_craft_id() -> CraftId {
     let (world, _hash) = World::reset(base_config());
     let ids = world.craft_ids();
     assert_eq!(ids.len(), 1, "v1 scenario has exactly one craft");
     assert_eq!(
         ids[0],
-        CraftId { slot: 0, gen: 0 },
-        "first-minted craft must be slot 0 / gen 0 (slot-map convention from Task 4: a fresh slot starts at gen 0)"
+        CraftId { slot: 0, generation: 0 },
+        "first-minted craft must be slot 0 / generation 0 (slot-map convention from Task 4: a fresh slot starts at generation 0)"
     );
     ids[0]
 }

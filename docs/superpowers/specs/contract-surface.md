@@ -39,7 +39,7 @@ reconciliation explicitly here and in the module declaration order in `lib.rs`.
 | `Vec3` | Task 2 (`math`) | `new`,`ZERO`,`add`,`sub`,`scale`,`dot`,`length`,`length_sq`,`normalize_or_zero`,`to_bits` | every physics/config/hash task |
 | `G_CANONICAL` | Task 2 (`math`) | const | integrator, ephemeris |
 | `Tick`,`Dt`,`sim_time` | Task 3 (`time`) | `Tick(u64)`; `Dt::new/get/bits`; `sim_time(Tick,Dt)` | config, hash, world, ephemeris, events, replay |
-| `CraftId`,`BodyId` | Task 3 (`ids`) | tuple `{slot,gen}`; `Ord`/`Hash` derives | types, stores, contract, world, hash, py |
+| `CraftId`,`BodyId` | Task 3 (`ids`) | tuple `{slot,generation}`; `Ord`/`Hash` derives | types, stores, contract, world, hash, py |
 | `SlotMap<T>` | Task 3 (`ids`) | `new`,`len`,`is_empty`,`cursor`,`insert`,`get`,`remove`,`gen_of`,`dense_index`,`id_at` | stores, world; `cursor()` is HASHED state |
 | `Lod` | Task 3 (`types`) | `Player`/`NpcInteraction`/`Nothing` | stores (`lod:Vec<Lod>`), contract, world dispatch |
 | `EntityRef`,`Target`,`NavDest`,`CommandKind` | Task 3 (`types`) | enum variants | contract (`Command`,`Event`), stores (`NavState`), ingest |

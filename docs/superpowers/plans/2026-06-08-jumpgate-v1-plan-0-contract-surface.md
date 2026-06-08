@@ -6,7 +6,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2024 edition (rustc/cargo 1.95; the slot-map generation field is named `generation` to sidestep the edition-2024 reserved keyword; a toolchain/edition/RNG-pin bump is a reviewed determinism rebaseline — see spec §6 and `provenance.rs`); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 ---
 
@@ -36,7 +36,7 @@ Cross-cutting decisions consolidated from the adversarial plan review (architect
 │   │   └── src/
 │   │       ├── lib.rs              # forbid(unsafe_code); pub re-exports; module wiring; crate-level docs of the contract
 │   │       ├── math.rs             # hand-rolled f64 Vec3 (+ scalar ops, dot, length, norm); units constants (AU, M_sun, day, G_canonical, softening default)
-│   │       ├── ids.rs              # CraftId{slot,gen}, BodyId{slot,gen}; generational slot-map SlotMap<T> with hashable allocator cursor
+│   │       ├── ids.rs              # CraftId{slot,generation}, BodyId{slot,generation}; generational slot-map SlotMap<T> with hashable allocator cursor
 │   │       ├── types.rs            # primitive seam enums (Lod, EntityRef, Target, NavDest, CommandKind); no methods; split out so stores.rs resolves them before contract.rs (breaks the stores<->contract cycle)
 │   │       ├── time.rs             # Tick(u64), dt fixed-at-init wrapper, sim_time = tick*dt derivation helper
 │   │       ├── config.rs           # RunConfig (bodies, craft count, per-ship BaseSpec, master seed, dt bits, softening, substep params); ConfigHash compute (FNV-1a over to_bits)
@@ -108,12 +108,12 @@ pub const G_CANONICAL: f64; // AU^3 / (M_sun * day^2)
 
 // ---- ids.rs ----
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct CraftId { pub slot: u32, pub gen: u32 }
+pub struct CraftId { pub slot: u32, pub generation: u32 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BodyId  { pub slot: u32, pub gen: u32 }
+pub struct BodyId  { pub slot: u32, pub generation: u32 }
 
 /// Generational slot-map. `cursor()` (next free slot / high-water) is HASHED state.
-pub struct SlotMap<T> { /* dense values + gen array + free list + cursor */ }
+pub struct SlotMap<T> { /* dense values + generation array + free list + cursor */ }
 impl<T> SlotMap<T> {
     pub fn new() -> Self;
     pub fn len(&self) -> usize;
@@ -190,7 +190,7 @@ pub enum Lod { Player, NpcInteraction, Nothing } // v1 implements Player only
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Command { pub target: Target, pub kind: CommandKind }
 /// Total, deterministic ordering across World/Sim/Entity scopes for canonical apply.
-pub fn command_sort_key(c: &Command) -> (u8, u32, u32); // (scope_rank, slot, gen)
+pub fn command_sort_key(c: &Command) -> (u8, u32, u32); // (scope_rank, slot, generation)
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventKind {
@@ -241,7 +241,7 @@ pub trait StateView {
 #[derive(Clone, Copy, Debug)]
 pub enum NavState { Idle, Seeking { dest: NavDest, dv_remaining: f64 } } // resolved field autopilot reads
 pub struct ShipStore {
-    pub ids: SlotMap<()>,        // slot/gen authority
+    pub ids: SlotMap<()>,        // slot/generation authority
     pub pos: Vec<Vec3>, pub vel: Vec<Vec3>,
     pub fuel_mass: Vec<f64>,
     pub spec: Vec<BaseSpec>,
@@ -326,7 +326,7 @@ pub const HASH_FORMAT_VERSION: u32;
 /// DISCRIMINANT-FIRST, FIXED-ARITY-PER-VARIANT and self-delimiting:
 ///   Idle    => disc 0
 ///   Seeking => disc 1, then NavDest discriminant, then
-///                Position => 3 to_bits words  OR  Entity => (kind,slot,gen) triple,
+///                Position => 3 to_bits words  OR  Entity => (kind,slot,generation) triple,
 ///              then dv_remaining.to_bits()
 /// (folding the NavDest discriminant is what makes Position(x,0,0) != Entity(slot=x);
 ///  burn_budget is NOT hashed here — it lives on CommandKind / the action log.)

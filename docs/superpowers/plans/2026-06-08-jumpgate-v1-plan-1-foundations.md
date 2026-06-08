@@ -7,7 +7,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2024 edition (rustc/cargo 1.95; the slot-map generation field is named `generation` to sidestep the edition-2024 reserved keyword; a toolchain/edition/RNG-pin bump is a reviewed determinism rebaseline — see spec §6 and `provenance.rs`); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 **This plan covers Tasks 1–6.** Prerequisite: (none — start here, after Plan 0).
 
@@ -56,7 +56,7 @@
   ]
 
   [workspace.package]
-  edition = "2021"
+  edition = "2024"
   version = "0.1.0"
   license = "MIT OR Apache-2.0"
 
@@ -774,7 +774,7 @@ This task does five things:
   | `Vec3` | Task 2 (`math`) | `new`,`ZERO`,`add`,`sub`,`scale`,`dot`,`length`,`length_sq`,`normalize_or_zero`,`to_bits` | every physics/config/hash task |
   | `G_CANONICAL` | Task 2 (`math`) | const | integrator, ephemeris |
   | `Tick`,`Dt`,`sim_time` | Task 3 (`time`) | `Tick(u64)`; `Dt::new/get/bits`; `sim_time(Tick,Dt)` | config, hash, world, ephemeris, events, replay |
-  | `CraftId`,`BodyId` | Task 3 (`ids`) | tuple `{slot,gen}`; `Ord`/`Hash` derives | types, stores, contract, world, hash, py |
+  | `CraftId`,`BodyId` | Task 3 (`ids`) | tuple `{slot,generation}`; `Ord`/`Hash` derives | types, stores, contract, world, hash, py |
   | `SlotMap<T>` | Task 3 (`ids`) | `new`,`len`,`is_empty`,`cursor`,`insert`,`get`,`remove`,`gen_of` | stores, world; `cursor()` is HASHED state |
   | `Lod` | Task 3 (`types`) | `Player`/`NpcInteraction`/`Nothing` | stores (`lod:Vec<Lod>`), contract, world dispatch |
   | `EntityRef`,`Target`,`NavDest`,`CommandKind` | Task 3 (`types`) | enum variants | contract (`Command`,`Event`), stores (`NavState`), ingest |
@@ -931,7 +931,7 @@ This task does five things:
   Create `crates/jumpgate-core/src/ids.rs`. `SlotMap` must define every method downstream tasks call (`new`, `len`, `is_empty`, `cursor`, `insert`, `get`, `remove`, `gen_of`) per the contract-surface RULE. The `cursor()` (high-water of slots ever minted) is HASHED state and is intentionally monotone (does not decrease on `remove`), so a future mid-run `Spawn` cannot rewrite prior ticks' hashes.
 
   ```rust
-  //! Generational slot-map ids. `CraftId`/`BodyId` are `{slot, gen}` so a deleted
+  //! Generational slot-map ids. `CraftId`/`BodyId` are `{slot, generation}` so a deleted
   //! entity can't be confused with its replacement (spec §4.3). `SlotMap::cursor()`
   //! is HASHED state (spec §6): it is the monotone high-water of slots ever minted,
   //! constant after `reset` in v1 but present so a future `Spawn` doesn't rewrite
@@ -940,13 +940,13 @@ This task does five things:
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
   pub struct CraftId {
       pub slot: u32,
-      pub gen: u32,
+      pub generation: u32,
   }
 
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
   pub struct BodyId {
       pub slot: u32,
-      pub gen: u32,
+      pub generation: u32,
   }
 
   /// Generational slot-map: dense values + per-slot generation + free list + a
@@ -972,7 +972,7 @@ This task does five things:
       pub fn cursor(&self) -> u64 {
           unimplemented!()
       }
-      /// Returns `(slot, gen)` of the inserted value.
+      /// Returns `(slot, generation)` of the inserted value.
       pub fn insert(&mut self, _value: T) -> (u32, u32) {
           unimplemented!()
       }
@@ -1001,9 +1001,9 @@ This task does five things:
 
       #[test]
       fn id_ordering_is_total_and_derivable() {
-          let a = CraftId { slot: 0, gen: 0 };
-          let b = CraftId { slot: 0, gen: 1 };
-          let c = CraftId { slot: 1, gen: 0 };
+          let a = CraftId { slot: 0, generation: 0 };
+          let b = CraftId { slot: 0, generation: 1 };
+          let c = CraftId { slot: 1, generation: 0 };
           assert!(a < b && b < c);
           let mut v = vec![c, a, b];
           v.sort();
@@ -1098,17 +1098,17 @@ This task does five things:
               (slot, 0)
           }
       }
-      pub fn get(&self, slot: u32, gen: u32) -> Option<&T> {
+      pub fn get(&self, slot: u32, generation: u32) -> Option<&T> {
           let i = slot as usize;
-          if i < self.values.len() && self.gens[i] == gen {
+          if i < self.values.len() && self.gens[i] == generation {
               self.values[i].as_ref()
           } else {
               None
           }
       }
-      pub fn remove(&mut self, slot: u32, gen: u32) -> Option<T> {
+      pub fn remove(&mut self, slot: u32, generation: u32) -> Option<T> {
           let i = slot as usize;
-          if i < self.values.len() && self.gens[i] == gen && self.values[i].is_some() {
+          if i < self.values.len() && self.gens[i] == generation && self.values[i].is_some() {
               let taken = self.values[i].take();
               self.gens[i] = self.gens[i].wrapping_add(1);
               self.free.push(slot);
@@ -1210,14 +1210,14 @@ This task does five things:
 
       #[test]
       fn entity_ref_distinguishes_craft_from_body() {
-          let c = EntityRef::Craft(CraftId { slot: 0, gen: 0 });
-          let b = EntityRef::Body(BodyId { slot: 0, gen: 0 });
+          let c = EntityRef::Craft(CraftId { slot: 0, generation: 0 });
+          let b = EntityRef::Body(BodyId { slot: 0, generation: 0 });
           assert_ne!(c, b);
       }
 
       #[test]
       fn target_carries_all_scopes() {
-          let e = Target::Entity(EntityRef::Body(BodyId { slot: 2, gen: 1 }));
+          let e = Target::Entity(EntityRef::Body(BodyId { slot: 2, generation: 1 }));
           assert_ne!(e, Target::World);
           assert_ne!(Target::World, Target::Sim);
       }
@@ -1225,7 +1225,7 @@ This task does five things:
       #[test]
       fn navdest_supports_position_and_entity() {
           let p = NavDest::Position(Vec3::new(1.0, 2.0, 3.0));
-          let en = NavDest::Entity(EntityRef::Craft(CraftId { slot: 1, gen: 0 }));
+          let en = NavDest::Entity(EntityRef::Craft(CraftId { slot: 1, generation: 0 }));
           assert_ne!(p, en);
           assert_eq!(p, NavDest::Position(Vec3::new(1.0, 2.0, 3.0)));
       }
@@ -1597,13 +1597,13 @@ This task does five things:
   //!  3. tick.0                                   (Task 3, time)
   //!  4. body_store.ids.cursor()                  (Task 4/13, slot-map high-water)
   //!  5. ship_store.ids.cursor()                  (Task 4/13, slot-map high-water)
-  //!  -- bodies, sorted by BodyId (slot, gen):
-  //!  6.   body.slot as u64, body.gen as u64      (Task 13)
+  //!  -- bodies, sorted by BodyId (slot, generation):
+  //!  6.   body.slot as u64, body.generation as u64      (Task 13)
   //!  7.   body.mass.to_bits()                    (Task 13)
   //!     (body POSITION is derived from tick via ephemeris, NOT stored, so it is
   //!      NOT hashed independently — it is a pure function of tick already hashed)
-  //!  -- craft, sorted by CraftId (slot, gen):
-  //!  8.   craft.slot as u64, craft.gen as u64    (Task 13)
+  //!  -- craft, sorted by CraftId (slot, generation):
+  //!  8.   craft.slot as u64, craft.generation as u64    (Task 13)
   //!  9.   pos.x,pos.y,pos.z to_bits()            (Task 13)
   //! 10.   vel.x,vel.y,vel.z to_bits()            (Task 13)
   //! 11.   fuel_mass.to_bits()                    (Task 13)
@@ -1698,13 +1698,13 @@ This task does five things:
           h.write_u64(0); // 3. tick
           h.write_u64(0); // 4. body cursor
           h.write_u64(0); // 5. ship cursor
-          // one body (slot 0, gen 0, mass 0.0):
+          // one body (slot 0, generation 0, mass 0.0):
           h.write_u64(0); // body slot
-          h.write_u64(0); // body gen
+          h.write_u64(0); // body generation
           h.write_u64(0.0f64.to_bits()); // body mass
-          // one craft (slot 0, gen 0; zero pos/vel/fuel; nav Idle=0; lod Player=0):
+          // one craft (slot 0, generation 0; zero pos/vel/fuel; nav Idle=0; lod Player=0):
           h.write_u64(0); // craft slot
-          h.write_u64(0); // craft gen
+          h.write_u64(0); // craft generation
           h.write_u64(0.0f64.to_bits()); // pos.x
           h.write_u64(0.0f64.to_bits()); // pos.y
           h.write_u64(0.0f64.to_bits()); // pos.z
@@ -1835,7 +1835,7 @@ This task does five things:
     table + the RULE (provider defines+tests every method downstream calls) +
     acyclic module order + hash-ownership invariant (root-cause fix)
   - time.rs: Tick(u64), Dt (stores f64; get()/bits()), sim_time helper
-  - ids.rs: CraftId/BodyId {slot,gen}; generational SlotMap with monotone
+  - ids.rs: CraftId/BodyId {slot,generation}; generational SlotMap with monotone
     cursor() (HASHED state) — moved earlier so types.rs resolves EntityRef
   - types.rs: Lod, EntityRef, Target, NavDest, CommandKind seam primitives so
     stores.rs (Task 4) resolves before contract.rs (Task 6) builds on top
@@ -1874,7 +1874,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 **Depends on Task 3.** Task 3 lands the crate skeleton `crates/jumpgate-core` (`Cargo.toml` + `lib.rs`) with the `math.rs`, `time.rs`, `types.rs`, and `config.rs` modules. This task consumes `Vec3` (from `math.rs`), `BaseSpec` (from `config.rs`), and the seam types `NavDest` / `Lod` (from `types.rs` — the primitive-seam module created in Task 3 per the canonical acyclic ordering `math -> time -> ids -> types -> config -> hash -> rng -> contract -> stores`, `ids` BEFORE `types`). Those names/signatures are taken verbatim from the shared type contract; do not redefine them here. NOTE: `contract.rs` does NOT exist yet (it is built in Task 6, AFTER this task) — do not import from `crate::contract` anywhere in Task 4, and do not declare `pub mod contract` in `lib.rs` at this task's exit.
 
 **Cross-task contract surface this task PROVIDES** (every downstream caller's needs must be defined and tested HERE):
-- `SlotMap<T>`: `new`/`len`/`is_empty`/`cursor`/`insert`/`get`/`remove` (existing) + `iter_ids` (live `(slot,gen)` iterator), `dense_index(slot,gen) -> Option<usize>`, `id_at(idx) -> Option<(u32,u32)>`. None-on-stale-gen semantics for all three. Consumed by Tasks 10–13.
+- `SlotMap<T>`: `new`/`len`/`is_empty`/`cursor`/`insert`/`get`/`remove` (existing) + `iter_ids` (live `(slot,generation)` iterator), `dense_index(slot,generation) -> Option<usize>`, `id_at(idx) -> Option<(u32,u32)>`. None-on-stale-generation semantics for all three. Consumed by Tasks 10–13.
 - `ShipStore`: `empty()`, `push(spec,pos,vel,fuel) -> CraftId`, `ids_at(idx) -> CraftId`, `index_of(id) -> Option<usize>`, `craft_pos_by_id(id) -> Option<Vec3>`, `craft_fuel_capacity(id) -> Option<f64>`. Consumed by Tasks 10/16.
 - `ShipStore` carries `prev_fuel: Vec<f64>` and `prev_inside_dest: Vec<bool>` SoA arrays (reserved-for-hash; the copy-at-end-of-step and the FNV write land in later World/hash tasks — NOT here).
 - v1 invariant pinned by this task: **`slot == dense row index`**. All craft are minted at reset with no mid-run despawn, so slots allocate contiguously and the SoA arrays stay row-aligned with the slot number. `push` asserts this.
@@ -1917,7 +1917,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
   ```
   EXPECTED: `Finished` (no errors; two empty modules compile).
 
-- [ ] **Step 2: Failing test — `CraftId`/`BodyId` exist, are `Copy`/`Ord`, and sort by (slot, gen)**
+- [ ] **Step 2: Failing test — `CraftId`/`BodyId` exist, are `Copy`/`Ord`, and sort by (slot, generation)**
 
   The contract requires both ids derive `Ord` (canonical hashing order is bodies-then-craft by sorted id). Add to the bottom of `crates/jumpgate-core/src/ids.rs`:
   ```rust
@@ -1927,17 +1927,17 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
       #[test]
       fn ids_are_copy_and_ord() {
-          let a = CraftId { slot: 0, gen: 0 };
-          let b = CraftId { slot: 0, gen: 1 };
-          let c = CraftId { slot: 1, gen: 0 };
+          let a = CraftId { slot: 0, generation: 0 };
+          let b = CraftId { slot: 0, generation: 1 };
+          let c = CraftId { slot: 1, generation: 0 };
           // Copy: using `a` after passing it by value must still work.
           let _copy = a;
-          assert!(a < b, "same slot, lower gen sorts first");
-          assert!(b < c, "lower slot sorts before higher slot regardless of gen");
+          assert!(a < b, "same slot, lower generation sorts first");
+          assert!(b < c, "lower slot sorts before higher slot regardless of generation");
           assert_eq!(a, a);
 
-          let x = BodyId { slot: 2, gen: 5 };
-          let y = BodyId { slot: 2, gen: 5 };
+          let x = BodyId { slot: 2, generation: 5 };
+          let y = BodyId { slot: 2, generation: 5 };
           assert_eq!(x, y);
       }
   }
@@ -1953,19 +1953,19 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
   Insert above the `#[cfg(test)]` module in `crates/jumpgate-core/src/ids.rs`:
   ```rust
-  /// Generational id for a craft slot. `Ord` is derived as (slot, gen) lexicographic
+  /// Generational id for a craft slot. `Ord` is derived as (slot, generation) lexicographic
   /// (field order: slot first), which is the canonical state-hash ordering.
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
   pub struct CraftId {
       pub slot: u32,
-      pub gen: u32,
+      pub generation: u32,
   }
 
   /// Generational id for a body slot. Same ordering contract as `CraftId`.
   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
   pub struct BodyId {
       pub slot: u32,
-      pub gen: u32,
+      pub generation: u32,
   }
   ```
 
@@ -1977,7 +1977,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
 - [ ] **Step 4: Failing test — `SlotMap` insert returns a key, `get` reads it back, `len`/`cursor` start at 0**
 
-  `SlotMap<T>` is generic (stores `()` for both `ShipStore` and `BodyStore`). `insert(value) -> (u32 slot, u32 gen)` is the implementation API the drafter requires; `new`/`len`/`cursor` are the contract-pinned signatures. Add this test inside the existing `mod tests` in `crates/jumpgate-core/src/ids.rs`:
+  `SlotMap<T>` is generic (stores `()` for both `ShipStore` and `BodyStore`). `insert(value) -> (u32 slot, u32 generation)` is the implementation API the drafter requires; `new`/`len`/`cursor` are the contract-pinned signatures. Add this test inside the existing `mod tests` in `crates/jumpgate-core/src/ids.rs`:
   ```rust
       #[test]
       fn insert_get_len_cursor() {
@@ -2048,7 +2048,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           self.values.len() as u64
       }
 
-      /// Insert a value, returning its `(slot, gen)`. Reuses a freed slot if one
+      /// Insert a value, returning its `(slot, generation)`. Reuses a freed slot if one
       /// exists (LIFO), otherwise grows the backing vectors (advancing `cursor`).
       pub fn insert(&mut self, value: T) -> (u32, u32) {
           if let Some(slot) = self.free.pop() {
@@ -2063,10 +2063,10 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           }
       }
 
-      /// Read a value, validating the generation. A stale `(slot, gen)` -> `None`.
-      pub fn get(&self, slot: u32, gen: u32) -> Option<&T> {
+      /// Read a value, validating the generation. A stale `(slot, generation)` -> `None`.
+      pub fn get(&self, slot: u32, generation: u32) -> Option<&T> {
           let s = slot as usize;
-          if s >= self.values.len() || self.gens[s] != gen {
+          if s >= self.values.len() || self.gens[s] != generation {
               return None;
           }
           self.values[s].as_ref()
@@ -2086,7 +2086,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
   ```
   EXPECTED: `test result: ok. 1 passed`.
 
-- [ ] **Step 6: Failing test — `remove` bumps gen, invalidates the old id, reuses the slot; replacement at same slot is distinct**
+- [ ] **Step 6: Failing test — `remove` bumps generation, invalidates the old id, reuses the slot; replacement at same slot is distinct**
 
   This is the core generational-safety guarantee from the drafter notes: deletion invalidates the old id but NOT the replacement at the same slot. Add to `mod tests` in `crates/jumpgate-core/src/ids.rs`:
   ```rust
@@ -2126,10 +2126,10 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
   The generation is bumped at remove time (so the freed-but-not-yet-reused id is already stale), and the slot is pushed onto the free list. Insert into the `impl<T> SlotMap<T>` block in `crates/jumpgate-core/src/ids.rs`, after `get`:
   ```rust
       /// Remove a value, validating the generation. Bumps the slot's generation and
-      /// frees the slot for reuse. A stale `(slot, gen)` -> `None` (no-op).
-      pub fn remove(&mut self, slot: u32, gen: u32) -> Option<T> {
+      /// frees the slot for reuse. A stale `(slot, generation)` -> `None` (no-op).
+      pub fn remove(&mut self, slot: u32, generation: u32) -> Option<T> {
           let s = slot as usize;
-          if s >= self.values.len() || self.gens[s] != gen {
+          if s >= self.values.len() || self.gens[s] != generation {
               return None;
           }
           let taken = self.values[s].take();
@@ -2149,7 +2149,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
 - [ ] **Step 8: Failing test — `dense_index` / `id_at` / `iter_ids` (the downstream navigation surface)**
 
-  Tasks 10–13 index the SoA arrays by dense row, look up the typed id at a row, and iterate live ids. `SlotMap` is generic over `T`, so it cannot return `CraftId`; `id_at` returns the `(slot,gen)` tuple (matching `insert`), and the typed store wraps it. All three honor None-on-stale-gen semantics. Under the v1 `slot == dense row` invariant, `dense_index(slot,gen)` returns `Some(slot as usize)` for a live id. Add to `mod tests` in `crates/jumpgate-core/src/ids.rs`:
+  Tasks 10–13 index the SoA arrays by dense row, look up the typed id at a row, and iterate live ids. `SlotMap` is generic over `T`, so it cannot return `CraftId`; `id_at` returns the `(slot,generation)` tuple (matching `insert`), and the typed store wraps it. All three honor None-on-stale-generation semantics. Under the v1 `slot == dense row` invariant, `dense_index(slot,generation)` returns `Some(slot as usize)` for a live id. Add to `mod tests` in `crates/jumpgate-core/src/ids.rs`:
   ```rust
       #[test]
       fn dense_index_id_at_iter_ids() {
@@ -2160,15 +2160,15 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           // dense_index: live id -> its row (slot==row in v1); stale/oob -> None.
           assert_eq!(sm.dense_index(s0, g0), Some(0));
           assert_eq!(sm.dense_index(s1, g1), Some(1));
-          assert_eq!(sm.dense_index(s0, 99), None, "stale gen -> None");
+          assert_eq!(sm.dense_index(s0, 99), None, "stale generation -> None");
           assert_eq!(sm.dense_index(7, 0), None, "out-of-range slot -> None");
 
-          // id_at: row -> (slot,gen) of the live occupant; empty/oob row -> None.
+          // id_at: row -> (slot,generation) of the live occupant; empty/oob row -> None.
           assert_eq!(sm.id_at(0), Some((s0, g0)));
           assert_eq!(sm.id_at(1), Some((s1, g1)));
           assert_eq!(sm.id_at(2), None, "out-of-range row -> None");
 
-          // iter_ids: yields every live (slot,gen) in ascending slot order.
+          // iter_ids: yields every live (slot,generation) in ascending slot order.
           let live: Vec<(u32, u32)> = sm.iter_ids().collect();
           assert_eq!(live, vec![(s0, g0), (s1, g1)]);
 
@@ -2189,20 +2189,20 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
 - [ ] **Step 9: Implement `dense_index` / `id_at` / `iter_ids`**
 
-  Insert into the `impl<T> SlotMap<T>` block in `crates/jumpgate-core/src/ids.rs`, after `remove`. `dense_index` is the slot itself under the v1 `slot == row` invariant, gated on liveness + generation. `id_at` validates the row holds a live value. `iter_ids` filters to live slots and emits `(slot, gen)`.
+  Insert into the `impl<T> SlotMap<T>` block in `crates/jumpgate-core/src/ids.rs`, after `remove`. `dense_index` is the slot itself under the v1 `slot == row` invariant, gated on liveness + generation. `id_at` validates the row holds a live value. `iter_ids` filters to live slots and emits `(slot, generation)`.
   ```rust
-      /// Dense SoA row index for a live `(slot, gen)`. Under the v1 `slot == row`
-      /// invariant this is the slot itself. Stale gen, removed slot, or out-of-range
+      /// Dense SoA row index for a live `(slot, generation)`. Under the v1 `slot == row`
+      /// invariant this is the slot itself. Stale generation, removed slot, or out-of-range
       /// slot -> `None`.
-      pub fn dense_index(&self, slot: u32, gen: u32) -> Option<usize> {
+      pub fn dense_index(&self, slot: u32, generation: u32) -> Option<usize> {
           let s = slot as usize;
-          if s >= self.values.len() || self.gens[s] != gen || self.values[s].is_none() {
+          if s >= self.values.len() || self.gens[s] != generation || self.values[s].is_none() {
               return None;
           }
           Some(s)
       }
 
-      /// The live `(slot, gen)` occupying dense row `idx`, or `None` if the row is
+      /// The live `(slot, generation)` occupying dense row `idx`, or `None` if the row is
       /// empty/freed or out of range. Generic over `T`, so it returns the raw tuple;
       /// typed stores wrap it into `CraftId`/`BodyId`.
       pub fn id_at(&self, idx: usize) -> Option<(u32, u32)> {
@@ -2212,7 +2212,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           Some((idx as u32, self.gens[idx]))
       }
 
-      /// Iterate every live `(slot, gen)` in ascending slot order.
+      /// Iterate every live `(slot, generation)` in ascending slot order.
       pub fn iter_ids(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
           self.values
               .iter()
@@ -2384,7 +2384,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 
 - [ ] **Step 15: Failing test — `ShipStore`/`BodyStore` SoA layouts construct via `empty()` and stay length-parallel (incl. the two prev-* hash arrays)**
 
-  The stores are plain SoA `Vec`s per the contract; `ids: SlotMap<()>` is the slot/gen authority. `empty()` builds a zero-craft store with all arrays empty. This test builds an empty store, asserts every parallel array (including `prev_fuel` and `prev_inside_dest`) starts empty, and constructs a one-body store. `Lod` comes from `types.rs` (Task 3). Add to `mod tests` in `crates/jumpgate-core/src/stores.rs`:
+  The stores are plain SoA `Vec`s per the contract; `ids: SlotMap<()>` is the slot/generation authority. `empty()` builds a zero-craft store with all arrays empty. This test builds an empty store, asserts every parallel array (including `prev_fuel` and `prev_inside_dest`) starts empty, and constructs a one-body store. `Lod` comes from `types.rs` (Task 3). Add to `mod tests` in `crates/jumpgate-core/src/stores.rs`:
   ```rust
       #[test]
       fn stores_construct_soa_parallel() {
@@ -2408,7 +2408,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
               eph_index: Vec::new(),
           };
           let (bslot, bgen) = body.ids.insert(());
-          let bid = BodyId { slot: bslot, gen: bgen };
+          let bid = BodyId { slot: bslot, generation: bgen };
           body.mass.push(1.0);
           body.eph_index.push(0);
           assert_eq!(bid.slot, bslot);
@@ -2434,7 +2434,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
   ```
   Then add the two structs above the `#[cfg(test)]` module:
   ```rust
-  /// SoA store for mobile craft. `ids` is the slot/gen authority; every other Vec
+  /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
   /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
   /// length-parallel. `prev_fuel` / `prev_inside_dest` snapshot the previous tick's
   /// values for edge-triggered event detection (Task 11 copies into them at the end
@@ -2500,8 +2500,8 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           };
           let id0 = ship.push(spec.clone(), Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 40.0);
           let id1 = ship.push(spec.clone(), Vec3::new(2.0, 0.0, 0.0), Vec3::ZERO, 20.0);
-          assert_eq!(id0, CraftId { slot: 0, gen: 0 });
-          assert_eq!(id1, CraftId { slot: 1, gen: 0 });
+          assert_eq!(id0, CraftId { slot: 0, generation: 0 });
+          assert_eq!(id1, CraftId { slot: 1, generation: 0 });
 
           // every SoA array stayed length-parallel, including the prev-* pair.
           let n = ship.ids.len();
@@ -2522,8 +2522,8 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           // index_of resolves a live typed id to its row; stale -> None.
           assert_eq!(ship.index_of(id0), Some(0));
           assert_eq!(ship.index_of(id1), Some(1));
-          let stale = CraftId { slot: 0, gen: 99 };
-          assert_eq!(ship.index_of(stale), None, "stale gen -> None");
+          let stale = CraftId { slot: 0, generation: 99 };
+          assert_eq!(ship.index_of(stale), None, "stale generation -> None");
 
           // craft_pos_by_id reads the row's position; stale -> None.
           assert_eq!(ship.craft_pos_by_id(id0), Some(Vec3::new(1.0, 0.0, 0.0)));
@@ -2557,7 +2557,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
       /// `lod = Player`, and the prev-* snapshots (`prev_fuel = fuel`,
       /// `prev_inside_dest = false`). Enforces the v1 `slot == row` invariant.
       pub fn push(&mut self, spec: BaseSpec, pos: Vec3, vel: Vec3, fuel: f64) -> CraftId {
-          let (slot, gen) = self.ids.insert(());
+          let (slot, generation) = self.ids.insert(());
           debug_assert_eq!(
               slot as usize,
               self.pos.len(),
@@ -2571,22 +2571,22 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
           self.lod.push(Lod::Player);
           self.prev_fuel.push(fuel);
           self.prev_inside_dest.push(false);
-          CraftId { slot, gen }
+          CraftId { slot, generation }
       }
 
       /// The typed `CraftId` occupying dense row `idx`. Panics if `idx` is not a
       /// live row (callers iterate `0..ids.len()` over a no-despawn v1 store).
       pub fn ids_at(&self, idx: usize) -> CraftId {
-          let (slot, gen) = self
+          let (slot, generation) = self
               .ids
               .id_at(idx)
               .expect("ids_at called with a non-live dense row");
-          CraftId { slot, gen }
+          CraftId { slot, generation }
       }
 
       /// Dense SoA row for a live `CraftId`, or `None` for a stale/unknown id.
       pub fn index_of(&self, id: CraftId) -> Option<usize> {
-          self.ids.dense_index(id.slot, id.gen)
+          self.ids.dense_index(id.slot, id.generation)
       }
 
       /// Position of a live craft by id, or `None` if the id is stale.
@@ -2630,10 +2630,10 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
   git commit -m "$(cat <<'EOF'
   Task 4: generational slot-map + per-type stores skeleton
 
-  - CraftId/BodyId (Copy, Ord by (slot,gen)) for canonical hash order
-  - SlotMap<T>: insert/get/remove with gen validation; cursor() high-water
+  - CraftId/BodyId (Copy, Ord by (slot,generation)) for canonical hash order
+  - SlotMap<T>: insert/get/remove with generation validation; cursor() high-water
     mark is hashed state and never shrinks on remove; dense_index/id_at/
-    iter_ids navigation surface (None-on-stale-gen) for Tasks 10-13
+    iter_ids navigation surface (None-on-stale-generation) for Tasks 10-13
   - ShipStore/BodyStore SoA layouts incl. prev_fuel/prev_inside_dest hash
     arrays; empty()/push/ids_at/index_of/craft_pos_by_id/craft_fuel_capacity
     accessors (Tasks 10/16); v1 slot==row invariant asserted in push
@@ -2650,7 +2650,7 @@ A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the de
 ---
 
 **Notes for the implementer**
-- `SlotMap<T>::insert` returns a `(u32, u32)` `(slot, gen)` tuple rather than a typed id because both `ShipStore` and `BodyStore` use `SlotMap<()>` and must mint two distinct nominal id types (`CraftId`/`BodyId`) from the same generic map. `id_at` likewise returns the tuple; the typed store (`ids_at`) wraps it. Callers wrap the tuple into the appropriate id struct.
+- `SlotMap<T>::insert` returns a `(u32, u32)` `(slot, generation)` tuple rather than a typed id because both `ShipStore` and `BodyStore` use `SlotMap<()>` and must mint two distinct nominal id types (`CraftId`/`BodyId`) from the same generic map. `id_at` likewise returns the tuple; the typed store (`ids_at`) wraps it. Callers wrap the tuple into the appropriate id struct.
 - The contract pins only `new`/`len`/`cursor` as `SlotMap`'s public signatures; `insert`/`get`/`remove`/`is_empty`/`Default`/`dense_index`/`id_at`/`iter_ids` are the implementation API the downstream tasks require. None contradicts the contract.
 - **v1 `slot == row` invariant:** all craft are minted at reset and never despawned mid-run, so slots allocate contiguously and the SoA arrays stay aligned with the slot number. `ShipStore::push` asserts this with `debug_assert_eq!(slot as usize, self.pos.len())`. This is the single decision that makes `dense_index`/`index_of` correct; do NOT introduce compaction or swap-remove (that would reorder rows and break both determinism and the spec's "plain SoA Vec" directive).
 - `cursor()` is the slots-ever-allocated high-water mark (`values.len()`), deterministic and monotonic — it must be folded into the per-tick state hash by the hash.rs task, so removal must NOT shrink it (asserted in Steps 6 and 10).
@@ -2973,7 +2973,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Notes on derives (load-bearing — copy exactly):**
 - `Command`, `EventKind`, `Event` are `PartialEq` only (no `Eq`) — `Vec3`/`f64` flows through them (via `NavDest`/`burn_budget`/`dv`/`value`). They are still `Copy` (every field is `Copy`, including the new `Wake { craft: CraftId }`).
-- `command_sort_key` returns `(u8, u32, u32)` = `(scope_rank, slot, gen)` with `Sim=0, World=1, Entity=2`. A Craft and a Body with identical `slot`/`gen` deliberately map to the same key; ordering stays deterministic because callers use the **stable** `sort_by_key`. Do NOT fold a Craft/Body discriminator into `scope_rank` — the signature and rank scheme are pinned by the contract.
+- `command_sort_key` returns `(u8, u32, u32)` = `(scope_rank, slot, generation)` with `Sim=0, World=1, Entity=2`. A Craft and a Body with identical `slot`/`generation` deliberately map to the same key; ordering stays deterministic because callers use the **stable** `sort_by_key`. Do NOT fold a Craft/Body discriminator into `scope_rank` — the signature and rank scheme are pinned by the contract.
 
 **This repair vs the original Task 6 (what changed):**
 1. The 5 seam enums (`Lod`, `NavDest`, `Target`, `EntityRef`, `CommandKind`) are **imported from `crate::types`**, not defined here (fix #6 — resolves the contract↔stores cycle).
@@ -3020,7 +3020,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
   }
 
   /// Total, deterministic ordering across World/Sim/Entity scopes for canonical
-  /// apply. Returns `(scope_rank, slot, gen)` with `Sim=0, World=1, Entity=2`.
+  /// apply. Returns `(scope_rank, slot, generation)` with `Sim=0, World=1, Entity=2`.
   pub fn command_sort_key(c: &Command) -> (u8, u32, u32) {
       todo!("implement canonical command ordering")
   }
@@ -3143,15 +3143,15 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
           let world = dest_cmd(Target::World);
           let craft_a = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
               slot: 5,
-              gen: 0,
+              generation: 0,
           })));
           let craft_b = dest_cmd(Target::Entity(EntityRef::Craft(CraftId {
               slot: 2,
-              gen: 1,
+              generation: 1,
           })));
           let body = dest_cmd(Target::Entity(EntityRef::Body(BodyId {
               slot: 3,
-              gen: 0,
+              generation: 0,
           })));
 
           // Scope ranks: Sim=0, World=1, Entity=2.
@@ -3162,7 +3162,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
           assert_eq!(command_sort_key(&body), (2, 3, 0));
 
           // Sorting a shuffled mix yields a total, deterministic order:
-          // Sim, World, then entities by (slot, gen).
+          // Sim, World, then entities by (slot, generation).
           let mut v = vec![craft_a, body, sim, craft_b, world];
           v.sort_by_key(command_sort_key);
           let keys: Vec<(u8, u32, u32)> = v.iter().map(command_sort_key).collect();
@@ -3193,8 +3193,8 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
       match c.target {
           Target::Sim => (0, 0, 0),
           Target::World => (1, 0, 0),
-          Target::Entity(EntityRef::Craft(id)) => (2, id.slot, id.gen),
-          Target::Entity(EntityRef::Body(id)) => (2, id.slot, id.gen),
+          Target::Entity(EntityRef::Craft(id)) => (2, id.slot, id.generation),
+          Target::Entity(EntityRef::Body(id)) => (2, id.slot, id.generation),
       }
   }
   ```
@@ -3214,7 +3214,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
   ```rust
   #[test]
   fn enums_round_trip_via_partial_eq() {
-      let c = CraftId { slot: 7, gen: 2 };
+      let c = CraftId { slot: 7, generation: 2 };
 
       // Command equality (PartialEq, holds f64 via burn_budget).
       let cmd = Command {
@@ -3324,7 +3324,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
       fn craft_fuel_capacity(&self, id: CraftId) -> Option<f64> {
           // Trivial backing: a known id resolves to a capacity, others None.
           // The real impl (Task 12) returns effective_params(&spec).fuel_capacity.
-          if id == (CraftId { slot: 0, gen: 0 }) {
+          if id == (CraftId { slot: 0, generation: 0 }) {
               Some(100.0)
           } else {
               None
@@ -3363,14 +3363,14 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
       assert_eq!(obj.dt().get(), 1.0);
       assert_eq!(obj.recent_commands(Tick(0)).len(), 1);
       assert_eq!(obj.recent_events(Tick(0)).len(), 1);
-      assert_eq!(obj.lod(CraftId { slot: 0, gen: 0 }), Some(Lod::Player));
+      assert_eq!(obj.lod(CraftId { slot: 0, generation: 0 }), Some(Lod::Player));
 
       // New surface (fix #2): craft_fuel_capacity is Option-typed and present.
       assert_eq!(
-          obj.craft_fuel_capacity(CraftId { slot: 0, gen: 0 }),
+          obj.craft_fuel_capacity(CraftId { slot: 0, generation: 0 }),
           Some(100.0)
       );
-      assert_eq!(obj.craft_fuel_capacity(CraftId { slot: 9, gen: 9 }), None);
+      assert_eq!(obj.craft_fuel_capacity(CraftId { slot: 9, generation: 9 }), None);
   }
   ```
 
@@ -3406,7 +3406,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
   Add contract.rs: the cross-cutting DTOs and read/integrate traits the
   facades, replay, event and ingestion paths agree on. Command + canonical
-  command_sort_key (Sim=0, World=1, Entity=2 then slot/gen); EventKind/Event
+  command_sort_key (Sim=0, World=1, Entity=2 then slot/generation); EventKind/Event
   (incl. a Wake variant for the LOD wake hook, emitted in World::step later);
   the Integrator and StateView traits, each DEFINED ONCE here (the spec's
   drift-lock anchor) so integrator.rs/world.rs impl against these exact
@@ -3433,4 +3433,4 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - `/home/john/jumpgate/crates/jumpgate-core/src/contract.rs` (created)
 - `/home/john/jumpgate/crates/jumpgate-core/src/lib.rs` (modified)
 
-**Type-contract names used verbatim:** Defined here — `Command`, `command_sort_key`, `EventKind` (incl. new `Wake`), `Event`, `Integrator`, `StateView` (incl. new `craft_fuel_capacity`). Imported from `crate::types` (Task 3) — `Lod`, `NavDest`, `Target`, `EntityRef`, `CommandKind`. Task-4 dependencies — `math::Vec3` (incl. `Vec3::ZERO`, `Vec3::new`, `add`, `scale`), `ids::{CraftId, BodyId}` (incl. `slot`/`gen` fields, `PartialEq`/`Eq`/`Ord`), `time::{Tick, Dt}` (incl. `Dt::new`, `Dt::get`).
+**Type-contract names used verbatim:** Defined here — `Command`, `command_sort_key`, `EventKind` (incl. new `Wake`), `Event`, `Integrator`, `StateView` (incl. new `craft_fuel_capacity`). Imported from `crate::types` (Task 3) — `Lod`, `NavDest`, `Target`, `EntityRef`, `CommandKind`. Task-4 dependencies — `math::Vec3` (incl. `Vec3::ZERO`, `Vec3::new`, `add`, `scale`), `ids::{CraftId, BodyId}` (incl. `slot`/`generation` fields, `PartialEq`/`Eq`/`Ord`), `time::{Tick, Dt}` (incl. `Dt::new`, `Dt::get`).
