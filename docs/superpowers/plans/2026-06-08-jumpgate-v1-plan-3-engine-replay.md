@@ -2482,13 +2482,14 @@ The Task-14 corruption test is only meaningful if the recorded run actually *doe
 **Depends on:** Task 13 (`hash.rs` → `state_hash(world: &World) -> u64`, `HASH_MAGIC`, `HASH_FORMAT_VERSION`). Also consumes, from earlier tasks, only these contract symbols:
 - `World::reset(cfg) -> (World, ConfigHash)`, `World::step(&mut self, cmds: &mut Vec<Command>)`, `World as StateView` (for `craft_ids()` — needed to discover the deterministic craft id).
 - `RunConfig`, `RunConfig::config_hash() -> ConfigHash`, `ConfigHash`.
+- `Provenance`, `Provenance::current() -> Provenance` (from `provenance.rs`, plan-1 layer, re-exported at the crate root) — stamped into the recording header and checked first at replay.
 - `Tick(pub u64)`, `Dt::new`.
 - `ActionLog { pub entries: Vec<(Tick, Command)>, pub config_hash: ConfigHash, .. }` (single canonical shape from Task 10; also carries a `commands_flat` parallel vec so `at`/`since_commands` return `&[Command]`) with `record(&mut self, Tick, Command)` and `at(&self, Tick) -> &[Command]`.
 - `Command`, `CommandKind::Destination`, `NavDest::Position`, `Target::Entity`, `EntityRef::Craft`, `Target::Sim`, `CraftId`, `Vec3`.
 - `BaseSpec`, `BodyInit`, `OrbitalElements`, `CraftInit`, `SubstepCfg`.
 - `EventKind::ThrustApplied` (asserted in a precondition test that the recorded run truly thrusts).
 
-**CROSS-TASK CONTRACT SURFACE consumed here** (see the Task-3 contract-surface document; this task is a *consumer* of every symbol below and adds nothing other tasks consume except the two `Recording` fields + three `fn`s in the verbatim block):
+**CROSS-TASK CONTRACT SURFACE consumed here** (see the Task-3 contract-surface document; this task is a *consumer* of every symbol below and adds nothing other tasks consume except the `Recording` struct (incl. its `config_hash` and `provenance` stamps) + `record_run`/`replay_run` in the verbatim block):
 - The single craft minted by `World::reset` in v1 is deterministically `CraftId { slot: 0, generation: 0 }` (slot-map allocates slot 0 first; a fresh slot starts at `generation == 0`). Task 14 does **not** hardcode this — it discovers the id via `World::reset(...).0.craft_ids()[0]` and *asserts* the stable value, so a divergence in Task 4's generation convention fails loudly here rather than silently mis-routing commands.
 - `ingest_commands` treats `Target::Sim` as a no-op in v1 (no `CommandKind` variant is Sim-scoped); only `Target::Entity(EntityRef::Craft(_))` sets a `NavState::Seeking`. This is the property the corruption test relies on being *false* for craft-targeted commands.
 
@@ -2503,6 +2504,15 @@ pub struct Recording {
     /// `config.config_hash()` so the check is not tautological. (Fix: the stored
     /// hash, mirroring the hash ActionLog stamps at record time per Task 10.)
     pub config_hash: ConfigHash,
+    /// Build/determinism provenance captured AT RECORD TIME — the trust-boundary
+    /// stamp from `provenance.rs` (rustc channel, edition, rand pin, build
+    /// target, HASH_FORMAT_VERSION). This is the "replay header records build
+    /// metadata (toolchain, target triple, …)" of spec §3.4/§6. Tier B is
+    /// same-binary, so `replay_run` REJECTS a recording whose provenance differs
+    /// from the replaying binary's: a tier mismatch becomes *detectable* (a clean
+    /// rejection) rather than a silent per-tick hash divergence. Distinct from
+    /// `config_hash` above (which guards the run-config, not the build).
+    pub provenance: Provenance,
 }
 pub fn record_run(cfg: RunConfig, ticks: u64, driver: impl FnMut(Tick) -> Vec<Command>) -> Recording;
 pub fn replay_run(rec: &Recording) -> Result<(), Tick>;
@@ -2511,8 +2521,9 @@ pub fn replay_run(rec: &Recording) -> Result<(), Tick>;
 **Design decisions (pinned, so the implementer does not re-litigate):**
 1. `record_run` clones the driver's per-tick `Vec<Command>` into `rec.log` **before** calling `World::step` (which sorts/mutates the vec in place via `ingest_commands`). Replay re-feeds the logged clone. Because `ingest_commands` applies in canonical `command_sort_key` order, re-feeding the same multiset reproduces identical state regardless of log order — but we log and re-feed faithfully anyway.
 2. The hash recorded for an iteration is taken **after** `step`. Concretely, for each of `ticks` iterations we (a) read `t = world.tick()` (pre-step tick), (b) log the driver's commands at `t`, (c) `step`, (d) push `(world.tick(), state_hash(&world))`. So `rec.hashes[i].0` is the **post-step** tick and the hash is of the resulting state. Replay reproduces the identical sequence by the identical procedure, so the comparison is apples-to-apples.
-3. `replay_run` rebuilds the world with `World::reset(rec.config.clone())`, **rejects a stored-vs-fresh config-hash mismatch first**, then steps `rec.hashes.len()` times re-feeding `rec.log.at(pre_step_tick)`, comparing each recomputed `(tick, hash)` against the recorded pair. First mismatch → `Err(that_tick)`. A config-hash mismatch → `Err(Tick(0))` (no tick reproduced). The guard compares `rec.config_hash` (**stored at record time**) against `rec.config.config_hash()` (**freshly computed from the config now in the recording**); swapping `rec.config` after recording makes these disagree and the branch fires — it is *not* dead.
+3. `replay_run` **rejects a provenance mismatch then a stored-vs-fresh config-hash mismatch (both before any step; see decision 5)**, rebuilds the world with `World::reset(rec.config.clone())`, then steps `rec.hashes.len()` times re-feeding `rec.log.at(pre_step_tick)`, comparing each recomputed `(tick, hash)` against the recorded pair. First mismatch → `Err(that_tick)`. A config-hash mismatch → `Err(Tick(0))` (no tick reproduced). The guard compares `rec.config_hash` (**stored at record time**) against `rec.config.config_hash()` (**freshly computed from the config now in the recording**); swapping `rec.config` after recording makes these disagree and the branch fires — it is *not* dead.
 4. `record_run` always records exactly `ticks` hash entries. v1 has no early termination inside record/replay.
+5. `record_run` stamps `provenance: Provenance::current()` at record time; `replay_run` rejects a provenance mismatch (`rec.provenance != Provenance::current()`) **first** — before the config-hash guard — returning `Err(Tick(0))`. Within one binary the stamp is a compile-time `const`, so the guard never fires in-contract (Tier B = same-binary); it only fires when a recording is replayed under a different toolchain/edition/RNG-pin/hash-format build, turning that out-of-contract tier mismatch into a clean rejection instead of a confusing per-tick divergence. The `provenance_mismatch_is_rejected` test mutates the stored field to prove the branch is reachable (non-tautological), exactly mirroring the config-hash guard. Both pre-conditions return `Err(Tick(0))` ("rejected before any tick reproduced").
 
 ---
 
@@ -2521,8 +2532,8 @@ pub fn replay_run(rec: &Recording) -> Result<(), Tick>;
 ```rust
 use jumpgate_core::{
     record_run, replay_run, BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt,
-    EntityRef, EventKind, NavDest, OrbitalElements, RunConfig, StateView, SubstepCfg, Target, Tick,
-    Vec3, World,
+    EntityRef, EventKind, NavDest, OrbitalElements, Provenance, RunConfig, StateView, SubstepCfg,
+    Target, Tick, Vec3, World,
 };
 
 /// A 2-body, 1-craft scenario big enough to exercise gravity + a thrust burn.
@@ -2685,6 +2696,26 @@ fn config_hash_mismatch_is_rejected() {
         "stored config-hash must reject a recording whose config was swapped"
     );
 }
+
+#[test]
+fn provenance_mismatch_is_rejected() {
+    // Tier B is same-binary: a recording made under a DIFFERENT build (rustc /
+    // edition / rand pin / hash-format) must not be silently replayed. The stamp
+    // is a compile-time const, so within this binary record==replay provenance;
+    // we mutate the stored field to a deliberately-wrong stamp to prove the guard
+    // is reachable (non-tautological), mirroring `config_hash_mismatch_is_rejected`.
+    // The guard runs FIRST, so it returns Err(Tick(0)) before any tick is stepped.
+    let craft = discover_craft_id();
+    let mut rec = record_run(base_config(), 50, transfer_driver(craft));
+    let mut wrong = Provenance::current();
+    wrong.hash_format_version = wrong.hash_format_version.wrapping_add(1);
+    rec.provenance = wrong; // simulate a recording from a different build
+    assert_eq!(
+        replay_run(&rec),
+        Err(Tick(0)),
+        "a recording whose provenance differs from the replaying binary must be rejected"
+    );
+}
 ```
 
 - [ ] **Step 2: Run the test to confirm it fails to compile (no `replay` symbols yet).**
@@ -2694,13 +2725,14 @@ cargo test -p jumpgate-core --test replay_equivalence -- --nocolor 2>&1 | head -
   EXPECTED: a compile error, e.g. `error[E0432]: unresolved import` for `record_run` / `replay_run` (and possibly `Recording` if used). The seed literal `0x9E37_79B9_7F4A_7C15_u64` is a valid Rust integer literal, so there must be **no** lexer/tokenizer error. The test binary must NOT build yet.
 
 - [ ] **Step 3: Implement `replay.rs`.**
-  Create `crates/jumpgate-core/src/replay.rs`. `record_run` stamps `config_hash` at record time; `replay_run` compares stored-vs-fresh first, then re-feeds the log. Uses the chosen `rand_chacha = "=0.10.0"` family transitively via `World` only — no RNG idioms appear in this file.
+  Create `crates/jumpgate-core/src/replay.rs`. `record_run` stamps both the `config_hash` and the build `provenance` at record time; `replay_run` rejects a provenance mismatch first, then a stored-vs-fresh config-hash mismatch, then re-feeds the log. Uses the chosen `rand_chacha = "=0.10.0"` family transitively via `World` only — no RNG idioms appear in this file.
 ```rust
 //! Replay equivalence — the primary correctness surface (spec §8).
 //!
 //! `record_run` steps a fresh `World`, logging each tick's driver-produced
-//! commands and the post-step `state_hash`, and stamps the config hash AT RECORD
-//! TIME. `replay_run` rebuilds the world from the recorded config, rejects a
+//! commands and the post-step `state_hash`, and stamps the config hash AND the
+//! build provenance AT RECORD TIME. `replay_run` rebuilds the world from the
+//! recorded config, rejects a provenance mismatch (Tier B is same-binary) and a
 //! stored-vs-fresh config-hash mismatch, re-feeds the logged commands
 //! tick-by-tick, and asserts per-tick hash equality, returning the first
 //! differing tick on mismatch. Replay NEVER calls a driver/policy (spec §6).
@@ -2709,6 +2741,7 @@ use crate::config::{ConfigHash, RunConfig};
 use crate::contract::Command;
 use crate::hash::state_hash;
 use crate::ingest::ActionLog;
+use crate::provenance::Provenance;
 use crate::time::Tick;
 use crate::world::World;
 
@@ -2723,6 +2756,11 @@ pub struct Recording {
     /// against a fresh `config.config_hash()` at replay so the guard is not
     /// tautological (see `replay_run`).
     pub config_hash: ConfigHash,
+    /// Build/determinism trust-boundary stamp snapshotted at record time (spec
+    /// §3.4/§6 "replay header records build metadata"). `replay_run` rejects a
+    /// recording whose provenance differs from the replaying binary's, so a
+    /// same-machine/same-binary Tier-B violation is detectable, not silent.
+    pub provenance: Provenance,
 }
 
 /// Step a fresh world for `ticks` ticks, feeding `driver(pre_step_tick)` each
@@ -2756,12 +2794,19 @@ pub fn record_run(
         hashes.push((world.tick(), state_hash(&world)));
     }
 
-    Recording { config: cfg, log, hashes, config_hash }
+    Recording { config: cfg, log, hashes, config_hash, provenance: Provenance::current() }
 }
 
-/// Rebuild from `rec.config`, reject a config-hash mismatch, then re-feed
-/// `rec.log` tick-by-tick recomputing `state_hash`. Returns `Ok(())` if every
-/// recorded hash matches, else `Err(first_differing_tick)`.
+/// Reject a provenance mismatch, then a config-hash mismatch; rebuild from
+/// `rec.config` and re-feed `rec.log` tick-by-tick recomputing `state_hash`.
+/// Returns `Ok(())` if every recorded hash matches, else
+/// `Err(first_differing_tick)`. Both pre-conditions return `Err(Tick(0))`.
+///
+/// The provenance guard compares the STORED `rec.provenance` (captured at record
+/// time) against `Provenance::current()` (the replaying binary). Tier B is
+/// same-binary, so within one build these are equal and the guard is a no-op
+/// in-contract; it fires only for an out-of-contract cross-build replay, making
+/// that tier mismatch a clean rejection rather than a silent hash divergence.
 ///
 /// The config-hash guard compares the STORED `rec.config_hash` (captured at
 /// record time) against a FRESH `rec.config.config_hash()`. These disagree iff
@@ -2770,6 +2815,14 @@ pub fn record_run(
 ///
 /// NEVER calls a driver/policy — it only re-feeds the recorded log.
 pub fn replay_run(rec: &Recording) -> Result<(), Tick> {
+    // Trust-boundary guard FIRST: a recording from a different build (rustc /
+    // edition / rand pin / hash-format) is out of Tier-B contract. Reject it as
+    // a clean failure so the caller sees "wrong build", not a confusing per-tick
+    // divergence. No tick was reproduced.
+    if rec.provenance != Provenance::current() {
+        return Err(Tick(0));
+    }
+
     let fresh_hash: ConfigHash = rec.config.config_hash();
     if rec.config_hash != fresh_hash {
         // The hashes in this recording were generated under a config whose hash
@@ -2820,26 +2873,27 @@ cargo test -p jumpgate-core --test replay_equivalence record_then_replay_is_bit_
   EXPECTED for each: `test result: ok. 1 passed; 0 failed`.
   If `recorded_run_actually_thrusts` fails with `saw_thrust == false`, the command is being mis-routed (a `Target::Sim` no-op or a wrong `CraftId`) — fix the routing/id before proceeding; a coasting craft makes the corruption test vacuous.
 
-- [ ] **Step 6: Run the corruption + config-mismatch tests.**
+- [ ] **Step 6: Run the corruption + config-mismatch + provenance-mismatch tests.**
 ```
 cargo test -p jumpgate-core --test replay_equivalence corrupting_one_logged_command_reports_first_differing_tick -- --nocolor
 cargo test -p jumpgate-core --test replay_equivalence config_hash_mismatch_is_rejected -- --nocolor
+cargo test -p jumpgate-core --test replay_equivalence provenance_mismatch_is_rejected -- --nocolor
 ```
   EXPECTED for each: `test result: ok. 1 passed; 0 failed`.
-  `corrupting_one_logged_command...` proves the full `ingest -> nav -> thrust -> fuel -> hash` chain diverges (`Err(Tick(1))`) when the tick-0 craft command is changed. `config_hash_mismatch_is_rejected` proves the stored-vs-fresh guard returns `Err(Tick(0))` — confirming the guard is reachable, not dead.
+  `corrupting_one_logged_command...` proves the full `ingest -> nav -> thrust -> fuel -> hash` chain diverges (`Err(Tick(1))`) when the tick-0 craft command is changed. `config_hash_mismatch_is_rejected` proves the stored-vs-fresh config guard returns `Err(Tick(0))`. `provenance_mismatch_is_rejected` proves the build trust-boundary guard returns `Err(Tick(0))` — both reachable, not dead.
 
 - [ ] **Step 7: Run the whole core test suite + clippy to confirm no regression.**
 ```
 cargo test -p jumpgate-core -- --nocolor
 cargo clippy -p jumpgate-core --all-targets -- -D warnings
 ```
-  EXPECTED: `cargo test` ends `test result: ok.` for every binary (lib, `replay_equivalence` with **4 passed**, and the other tasks' suites). EXPECTED: clippy prints `Finished` with no `disallowed-methods` hits (replay/record use no `SystemTime`/`Instant::now`/`thread_rng`; the only RNG reaches them transitively through `World`, which already uses the pinned `rand_chacha = "=0.10.0"` family).
+  EXPECTED: `cargo test` ends `test result: ok.` for every binary (lib, `replay_equivalence` with **5 passed**, and the other tasks' suites). EXPECTED: clippy prints `Finished` with no `disallowed-methods` hits (replay/record use no `SystemTime`/`Instant::now`/`thread_rng`; the only RNG reaches them transitively through `World`, which already uses the pinned `rand_chacha = "=0.10.0"` family).
 
 - [ ] **Step 8: Commit.**
 ```
 git checkout -b task-14-replay-equivalence
 git add crates/jumpgate-core/src/replay.rs crates/jumpgate-core/src/lib.rs crates/jumpgate-core/tests/replay_equivalence.rs
-git commit -m "Task 14: replay equivalence — craft-targeted record, log re-feed, stored config-hash guard, first-differing-tick report
+git commit -m "Task 14: replay equivalence — craft-targeted record, log re-feed, provenance + config-hash guards, first-differing-tick report
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
