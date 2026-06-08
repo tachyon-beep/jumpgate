@@ -5,7 +5,9 @@
 //!   2. eccentric close-approach does NOT blow up (substepping + softening),
 //!   3. pure-coast specific-orbital-energy drift is bounded,
 //!   4. a fuel-budgeted autopilot transfer reaches its destination
-//!      deterministically (same config -> same arrival tick).
+//!      deterministically (same config -> same arrival tick),
+//!   5. a velocity-matched rendezvous at a MOVING body settles inside the
+//!      arrival sphere (braking law co-moves with the target).
 //!
 //! RESOLVED §11 TUNING (v1 defaults, measured here; promote into config.rs later):
 //!   * dt              = 0.25 day
@@ -25,20 +27,21 @@
 //! base DT_DAYS (and softening eps). Whether case (2) stays bounded under log2
 //! substepping is an empirical tuning question to settle by lowering DT_DAYS first.
 //!
-//! AUTOPILOT TRANSFER (cases 4/5) -- measured tuning: the v1 autopilot has NO
-//! braking law (autopilot.rs: thrust toward dest, cut only inside ARRIVAL_RADIUS
-//! = 1e-4 AU). A fast craft TUNNELS through that 1e-4 AU sphere between tick
-//! boundaries and never registers an Arrival. The pass/fail quantity is
-//! `v_arrival * dt` vs ARRIVAL_RADIUS: a per-tick step larger than 1e-4 AU never
-//! lands a tick boundary inside the sphere. With dt fixed at the v1 default
-//! (0.25 day), a clean arrival therefore demands a SLOW approach: a very weak
-//! thrust accel in a far-out (negligible-gravity) region over a short hop, so the
-//! craft creeps in and a tick boundary falls inside 1e-4 AU. Measured operating
-//! point: craft at 300 AU (central accel ~ G*M/300^2 ~ 3.3e-9), thrust accel
-//! ~7.4e-8 AU/day^2 (>> local gravity, << old plan default), 0.5 AU hop, which
-//! gives v_arrival ~ sqrt(2*7.4e-8*0.5) ~ 2.7e-4 AU/day -> per-tick step ~6.8e-5
-//! AU < 1e-4: a boundary lands inside. Needs a large tick budget (~25k) because
-//! the creep is slow.
+//! AUTOPILOT TRANSFER (cases 4/5/6) -- the v1 autopilot now has a velocity-targeting
+//! BRAKING law (autopilot.rs, K_BRAKE/V_CRUISE/V_ERR_EPS): it brakes on a sqrt
+//! deceleration profile so the craft arrives at REST at a fixed Position and
+//! velocity-matched at a moving Body, settling inside ARRIVAL_RADIUS instead of
+//! tunnelling through it. The old contrived 300-AU/1.48e-16-thrust/25k-tick
+//! slow-creep workaround (which only worked because v_arrival*dt happened to land
+//! a boundary inside 1e-4 AU) is gone. The INTENDED regime, measured here:
+//!   * dt = 0.25 day, K_BRAKE=0.5, V_CRUISE=2e-3 AU/day, V_ERR_EPS=1e-4 AU/day
+//!   * craft: dry=fuel=1e-9, thrust=1e-12 (a_max(full)=5e-4 >> local gravity;
+//!     a_max(empty)*dt=2.5e-4 << V_CRUISE; Δv_max=v_e*ln2~6.9e-3 > 2*V_CRUISE)
+//!   * case 4/5: ~5 AU start, 0.5 AU hop, ~4000-tick budget (clean arrival ~t1000)
+//!   * case 6: rendezvous with a planet on a circular a=5 AU orbit; craft starts
+//!     co-moving (its small Δv budget cannot acquire the planet's orbital speed
+//!     from rest) offset 0.3 AU; the law holds the velocity-match while closing
+//!     (measured: arrives ~t621, d~4.8e-5 AU, craft speed ~= body v_circ).
 //!
 //! Upstream dependencies: Task 7's gravity_accel must honour the a == 0.0 star
 //! guard (no NaN from the star's own slot) and Task 8's substep formula must
@@ -202,22 +205,26 @@ fn coast_specific_energy_drift_is_bounded() {
 }
 
 /// A craft with real thrust + fuel, in a weak-gravity region so the autopilot's
-/// guidance dominates AND the approach is slow enough to land a tick boundary
-/// inside ARRIVAL_RADIUS (no braking law -> a fast craft tunnels through). The
-/// thrust is deliberately tiny so v_arrival * dt < ARRIVAL_RADIUS.
+/// velocity-targeting BRAKING law (autopilot.rs) dominates the local gravity. The
+/// braking law brings the craft to rest at the destination instead of tunnelling,
+/// so this no longer needs the contrived ultra-weak-thrust slow-creep regime.
+///
+/// Sizing (verified against the law's three constraints, K_BRAKE=0.5,
+/// V_CRUISE=2e-3, V_ERR_EPS=1e-4, dt=0.25):
+///   * a_max(full) = 1e-12 / 2e-9 = 5e-4 AU/day^2  >> local gravity (~1.2e-5 at 5 AU)
+///   * a_max(empty) = 1e-12 / 1e-9 = 1e-3, so a_max*dt = 2.5e-4 << V_CRUISE (no aliasing)
+///   * Δv_max = v_e*ln((dry+fuel)/dry) = 1e-2*ln(2) ~ 6.9e-3 > 2*V_CRUISE = 4e-3 (round trip)
 fn thrusting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
     CraftInit {
         spec: BaseSpec {
             base_dry_mass: 1.0e-9,
-            // F / (dry+fuel == 2e-9) ~ 7.4e-8 AU/day^2: >> local gravity at 300 AU
-            // (~3.3e-9) but slow enough that v_arrival*dt < ARRIVAL_RADIUS (no braking).
-            base_max_thrust: 1.48e-16,
+            base_max_thrust: 1.0e-12,
             base_exhaust_velocity: 1.0e-2,
             base_fuel_capacity: 1.0e-9,
         },
         pos,
         vel,
-        fuel_mass: 1.0e-9,               // full tank => ample dv budget for a short hop
+        fuel_mass: 1.0e-9, // full tank => Δv budget for the accelerate+brake round trip
     }
 }
 
@@ -257,20 +264,143 @@ fn run_transfer(seed: u64, start: Vec3, dest: Vec3, budget: Option<f64>, max_tic
 
 #[test]
 fn fueled_autopilot_transfer_reaches_destination() {
-    // far-out, negligible-gravity region (300 AU): central accel ~ G*M/300^2 ~ 3.3e-9,
-    // thrust accel ~7.4e-8 dominates yet stays slow enough to avoid tunnelling.
-    let start = Vec3::new(300.0, 0.0, 0.0);
-    let dest = Vec3::new(300.5, 0.0, 0.0); // 0.5 AU hop
-    let arrival = run_transfer(11, start, dest, Some(1.0), 25_000);
+    // INTENDED regime (the v1 braking law brings the craft to rest at the dest, so
+    // the contrived 300-AU/1.48e-16-thrust/25k-tick slow-creep workaround is gone):
+    // a ~5 AU start in a weak-gravity region (central accel ~ G*M/5^2 ~ 1.2e-5),
+    // a 0.5 AU hop, realistic thrust ~1e-12 (a_max ~5e-4), ~4000-tick budget.
+    let start = Vec3::new(5.0, 0.0, 0.0);
+    let dest = Vec3::new(5.5, 0.0, 0.0); // 0.5 AU hop
+    let arrival = run_transfer(11, start, dest, Some(1.0), 4_000);
     assert!(arrival.is_some(), "craft never emitted Arrival within budget");
 }
 
 #[test]
 fn transfer_arrival_tick_is_deterministic() {
-    let start = Vec3::new(300.0, 0.0, 0.0);
-    let dest = Vec3::new(300.5, 0.0, 0.0);
-    let a = run_transfer(11, start, dest, Some(1.0), 25_000);
-    let b = run_transfer(11, start, dest, Some(1.0), 25_000);
+    let start = Vec3::new(5.0, 0.0, 0.0);
+    let dest = Vec3::new(5.5, 0.0, 0.0);
+    let a = run_transfer(11, start, dest, Some(1.0), 4_000);
+    let b = run_transfer(11, start, dest, Some(1.0), 4_000);
     assert!(a.is_some(), "first run did not arrive");
     assert_eq!(a, b, "same config produced different arrival ticks: {a:?} vs {b:?}");
+}
+
+/// Velocity-matched RENDEZVOUS at a MOVING body. The autopilot works in the
+/// target's reference frame (rel_vel = vel - body_vel), so "arrive at rest in the
+/// target frame" == co-move with the body: the craft must null the relative
+/// velocity AND close the gap, then settle inside ARRIVAL_RADIUS and stay (rather
+/// than flying through). Without the braking law a craft would tunnel the moving
+/// 1e-4 AU sphere just as for a fixed Position.
+///
+/// Setup: a central star (gravity source) at the origin plus a planet on a
+/// circular a=5 AU orbit (v_circ = sqrt(G_CANONICAL/5) ~ 7.69e-3 AU/day). The
+/// craft starts CO-MOVING with the planet (the natural rendezvous initial
+/// condition — otherwise the craft's small Δv budget ~6.9e-3 could never acquire
+/// the planet's ~7.69e-3 AU/day orbital speed from rest) but offset 0.3 AU
+/// radially inward, so the law must hold the velocity
+/// match while closing the gap against the body's continuously-curving velocity.
+#[test]
+fn transfer_to_moving_body_rendezvous() {
+    let max_ticks: u64 = 6_000;
+    // Planet on a circular 5 AU orbit; m0=0 => at tick 0 it sits at (5,0,0) moving
+    // +y at v_circ. Small mass so its own gravity barely perturbs the craft.
+    let planet_a = 5.0_f64;
+    let v_circ = (G_CANONICAL * 1.0 / planet_a).sqrt();
+    let planet_pos0 = Vec3::new(planet_a, 0.0, 0.0);
+    let planet_vel0 = Vec3::new(0.0, v_circ, 0.0);
+
+    // Craft: 0.3 AU radially inward of the planet, co-moving with it at tick 0.
+    let craft_pos0 = Vec3::new(planet_a - 0.3, 0.0, 0.0);
+    let craft = vec![thrusting_craft(craft_pos0, planet_vel0)];
+
+    let cfg = RunConfig {
+        master_seed: 7,
+        dt: Dt::new(DT_DAYS),
+        softening: SOFTENING,
+        substep_cfg: SUBSTEP_CFG,
+        ephemeris_window: max_ticks + 8, // cover every stepped tick (body_vel clamps past window)
+        bodies: vec![
+            // Central star (a==0 => fixed at the focus, the gravity source).
+            BodyInit {
+                mass: 1.0,
+                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            },
+            // Planet: real a>0 orbit, tiny mass (negligible self-gravity on the craft).
+            BodyInit {
+                mass: 1.0e-9,
+                elements: OrbitalElements { a: planet_a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            },
+        ],
+        craft,
+    };
+
+    let (mut world, _h) = World::reset(cfg);
+    let cid = world.craft_ids()[0];
+    let planet = world.body_ids()[1];
+    // Sanity: the planet really is the moving body we think it is at tick 0.
+    assert!(
+        world.body_pos(planet, Tick(0)).unwrap().sub(planet_pos0).length() < 1e-9,
+        "planet tick-0 position mismatch"
+    );
+
+    let mut cmds = vec![Command {
+        target: Target::Entity(EntityRef::Craft(cid)),
+        kind: CommandKind::Destination {
+            dest: NavDest::Entity(EntityRef::Body(planet)),
+            burn_budget: Some(1.0),
+        },
+    }];
+    world.step(&mut cmds);
+
+    let mut last_seen = Tick(0);
+    let arrival = loop {
+        let mut found = None;
+        for ev in world.recent_events(last_seen) {
+            if let EventKind::Arrival { craft: ac, .. } = ev.kind
+                && ac == cid
+            {
+                found = Some(ev.tick.0);
+            }
+        }
+        if found.is_some() {
+            break found;
+        }
+        last_seen = world.tick();
+        if world.tick().0 >= max_ticks {
+            break None;
+        }
+        let mut none: Vec<Command> = Vec::new();
+        world.step(&mut none);
+    };
+
+    assert!(
+        arrival.is_some(),
+        "craft never rendezvoused with the moving body within {max_ticks} ticks"
+    );
+
+    // Arrival fired is necessary but NOT sufficient for a MOVING target: the
+    // point-in-(moving-)sphere edge test would also fire for a high-speed flyby
+    // that happens to have a tick land inside. Pin the success-bar property
+    // directly — at arrival the craft is inside the sphere AND velocity-matched
+    // to the body (relative speed far below the body's orbital speed, NOT ~v_circ
+    // as a flyby would be). Body velocity via a central finite difference of the
+    // ephemeris position (World exposes no body-velocity accessor).
+    let t = world.tick();
+    let p = world.craft_pos(cid).unwrap();
+    let v = world.craft_vel(cid).unwrap();
+    let bp = world.body_pos(planet, t).unwrap();
+    let bp_next = world.body_pos(planet, Tick(t.0 + 1)).unwrap();
+    let bp_prev = world.body_pos(planet, Tick(t.0 - 1)).unwrap();
+    let body_vel = bp_next.sub(bp_prev).scale(1.0 / (2.0 * DT_DAYS));
+    let d = p.sub(bp).length();
+    let rel_speed = v.sub(body_vel).length();
+    // measured: d=4.77e-5, rel_speed=1.25e-4 (1.6% of v_circ) at tick 621.
+    // d within a few ARRIVAL_RADIUS (1e-4) of the moving body; loosened slightly
+    // from exactly 1e-4 to absorb the tick between event-emit and state-read.
+    assert!(d < 5.0e-4, "craft not near the body at rendezvous: d={d:.4e}");
+    // Velocity-matched: relative speed is a small fraction of the body's orbital
+    // speed. A flyby would show rel_speed ~ v_circ; a rendezvous, ~0.
+    assert!(
+        rel_speed < 0.25 * v_circ,
+        "not velocity-matched (flyby, not rendezvous): rel_speed={rel_speed:.4e} vs v_circ={v_circ:.4e}"
+    );
 }

@@ -212,12 +212,14 @@ impl World {
             let vel = self.ships.vel[ci];
             let fuel = self.ships.fuel_mass[ci];
 
-            let dest_pos = match self.ships.nav[ci] {
-                NavState::Seeking { dest, .. } => self.resolve_dest_pos(dest, cur),
-                NavState::Idle => pos, // unused (throttle will be 0)
+            let (dest_pos, dest_vel) = match self.ships.nav[ci] {
+                NavState::Seeking { dest, .. } => {
+                    (self.resolve_dest_pos(dest, cur), self.resolve_dest_vel(dest, cur))
+                }
+                NavState::Idle => (pos, Vec3::ZERO), // unused (throttle will be 0)
             };
             let (thrust_dir, throttle) =
-                autopilot_command(self.ships.nav[ci], pos, vel, dest_pos, &eff);
+                autopilot_command(self.ships.nav[ci], pos, vel, dest_pos, dest_vel, fuel, &eff);
 
             let (thrust_accel, fuel_consumed) =
                 thrust_accel_and_burn(&eff, fuel, thrust_dir, throttle, dt);
@@ -294,6 +296,23 @@ impl World {
             NavDest::Position(p) => p,
             NavDest::Entity(EntityRef::Body(b)) => self.body_pos(b, tick).unwrap_or(Vec3::ZERO),
             NavDest::Entity(EntityRef::Craft(c)) => self.craft_pos(c).unwrap_or(Vec3::ZERO),
+        }
+    }
+
+    /// Resolve a NavDest to the target's VELOCITY at `tick` (the frame the
+    /// autopilot brakes into). Symmetric to `resolve_dest_pos`:
+    /// - `Position` => `Vec3::ZERO` (a fixed point does not move),
+    /// - `Entity(Body)` => the tick-derived ephemeris velocity,
+    /// - `Entity(Craft)` => that craft's stored velocity (best-effort stub;
+    ///   craft→craft nav is not a fully-supported v1 target — `ZERO` if unresolved).
+    fn resolve_dest_vel(&self, dest: NavDest, tick: Tick) -> Vec3 {
+        match dest {
+            NavDest::Position(_) => Vec3::ZERO,
+            NavDest::Entity(EntityRef::Body(b)) => self
+                .body_index(b)
+                .map(|i| self.eph.body_vel(self.bodies.eph_index[i], tick))
+                .unwrap_or(Vec3::ZERO),
+            NavDest::Entity(EntityRef::Craft(c)) => self.craft_vel(c).unwrap_or(Vec3::ZERO),
         }
     }
 
@@ -443,6 +462,50 @@ mod tests {
         }
     }
 
+    /// A config for the velocity-targeting braking law: one craft at REST in a
+    /// far-out, negligible-gravity region (5 AU; central accel ~ G*M/5^2 ~ 1.2e-5),
+    /// fueled so its Δv budget (`v_e*ln(2) ~ 6.9e-3`) covers the round-trip
+    /// accelerate+brake burn the law commands, and sized so the empty-tank
+    /// `a_max*dt` stays well under V_CRUISE (no coarse-step aliasing). This is the
+    /// regime the new law is designed for; the orbital `one_body_one_craft` fixture
+    /// is left untouched for the coast/dormant/projection tests that never thrust.
+    fn one_body_one_thrusting_craft() -> RunConfig {
+        RunConfig {
+            master_seed: 42,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
+            ephemeris_window: 4096,
+            bodies: vec![BodyInit {
+                mass: 1.0,
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
+            }],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    // a_max(full) = 1e-12/2e-9 = 5e-4 >> local gravity (~1.2e-5);
+                    // a_max(empty) = 1e-12/1e-9 = 1e-3, so a_max*dt = 2.5e-4 << V_CRUISE.
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2, // Δv_max = 1e-2*ln(2) ~ 6.9e-3 > 2*V_CRUISE
+                    base_fuel_capacity: 1e-9,
+                },
+                pos: Vec3::new(5.0, 0.0, 0.0),
+                vel: Vec3::ZERO, // start at REST: no orbital-velocity Δv tax
+                fuel_mass: 1e-9,
+            }],
+        }
+    }
+
     #[test]
     fn reset_starts_at_tick_zero_and_hashes_config() {
         let cfg = one_body_one_craft();
@@ -488,18 +551,22 @@ mod tests {
     #[test]
     fn commanded_craft_moves_toward_dest_and_history_is_visible() {
         use crate::types::{EntityRef, NavDest, Target};
-        let cfg = one_body_one_craft();
+        // Use the thrusting-craft regime (at-rest, weak gravity, short hop): the
+        // velocity-targeting braking law cannot drive the old orbital fixture,
+        // whose Δv budget (~6.9e-4) is dwarfed by its 0.0172 AU/day orbital
+        // velocity that the law must null first.
+        let target = Vec3::new(5.3, 0.0, 0.0); // 0.3 AU hop from the 5 AU start
+        let cfg = one_body_one_thrusting_craft();
         let (mut world, _) = World::reset(cfg);
         let id = world.craft_ids()[0];
 
-        let dest = NavDest::Position(Vec3::new(3.0, 0.0, 0.0));
+        let dest = NavDest::Position(target);
         let mut cmds = vec![Command {
             target: Target::Entity(EntityRef::Craft(id)),
-            kind: CommandKind::Destination { dest, burn_budget: Some(0.05) },
+            kind: CommandKind::Destination { dest, burn_budget: Some(1.0) },
         }];
 
-        let r0 = world.craft_pos(id).unwrap().length();
-        let d0 = world.craft_pos(id).unwrap().sub(Vec3::new(3.0, 0.0, 0.0)).length();
+        let d0 = world.craft_pos(id).unwrap().sub(target).length();
 
         world.step(&mut cmds); // tick 0 -> 1: ingest + integrate
 
@@ -521,15 +588,19 @@ mod tests {
             "ingestion emits ActionIngested"
         );
 
-        // Keep stepping; the craft should net-approach the destination.
-        for _ in 0..20 {
+        // Keep stepping; under the velocity-targeting braking law the at-rest
+        // craft accelerates toward the dest (capped at V_CRUISE) and net-approaches.
+        for _ in 0..400 {
             let mut none: Vec<Command> = Vec::new();
             world.step(&mut none);
         }
-        let d1 = world.craft_pos(id).unwrap().sub(Vec3::new(3.0, 0.0, 0.0)).length();
-        let r1 = world.craft_pos(id).unwrap().length();
+        let d1 = world.craft_pos(id).unwrap().sub(target).length();
+        let p1 = world.craft_pos(id).unwrap();
         assert!(d1 < d0, "craft moved toward dest: {d0} -> {d1}");
-        assert!(r1 > r0, "thrusting outward increased orbital radius: {r0} -> {r1}");
+        assert!(
+            p1.x.is_finite() && p1.y.is_finite() && p1.z.is_finite(),
+            "craft position stayed finite: {p1:?}"
+        );
     }
 
     #[test]
