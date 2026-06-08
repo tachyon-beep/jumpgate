@@ -159,17 +159,12 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
     cmds.clear();
 }
 
-/// Fuel-derived Δv fallback when no explicit budget is given:
-/// Tsiolkovsky Δv = v_e * ln((dry + fuel) / dry), using effective params (§5.5).
+/// Fuel-derived Δv fallback when no explicit budget is given: Tsiolkovsky Δv via
+/// the shared `math::tsiolkovsky_dv` helper, using effective params (§5.5). Bit-for-bit
+/// identical to the prior inline form (same operands, same left-to-right grouping).
 fn dv_from_fuel(ship: &CraftStore, idx: usize) -> f64 {
     let eff = crate::stores::effective_params(&ship.spec[idx]);
-    let fuel = ship.fuel_mass[idx];
-    let dry = eff.dry_mass;
-    if dry <= 0.0 || fuel <= 0.0 {
-        0.0
-    } else {
-        eff.exhaust_velocity * ((dry + fuel) / dry).ln()
-    }
+    crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ship.fuel_mass[idx])
 }
 
 #[cfg(test)]

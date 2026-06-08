@@ -51,7 +51,7 @@ pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC, state_hash, write_sto
 pub use ids::{BodyId, CraftId, SlotMap};
 pub use ingest::{ActionLog, ingest_into};
 pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
-pub use math::{G_CANONICAL, Vec3};
+pub use math::{G_CANONICAL, Vec3, tsiolkovsky_dv};
 pub use provenance::{PROVENANCE, Provenance};
 pub use replay::{Recording, record_run, replay_run};
 pub use rng::{RngStream, RngStreams};

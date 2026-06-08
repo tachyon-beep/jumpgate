@@ -104,6 +104,28 @@ const NORMALIZE_EPS: f64 = 1e-12;
 /// i.e. the heliocentric G*M_sun expressed in (AU, M_sun, day).
 pub const G_CANONICAL: f64 = 0.01720209895_f64 * 0.01720209895_f64;
 
+/// Ideal-rocket (Tsiolkovsky) Δv: `Δv = v_e · ln((dry + prop) / dry)`.
+///
+/// Returns `0.0` for the degenerate `dry_mass <= 0.0` (massless hull → unbounded Δv,
+/// non-physical) or `propellant_mass <= 0.0` (no propellant → no budget, the normal
+/// empty-tank case) rather than NaN/Inf. This is a faithful drop-in for the prior
+/// inline `dv_from_fuel`, which returned `0.0` on exactly these degenerate inputs with
+/// NO panic — so re-pointing `dv_from_fuel` here is behaviour- and bit-identical.
+/// (No `debug_assert` on `dry_mass`: that would add new debug-build panic behaviour on
+/// the live nav-budget path the old inline code never had, breaking the hash-neutral
+/// drop-in and contradicting the `0.0`-return contract this function promises.)
+///
+/// Pinned numerics: the product is LEFT-TO-RIGHT (`v_e * ln(...)`), the mass ratio
+/// is formed inside the `ln` argument, NO `mul_add`/FMA — the exact grouping the
+/// recorded hashes were captured under (matches the prior inline `dv_from_fuel`).
+pub fn tsiolkovsky_dv(exhaust_velocity: f64, dry_mass: f64, propellant_mass: f64) -> f64 {
+    if dry_mass <= 0.0 || propellant_mass <= 0.0 {
+        0.0
+    } else {
+        exhaust_velocity * ((dry_mass + propellant_mass) / dry_mass).ln()
+    }
+}
+
 /// One astronomical unit in metres (SI), for facade-boundary conversion only.
 pub const AU_IN_METERS: f64 = 1.495_978_707e11;
 /// One solar mass in kilograms (SI), for facade-boundary conversion only.
@@ -114,6 +136,22 @@ pub const DAY_IN_SECONDS: f64 = 86_400.0;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tsiolkovsky_dv_matches_rocket_equation() {
+        // v_e * ln((dry + prop)/dry); left-to-right, ratio inside ln.
+        let got = tsiolkovsky_dv(1.0e-2, 1.0e-9, 1.0e-9);
+        let want = 1.0e-2 * ((1.0e-9_f64 + 1.0e-9) / 1.0e-9).ln(); // = 1e-2 * ln 2
+        assert_eq!(got, want);
+        assert_eq!(got.to_bits(), want.to_bits(), "must match bit-for-bit (grouping)");
+    }
+
+    #[test]
+    fn tsiolkovsky_dv_degenerate_inputs_return_zero() {
+        assert_eq!(tsiolkovsky_dv(1.0e-2, 0.0, 1.0), 0.0, "no dry mass -> 0, not Inf");
+        assert_eq!(tsiolkovsky_dv(1.0e-2, 1.0, 0.0), 0.0, "no propellant -> 0");
+        assert_eq!(tsiolkovsky_dv(1.0e-2, -1.0, 1.0), 0.0, "negative dry -> 0");
+    }
 
     #[test]
     fn new_and_fields() {
