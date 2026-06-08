@@ -142,15 +142,23 @@ pub fn state_hash(world: &World) -> u64 {
     for c in craft {
         h.write_u64(c.slot as u64);
         h.write_u64(c.generation as u64);
-        if let Some(p) = world.craft_pos(c) {
-            write_vec3(&mut h, p);
-        }
-        if let Some(v) = world.craft_vel(c) {
-            write_vec3(&mut h, v);
-        }
-        if let Some(f) = world.craft_fuel(c) {
-            h.write_u64(f.to_bits());
-        }
+        // Dense, length-parallel SoA columns: in v1 every live craft row has every
+        // component (slot == row; no mid-run despawn). A missing component would make
+        // the encoding non-self-delimiting and silently corrupt the hash, so fail loud
+        // rather than drop words. `recompute_with_cursors` (the parity spec) likewise
+        // unwraps these.
+        let p = world
+            .craft_pos(c)
+            .expect("dense SoA invariant: live craft row missing craft_pos column");
+        write_vec3(&mut h, p);
+        let v = world
+            .craft_vel(c)
+            .expect("dense SoA invariant: live craft row missing craft_vel column");
+        write_vec3(&mut h, v);
+        let f = world
+            .craft_fuel(c)
+            .expect("dense SoA invariant: live craft row missing craft_fuel column");
+        h.write_u64(f.to_bits());
         // HASH_FIELD_ORDER word 12: NavState (discriminant-first, self-delimiting).
         // Read the dense row via the public SlotMap accessor (ship_index is private
         // to world.rs). The NavDest discriminant is folded BEFORE its payload so
@@ -185,9 +193,11 @@ pub fn state_hash(world: &World) -> u64 {
             }
         }
         // HASH_FIELD_ORDER word 13: Lod discriminant (lod() is on StateView).
-        if let Some(l) = world.lod(c) {
-            h.write_u64(l as u64);
-        }
+        // Dense SoA invariant as above: every live craft row has a lod column.
+        let l = world
+            .lod(c)
+            .expect("dense SoA invariant: live craft row missing lod column");
+        h.write_u64(l as u64);
     }
 
     h.finish()
