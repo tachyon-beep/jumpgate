@@ -10,7 +10,7 @@ use crate::integrator::{VelocityVerlet, gravity_accel, substep_count};
 use crate::math::Vec3;
 use crate::rng::RngStreams;
 use crate::ship::thrust_accel_and_burn;
-use crate::stores::{BodyStore, NavState, ShipStore, effective_params};
+use crate::stores::{BodyStore, CraftStore, NavState, effective_params};
 use crate::time::{Dt, Tick};
 use crate::types::{EntityRef, Lod, NavDest};
 
@@ -19,7 +19,7 @@ pub struct World {
     // `ships`/`bodies` are pub(crate) so the per-tick state hash (hash.rs, a later
     // task) can fold their canonical SoA arrays in directly. Everything else stays
     // private behind StateView / narrow mutators.
-    pub(crate) ships: ShipStore,
+    pub(crate) ships: CraftStore,
     pub(crate) bodies: BodyStore,
     eph: Ephemeris,
     #[allow(dead_code)]
@@ -97,7 +97,7 @@ impl World {
             bodies.eph_index.push(i);
         }
 
-        let mut ships = ShipStore {
+        let mut ships = CraftStore {
             ids: SlotMap::new(),
             pos: Vec::new(),
             vel: Vec::new(),
@@ -162,7 +162,7 @@ impl World {
         self.bodies.ids.dense_index(id.slot, id.generation)
     }
     fn craft_id_at(&self, dense_index: usize) -> CraftId {
-        // SlotMap::id_at returns Option; delegate to the ShipStore wrapper
+        // SlotMap::id_at returns Option; delegate to the CraftStore wrapper
         // `ids_at`, which does the `expect` internally and returns CraftId.
         self.ships.ids_at(dense_index)
     }

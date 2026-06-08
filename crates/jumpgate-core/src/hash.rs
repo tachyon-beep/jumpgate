@@ -98,7 +98,7 @@ use crate::world::World;
 
 /// Mix a store's allocator cursor (high-water) into the hash. Present per §6 /
 /// HASH_FIELD_ORDER so a future mid-run Spawn does not invalidate prior-tick
-/// hashes. Generic so both BodyStore.ids and ShipStore.ids reuse it.
+/// hashes. Generic so both BodyStore.ids and CraftStore.ids reuse it.
 pub fn write_store_cursor<T>(h: &mut FnvHasher, store: &SlotMap<T>) {
     h.write_u64(store.cursor());
 }

@@ -8,7 +8,7 @@ use crate::autopilot::ARRIVAL_RADIUS;
 use crate::contract::{Event, EventKind};
 use crate::ephemeris::Ephemeris;
 use crate::math::Vec3;
-use crate::stores::{BodyStore, NavState, ShipStore};
+use crate::stores::{BodyStore, CraftStore, NavState};
 use crate::time::Tick;
 use crate::types::{EntityRef, NavDest};
 
@@ -62,12 +62,12 @@ fn arrival_crossed(pos: Vec3, dest_pos: Vec3, prev_inside: bool) -> bool {
 /// shared `&` refs). No reactivity — each predicate reads only state, and
 /// emitting an event cannot trigger another same-tick event.
 ///
-/// Reads the prior-tick snapshot from `ShipStore::prev_fuel` /
-/// `ShipStore::prev_inside_dest` (both index-aligned, populated in Task 4 and
+/// Reads the prior-tick snapshot from `CraftStore::prev_fuel` /
+/// `CraftStore::prev_inside_dest` (both index-aligned, populated in Task 4 and
 /// part of the canonical hashed state). Resolves an entity destination via
 /// `BodyStore::eph_index` + `Ephemeris::body_pos`.
 pub fn detect_boundary_events(
-    ships: &ShipStore,
+    ships: &CraftStore,
     bodies: &BodyStore,
     ephem: &Ephemeris,
     tick: Tick,

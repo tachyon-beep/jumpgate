@@ -8,7 +8,7 @@ use crate::contract::{Command, Event, EventKind, command_sort_key};
 use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
 use crate::math::Vec3;
-use crate::stores::{NavState, ShipStore};
+use crate::stores::{CraftStore, NavState};
 use crate::time::Tick;
 use crate::types::{CommandKind, EntityRef, NavDest, Target};
 
@@ -74,7 +74,7 @@ fn action_ingested(tick: Tick, target: Target) -> Event {
 fn resolve_dest(
     dest: NavDest,
     tick: Tick,
-    ship: &ShipStore,
+    ship: &CraftStore,
     eph: &Ephemeris,
 ) -> Option<Vec3> {
     match dest {
@@ -92,7 +92,7 @@ fn resolve_dest(
 /// `NavState::Seeking`, logs the command tick-stamped, and emits
 /// `ActionIngested`. Lever invariant: this is the only craft-nav write path.
 pub fn ingest_into(
-    ship: &mut ShipStore,
+    ship: &mut CraftStore,
     eph: &Ephemeris,
     log: &mut ActionLog,
     events: &mut EventStream,
@@ -161,7 +161,7 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
 
 /// Fuel-derived Δv fallback when no explicit budget is given:
 /// Tsiolkovsky Δv = v_e * ln((dry + fuel) / dry), using effective params (§5.5).
-fn dv_from_fuel(ship: &ShipStore, idx: usize) -> f64 {
+fn dv_from_fuel(ship: &CraftStore, idx: usize) -> f64 {
     let eff = crate::stores::effective_params(&ship.spec[idx]);
     let fuel = ship.fuel_mass[idx];
     let dry = eff.dry_mass;
@@ -189,8 +189,8 @@ mod tests {
         Ephemeris::precompute(&[] as &[BodyInit], Dt::new(1.0), 1)
     }
 
-    fn ship_store_with(n: usize) -> ShipStore {
-        let mut store = ShipStore::empty();
+    fn ship_store_with(n: usize) -> CraftStore {
+        let mut store = CraftStore::empty();
         for _ in 0..n {
             store.push(
                 BaseSpec {

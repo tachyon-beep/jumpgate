@@ -43,7 +43,7 @@ pub fn effective_params(spec: &BaseSpec) -> Effective {
 /// per-tick `state_hash` in v1 — they sit at deferred `HASH_FIELD_ORDER` words 14/15
 /// behind a future `HASH_FORMAT_VERSION` bump, and are transitively pinned anyway
 /// (`prev_fuel[t] == fuel[t-1]`, which is hashed at tick t-1).
-pub struct ShipStore {
+pub struct CraftStore {
     pub ids: SlotMap<()>,
     pub pos: Vec<Vec3>,
     pub vel: Vec<Vec3>,
@@ -63,12 +63,12 @@ pub struct BodyStore {
     pub eph_index: Vec<usize>,
 }
 
-impl ShipStore {
+impl CraftStore {
     /// A zero-craft store with every SoA array empty. All craft are minted via
     /// `push` at reset; there is no mid-run despawn in v1, so slots allocate
     /// contiguously and `slot == row` holds.
     pub fn empty() -> Self {
-        ShipStore {
+        CraftStore {
             ids: SlotMap::new(),
             pos: Vec::new(),
             vel: Vec::new(),
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn stores_construct_soa_parallel() {
-        let ship = ShipStore::empty();
+        let ship = CraftStore::empty();
         assert_eq!(ship.ids.len(), 0);
         let n = ship.ids.len();
         assert_eq!(ship.pos.len(), n);
@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn shipstore_push_and_accessors() {
-        let mut ship = ShipStore::empty();
+        let mut ship = CraftStore::empty();
         let spec = BaseSpec {
             base_dry_mass: 10.0,
             base_max_thrust: 250.0,
