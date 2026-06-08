@@ -811,6 +811,13 @@ settleable from code alone (§14).
   is in scope here).
 - The deadband oscillation property `v_err_eps * dt < R` is a *distinct, already-satisfied*
   property (`1e-4 * 0.25 = 2.5e-5 < 1e-4`), deliberately **not** folded into the reset guard.
+- **Fleet/taskforce structure** (see `docs/glossary.md`). `GuidanceParams` is *fleet-wide*
+  policy; in v1 there is no fleet aggregate, so it lives **run-level** in `RunConfig` (one
+  implicit fleet per run). When the **fleet** concept lands it migrates to a per-fleet
+  attribute and the reset guard reads `ship.fleet.guidance.k_brake`; the **taskforce**
+  layer (command delays at the `ingest.rs` seam) is a further-future echelon. None of this
+  changes v1; the run-level placement is forward-compatible (the migration is RunConfig →
+  Fleet, the same Class-2 config-hashed value moving down one level).
 
 ---
 
