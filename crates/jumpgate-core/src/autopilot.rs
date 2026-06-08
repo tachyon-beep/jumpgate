@@ -196,7 +196,7 @@ mod tests {
     fn arrives_with_low_relative_speed() {
         // 1-D sim: drive the law + a_max forward-Euler and confirm the craft
         // ENTERS the arrival band with small |rel_vel| (no fast tunnel). dt is
-        // small here so the synthetic integrator resolves the V_CRUISE cap and
+        // small here so the synthetic integrator resolves the cruise cap and
         // the sqrt braking ramp (a single coarse Euler step at a_max=0.5 would
         // jump velocity by 0.125 in one tick and alias right past the cap — the
         // engine substeps the steep-accel regime; this loop mimics that).
@@ -211,7 +211,8 @@ mod tests {
             dv_remaining: 1e9, // ample budget for the synthetic check
         };
         let mut entered_band_speed: Option<f64> = None;
-        // 0.5 AU at the V_CRUISE cap (~2e-3 AU/day) with dt=1e-4 needs ~2.5e6
+        // 0.5 AU at the cruise cap (cruise_burn_fraction x full-tank Δv ~ 2e-3
+        // AU/day for this fixture) with dt=1e-4 needs ~2.5e6
         // steps; give generous headroom.
         for _ in 0..5_000_000 {
             let (tdir, throttle) =
@@ -227,12 +228,12 @@ mod tests {
             }
         }
         let speed = entered_band_speed.expect("craft never reached the arrival band");
-        // Measured crossing speed ~1.5e-4 AU/day (floors near V_ERR_EPS as v_des
+        // Measured crossing speed ~1.5e-4 AU/day (floors near v_err_eps as v_des
         // dips into the deadband near the band), so speed*0.25 ~ 3.75e-5 < 1e-4.
         // Anti-tunnel property expressed at the ENGINE cadence (dt=0.25), NOT the
         // fine synthetic step above: a tick boundary at the real dt must land
         // inside the sphere. The sqrt braking profile drives v_des -> 0 as d -> 0,
-        // so the crossing speed is far below V_CRUISE.
+        // so the crossing speed is far below the cruise cap.
         const ENGINE_DT: f64 = 0.25;
         assert!(
             speed * ENGINE_DT < ARRIVAL_RADIUS,
@@ -273,7 +274,8 @@ mod tests {
     #[test]
     fn matched_co_mover_inside_deadband_cuts_throttle() {
         // Craft AT the target velocity and so close that v_des is below the
-        // deadband: error < V_ERR_EPS -> cut throttle (don't burn for ~zero accel).
+        // deadband: error < v_err_eps (GuidanceParams) -> cut throttle (don't burn
+        // for ~zero accel).
         let dest = Vec3::new(2.0 * ARRIVAL_RADIUS, 0.0, 0.0);
         let dest_vel = Vec3::new(0.0, 0.01, 0.0);
         // Sit just outside the arrival sphere, moving exactly with the target,

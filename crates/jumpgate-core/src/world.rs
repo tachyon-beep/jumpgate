@@ -538,7 +538,8 @@ mod tests {
     /// far-out, negligible-gravity region (5 AU; central accel ~ G*M/5^2 ~ 1.2e-5),
     /// fueled so its Δv budget (`v_e*ln(2) ~ 6.9e-3`) covers the round-trip
     /// accelerate+brake burn the law commands, and sized so the empty-tank
-    /// `a_max*dt` stays well under V_CRUISE (no coarse-step aliasing). This is the
+    /// `a_max*dt` stays well under the cruise cap (`cruise_burn_fraction` x
+    /// full-tank Δv, ~2e-3 AU/day here; no coarse-step aliasing). This is the
     /// regime the new law is designed for; the orbital `one_body_one_craft` fixture
     /// is left untouched for the coast/dormant/projection tests that never thrust.
     fn one_body_one_thrusting_craft() -> RunConfig {
@@ -566,9 +567,9 @@ mod tests {
                 spec: BaseSpec {
                     base_dry_mass: 1e-9,
                     // a_max(full) = 1e-12/2e-9 = 5e-4 >> local gravity (~1.2e-5);
-                    // a_max(empty) = 1e-12/1e-9 = 1e-3, so a_max*dt = 2.5e-4 << V_CRUISE.
+                    // a_max(empty) = 1e-12/1e-9 = 1e-3, so a_max*dt = 2.5e-4 << cruise cap.
                     base_max_thrust: 1e-12,
-                    base_exhaust_velocity: 1e-2, // Δv_max = 1e-2*ln(2) ~ 6.9e-3 > 2*V_CRUISE
+                    base_exhaust_velocity: 1e-2, // Δv_max = 1e-2*ln(2) ~ 6.9e-3 > 2x cruise cap
                     base_fuel_capacity: 1e-9,
                 },
                 pos: Vec3::new(5.0, 0.0, 0.0),
@@ -720,7 +721,8 @@ mod tests {
         );
 
         // Keep stepping; under the velocity-targeting braking law the at-rest
-        // craft accelerates toward the dest (capped at V_CRUISE) and net-approaches.
+        // craft accelerates toward the dest (capped at the cruise cap,
+        // cruise_burn_fraction x full-tank Δv) and net-approaches.
         for _ in 0..400 {
             let mut none: Vec<Command> = Vec::new();
             world.step(&mut none);
