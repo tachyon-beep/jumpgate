@@ -13,6 +13,17 @@ use crate::stores::Effective;
 ///
 /// When `throttle <= 0` or `fuel_mass <= 0`, thrust contributes nothing:
 /// returns `(Vec3::ZERO, 0.0)`.
+///
+/// # Preconditions
+/// `throttle` must lie in `[0, 1]`. A value above 1 would over-thrust beyond
+/// the engine rating; this function does NOT clamp it in release. The PRODUCER
+/// — the autopilot (Task 10) — is responsible for bounding `throttle` before
+/// calling. A `debug_assert!` catches producer bugs in debug/test builds.
+///
+/// # Fuel-clamp over-impulse (v1)
+/// When the fuel clamp binds (`fuel_mass < mdot * dt`), the returned `accel`
+/// still reflects FULL thrust for the whole tick — a small over-impulse on the
+/// final burn tick. Accepted in v1; substep mass-bleed is deferred.
 pub fn thrust_accel_and_burn(
     eff: &Effective,
     fuel_mass: f64,
@@ -24,10 +35,15 @@ pub fn thrust_accel_and_burn(
     if throttle <= 0.0 || fuel_mass <= 0.0 {
         return (Vec3::ZERO, 0.0);
     }
+    debug_assert!(
+        (0.0..=1.0).contains(&throttle),
+        "throttle must be in [0,1]; the autopilot clamps before calling"
+    );
     let thrust_force = throttle * eff.max_thrust;
     let total_mass = eff.dry_mass + fuel_mass;
     let accel = thrust_dir.scale(thrust_force / total_mass);
     // Variable-mass consumption: mdot = F / v_e; clamp to what's in the tank.
+    debug_assert!(eff.exhaust_velocity > 0.0, "exhaust_velocity must be > 0");
     let consumed = (thrust_force / eff.exhaust_velocity * dt).min(fuel_mass);
     (accel, consumed)
 }
