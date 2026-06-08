@@ -151,6 +151,7 @@ impl World {
             lod: Vec::new(),
             prev_fuel: Vec::new(),
             prev_inside_dest: Vec::new(),
+            prev_pos: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -164,6 +165,9 @@ impl World {
             // FuelEmpty/Arrival fires on the first step (edge detection needs a prior).
             ships.prev_fuel.push(c.fuel_mass);
             ships.prev_inside_dest.push(false);
+            // Swept-arrival chord start: prev_pos == pos at tick 0 (zero-length
+            // chord), so no spurious Arrival clip on the first step.
+            ships.prev_pos.push(c.pos);
         }
 
         let rng = RngStreams::from_master(cfg.master_seed);
@@ -334,6 +338,13 @@ impl World {
         //     prior. These arrays are folded into state_hash at the position fixed by
         //     HASH_FIELD_ORDER (a later hash task pins their contribution).
         for ci in 0..n_craft {
+            // TODO(spec §13, deferred): prev_inside_dest below is an ENDPOINT
+            // point-in-sphere test, not the swept verdict. A pure chord-clip arrival
+            // (closest approach inside R, neither endpoint inside) could re-fire the
+            // once-only latch. Out of scope for v1 (the rel_speed gate suppresses the
+            // flyby case; the rendezvous case has an endpoint inside R). Deriving
+            // inside-prev from the chord is explicitly deferred.
+            self.ships.prev_pos[ci] = self.ships.pos[ci];
             self.ships.prev_fuel[ci] = self.ships.fuel_mass[ci];
             self.ships.prev_inside_dest[ci] = match self.ships.nav[ci] {
                 NavState::Seeking { dest, .. } => {

@@ -406,3 +406,106 @@ fn transfer_to_moving_body_rendezvous() {
         "not velocity-matched (flyby, not rendezvous): rel_speed={rel_speed:.4e} vs v_circ={v_circ:.4e}"
     );
 }
+
+/// Swept-arrival moving-body wiring (Task 6 / §5): exercise `detect_boundary_events`'
+/// resolution of the target at BOTH `Tick(T-1)` and `Tick(T)` plus the rel_speed
+/// gate, through the REAL `step` path, for a MOVING body — and prove the rel_speed
+/// gate cleanly separates a velocity-matched rendezvous (fires) from a fast head-on
+/// flyby of identical geometry (does NOT fire).
+///
+/// Construction (the honesty guard against a vacuous "no Arrival because it geometrically
+/// missed"): a coasting craft (zero thrust => pure ballistic, the autopilot never
+/// brakes it) is placed ON the planet's tick-0 position with a relative velocity
+/// aimed straight back through the planet center. Under near-identical local gravity
+/// at 5 AU the RELATIVE path is ~straight and provably transits the planet center
+/// (closest approach ~0 << ARRIVAL_RADIUS). The ONLY variable between the two halves
+/// is `|rel_vel|`, so a difference in whether Arrival fires is attributable to the
+/// rel_speed gate, not to geometry.
+fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
+    let max_ticks: u64 = 200;
+    let planet_a = 5.0_f64;
+    let v_circ = (G_CANONICAL * 1.0 / planet_a).sqrt();
+    let planet_pos0 = Vec3::new(planet_a, 0.0, 0.0);
+    let planet_vel0 = Vec3::new(0.0, v_circ, 0.0);
+
+    // Craft co-located with the planet at tick 0; relative velocity is +y (along the
+    // planet's instantaneous motion) of magnitude rel_speed_mag, so the craft's
+    // RELATIVE displacement sweeps a chord straight through the moving planet center.
+    // Co-located start => the very next tick already straddles the center: the chord
+    // [prev_pos=center, pos=center+rel] has closest approach 0 (the dd>DD_EPS branch
+    // clamps t to 0 and reads `a` = offset-at-start = 0 in the target frame).
+    let craft_vel0 = planet_vel0.add(Vec3::new(0.0, rel_speed_mag, 0.0));
+    let craft = vec![coasting_craft(planet_pos0, craft_vel0)];
+
+    let cfg = RunConfig {
+        master_seed: 7,
+        dt: Dt::new(DT_DAYS),
+        softening: SOFTENING,
+        substep_cfg: SUBSTEP_CFG,
+        ephemeris_window: max_ticks + 8,
+        bodies: vec![
+            BodyInit {
+                mass: 1.0,
+                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            },
+            BodyInit {
+                mass: 1.0e-9,
+                elements: OrbitalElements { a: planet_a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            },
+        ],
+        craft,
+        guidance: GuidanceParams::default(),
+    };
+
+    let (mut world, _h) = World::reset(cfg).expect("resolvable config");
+    let cid = world.craft_ids()[0];
+    let planet = world.body_ids()[1];
+
+    // Seek the MOVING planet so detection resolves c_prev/c_now/dest_vel via ephemeris.
+    let mut cmds = vec![Command {
+        target: Target::Entity(EntityRef::Craft(cid)),
+        kind: CommandKind::Destination {
+            dest: NavDest::Entity(EntityRef::Body(planet)),
+            burn_budget: Some(1.0),
+        },
+    }];
+    world.step(&mut cmds);
+
+    let mut last_seen = Tick(0);
+    loop {
+        for ev in world.recent_events(last_seen) {
+            if let EventKind::Arrival { craft: ac, .. } = ev.kind
+                && ac == cid
+            {
+                return true;
+            }
+        }
+        last_seen = world.tick();
+        if world.tick().0 >= max_ticks {
+            return false;
+        }
+        let mut none: Vec<Command> = Vec::new();
+        world.step(&mut none);
+    }
+}
+
+#[test]
+fn moving_body_swept_gate_separates_rendezvous_from_fast_flyby() {
+    // Velocity-matched (rel_speed well under ARRIVAL_SPEED=2e-3): a tick lands inside
+    // the moving sphere with a low relative speed -> Arrival FIRES (moving-body wiring
+    // proven: c_prev != c_now, dest_vel != 0, resolved through step).
+    assert!(
+        coasting_flyby_arrival_fires(1.0e-4),
+        "velocity-matched rendezvous at a moving body did not fire Arrival"
+    );
+
+    // Identical head-on geometry but rel_speed = the body's full orbital speed
+    // (v_circ ~ 7.7e-3 AU/day >> ARRIVAL_SPEED=2e-3): a fast flyby that still transits
+    // the center -> the rel_speed gate SUPPRESSES Arrival. This is the "cleanly
+    // separates" measurement (§10 / Step 9): only |rel_vel| changed.
+    let v_circ = (G_CANONICAL * 1.0 / 5.0_f64).sqrt();
+    assert!(
+        !coasting_flyby_arrival_fires(v_circ),
+        "fast flyby of a moving body spuriously fired Arrival (rel_speed gate failed)"
+    );
+}

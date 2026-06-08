@@ -50,11 +50,46 @@ fn fuel_just_emptied(fuel_now: f64, fuel_prev: f64) -> bool {
     fuel_now <= FUEL_EMPTY_EPS && fuel_prev > FUEL_EMPTY_EPS
 }
 
-/// Pure arrival predicate. True iff the craft is within ARRIVAL_RADIUS of
-/// dest_pos now AND was outside it at the previous tick (a crossing, fires once).
-fn arrival_crossed(pos: Vec3, dest_pos: Vec3, prev_inside: bool) -> bool {
-    let inside = pos.sub(dest_pos).length() <= ARRIVAL_RADIUS;
-    inside && !prev_inside
+/// Relative-speed gate (canonical AU/day) distinguishing a velocity-matched
+/// rendezvous (fires Arrival) from a fast flyby that merely grazes the sphere
+/// (must NOT fire). Class-1 const (D11); affects ONLY Arrival event timing, never
+/// state_hash. Starting value = the old V_CRUISE magnitude; pin by measurement (§10).
+pub const ARRIVAL_SPEED: f64 = 2.0e-3;
+
+/// Degeneracy epsilon for the swept chord (target-frame chord length^2 below this
+/// is treated as a stationary rendezvous; §5.3).
+const DD_EPS: f64 = 1.0e-30;
+
+/// Swept arrival predicate (§5.2): closest approach of the craft↔target chord in
+/// the TARGET frame, gated by rel_speed. `c_prev`/`c_now` are the target position
+/// at tick T-1 / T (equal, for a fixed Position). All ops are Vec3 + scalar; NO FMA.
+fn arrival_swept(
+    prev_pos: Vec3,
+    pos: Vec3,
+    c_prev: Vec3,
+    c_now: Vec3,
+    rel_speed: f64,
+    prev_inside: bool,
+) -> bool {
+    let a = prev_pos.sub(c_prev); // craft offset from target at chord start
+    let b = pos.sub(c_now); // craft offset from target at chord end
+    let d = b.sub(a);
+    let dd = d.dot(d);
+    let r = ARRIVAL_RADIUS;
+    let min_sq = if dd <= DD_EPS {
+        b.dot(b) // degenerate / rendezvous: endpoint point-in-sphere (§5.3)
+    } else {
+        // Explicit max-then-min (NOT `.clamp`): clamp's NaN/sign-of-zero semantics
+        // differ, and this is the reviewed determinism-path form. The verdict is
+        // sign-of-zero-invariant anyway (t flows into closest.dot(closest), which
+        // squares the sign away), but we keep the exact reviewed arithmetic.
+        #[allow(clippy::manual_clamp)]
+        let t = ((-(a.dot(d))) / dd).max(0.0).min(1.0); // clamp closest-approach param to [0,1]
+        let closest = a.add(d.scale(t));
+        closest.dot(closest)
+    };
+    let inside_now = (min_sq <= r * r) && (rel_speed <= ARRIVAL_SPEED);
+    inside_now && !prev_inside
 }
 
 /// Detect Arrival/FuelEmpty at the tick boundary against QUANTIZED state and
@@ -86,16 +121,33 @@ pub fn detect_boundary_events(
         }
 
         // Arrival edge: only meaningful while Seeking toward a resolved dest.
+        // Swept test (§5): resolve the target at BOTH Tick(T-1) and Tick(T) and
+        // gate by the craft's speed relative to the target. T >= 1 always
+        // (detection runs with `next`), so Tick(T-1) never underflows.
         if let NavState::Seeking { dest, .. } = ships.nav[idx] {
-            let dest_pos = match dest {
-                NavDest::Position(p) => p,
+            let (c_prev, c_now, dest_vel) = match dest {
+                NavDest::Position(p) => (p, p, Vec3::ZERO),
                 NavDest::Entity(EntityRef::Body(body_id)) => {
-                    ephem.body_pos(bodies.eph_index[body_id.slot as usize], tick)
+                    let eidx = bodies.eph_index[body_id.slot as usize];
+                    let prev_tick = Tick(tick.0 - 1);
+                    (
+                        ephem.body_pos(eidx, prev_tick),
+                        ephem.body_pos(eidx, tick),
+                        ephem.body_vel(eidx, tick),
+                    )
                 }
                 // Entity(Craft) destinations are not a v1 nav target; skip.
                 NavDest::Entity(EntityRef::Craft(_)) => continue,
             };
-            if arrival_crossed(ships.pos[idx], dest_pos, ships.prev_inside_dest[idx]) {
+            let rel_speed = ships.vel[idx].sub(dest_vel).length();
+            if arrival_swept(
+                ships.prev_pos[idx],
+                ships.pos[idx],
+                c_prev,
+                c_now,
+                rel_speed,
+                ships.prev_inside_dest[idx],
+            ) {
                 out.emit(Event {
                     tick,
                     kind: EventKind::Arrival { craft: id, dest },
@@ -137,6 +189,74 @@ mod tests {
         assert!(!fuel_just_emptied(0.4, 0.5));
     }
 
+    use crate::math::Vec3;
+
+    // Helper mirrors detect_boundary_events' call for a fixed Position target
+    // (c_prev == c_now == dest, dest_vel == 0).
+    fn swept_fixed(prev_pos: Vec3, pos: Vec3, dest: Vec3, vel: Vec3, prev_inside: bool) -> bool {
+        let rel_speed = vel.sub(Vec3::ZERO).length();
+        arrival_swept(prev_pos, pos, dest, dest, rel_speed, prev_inside)
+    }
+
+    #[test]
+    fn swept_fires_when_point_test_would_miss() {
+        // Chord passes THROUGH the sphere at the origin between ticks; neither endpoint
+        // is inside R=1e-4, but the closest approach is. Low rel_speed -> fires.
+        let dest = Vec3::ZERO;
+        let prev_pos = Vec3::new(-1.0e-3, 0.0, 0.0);
+        let pos = Vec3::new(1.0e-3, 0.0, 0.0);
+        let slow = Vec3::new(1.0e-5, 0.0, 0.0); // |v| < ARRIVAL_SPEED
+        assert!(swept_fixed(prev_pos, pos, dest, slow, false));
+    }
+
+    #[test]
+    fn fast_flyby_does_not_fire() {
+        // Same geometric clip, but rel_speed above the gate -> suppressed.
+        let dest = Vec3::ZERO;
+        let prev_pos = Vec3::new(-1.0e-3, 0.0, 0.0);
+        let pos = Vec3::new(1.0e-3, 0.0, 0.0);
+        let fast = Vec3::new(1.0, 0.0, 0.0); // |v| >> ARRIVAL_SPEED
+        assert!(!swept_fixed(prev_pos, pos, dest, fast, false));
+    }
+
+    #[test]
+    fn velocity_matched_rendezvous_fires() {
+        // rel_vel ~ 0 -> dd ~ 0 degenerate branch -> endpoint test fires (would NaN-out
+        // without the dd<=DD_EPS guard, §5.3).
+        let dest = Vec3::ZERO;
+        let inside = Vec3::new(0.5e-4, 0.0, 0.0); // within R
+        assert!(swept_fixed(inside, inside, dest, Vec3::new(1.0e-6, 0.0, 0.0), false));
+    }
+
+    #[test]
+    fn tick0_zero_length_chord_does_not_fire_outside() {
+        // prev_pos == pos and outside R -> no spurious fire.
+        let dest = Vec3::ZERO;
+        let outside = Vec3::new(1.0e-2, 0.0, 0.0);
+        assert!(!swept_fixed(outside, outside, dest, Vec3::ZERO, false));
+    }
+
+    #[test]
+    fn arrival_speed_gate_boundary_pins_comparison_direction() {
+        // The gate is `rel_speed <= ARRIVAL_SPEED`. Pin the boundary so a future
+        // flip to `<` / `>=` is caught. Geometry inside R, vary only rel_speed.
+        let dest = Vec3::ZERO;
+        let inside = Vec3::new(0.5e-4, 0.0, 0.0);
+        // Just under the gate -> fires.
+        assert!(swept_fixed(inside, inside, dest, Vec3::new(ARRIVAL_SPEED - 1e-9, 0.0, 0.0), false));
+        // Strictly over the gate -> does not fire.
+        assert!(!swept_fixed(inside, inside, dest, Vec3::new(ARRIVAL_SPEED + 1e-3, 0.0, 0.0), false));
+    }
+
+    #[test]
+    fn swept_latch_suppresses_repeat_when_prev_inside() {
+        // Already delivered last tick (prev_inside = true) -> the once-only latch
+        // suppresses a second fire even though geometry+speed would otherwise qualify.
+        let dest = Vec3::ZERO;
+        let inside = Vec3::new(0.5e-4, 0.0, 0.0);
+        assert!(!swept_fixed(inside, inside, dest, Vec3::new(1.0e-6, 0.0, 0.0), true));
+    }
+
     #[test]
     fn arrival_crossing_contract_documented() {
         use crate::math::Vec3;
@@ -159,17 +279,18 @@ mod tests {
     }
 
     #[test]
-    fn arrival_crossed_uses_arrival_radius_constant() {
+    fn arrival_swept_uses_arrival_radius_constant() {
         use crate::autopilot::ARRIVAL_RADIUS;
-        use crate::math::Vec3;
         let dest = Vec3::new(0.0, 0.0, 0.0);
-        // A point just inside ARRIVAL_RADIUS, coming from outside -> fires.
+        // A point just inside ARRIVAL_RADIUS, zero-length chord, low rel_speed,
+        // coming from outside -> fires.
         let just_inside = Vec3::new(ARRIVAL_RADIUS * 0.5, 0.0, 0.0);
-        assert!(arrival_crossed(just_inside, dest, false));
-        // Same point, already inside -> no repeat.
-        assert!(!arrival_crossed(just_inside, dest, true));
-        // A point well outside -> never.
+        assert!(swept_fixed(just_inside, just_inside, dest, Vec3::ZERO, false));
+        // Same point, already inside -> no repeat (once-only latch).
+        assert!(!swept_fixed(just_inside, just_inside, dest, Vec3::ZERO, true));
+        // A point well outside -> never (zero-length chord, closest approach is the
+        // point itself, outside R).
         let outside = Vec3::new(ARRIVAL_RADIUS * 10.0 + 1.0, 0.0, 0.0);
-        assert!(!arrival_crossed(outside, dest, false));
+        assert!(!swept_fixed(outside, outside, dest, Vec3::ZERO, false));
     }
 }

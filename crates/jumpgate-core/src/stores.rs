@@ -37,12 +37,15 @@ pub fn effective_params(spec: &BaseSpec) -> Effective {
 
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
 /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
-/// length-parallel. `prev_fuel` / `prev_inside_dest` snapshot the previous tick's
-/// values for edge-triggered event detection (`detect_boundary_events` reads them;
-/// `World::step` copy-forwards into them at tick end). They are NOT folded into the
-/// per-tick `state_hash` in v1 — they sit at deferred `HASH_FIELD_ORDER` words 14/15
-/// behind a future `HASH_FORMAT_VERSION` bump, and are transitively pinned anyway
-/// (`prev_fuel[t] == fuel[t-1]`, which is hashed at tick t-1).
+/// length-parallel. `prev_fuel` / `prev_inside_dest` / `prev_pos` snapshot the
+/// previous tick's values for edge-triggered event detection
+/// (`detect_boundary_events` reads them; `World::step` copy-forwards into them at
+/// tick end). They are NOT folded into the per-tick `state_hash` in v1 — they sit
+/// at deferred `HASH_FIELD_ORDER` words 14/15 behind a future `HASH_FORMAT_VERSION`
+/// bump, and are transitively pinned anyway (`prev_fuel[t] == fuel[t-1]`, which is
+/// hashed at tick t-1). `prev_pos` is the analogous copy-forward of `pos` (the
+/// swept-arrival chord start, §5): `prev_pos[t] == pos[t-1]`, hashed at word 9 at
+/// tick t-1, so it too is transitively pinned and unhashed-by-design (Class-3).
 pub struct CraftStore {
     pub ids: SlotMap<()>,
     pub pos: Vec<Vec3>,
@@ -53,6 +56,7 @@ pub struct CraftStore {
     pub lod: Vec<Lod>,
     pub prev_fuel: Vec<f64>,
     pub prev_inside_dest: Vec<bool>,
+    pub prev_pos: Vec<Vec3>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -78,12 +82,15 @@ impl CraftStore {
             lod: Vec::new(),
             prev_fuel: Vec::new(),
             prev_inside_dest: Vec::new(),
+            prev_pos: Vec::new(),
         }
     }
 
     /// Append a craft, returning its typed `CraftId`. Initializes `nav = Idle`,
     /// `lod = Player`, and the prev-* snapshots (`prev_fuel = fuel`,
-    /// `prev_inside_dest = false`). Enforces the v1 `slot == row` invariant.
+    /// `prev_inside_dest = false`, `prev_pos = pos` so the tick-0 swept chord is
+    /// zero-length and never spuriously clips R). Enforces the v1 `slot == row`
+    /// invariant.
     pub fn push(&mut self, spec: BaseSpec, pos: Vec3, vel: Vec3, fuel: f64) -> CraftId {
         let (slot, generation) = self.ids.insert(());
         debug_assert_eq!(
@@ -99,6 +106,7 @@ impl CraftStore {
         self.lod.push(Lod::Player);
         self.prev_fuel.push(fuel);
         self.prev_inside_dest.push(false);
+        self.prev_pos.push(pos);
         CraftId { slot, generation }
     }
 
@@ -193,6 +201,7 @@ mod tests {
         // empty and parallel.
         assert_eq!(ship.prev_fuel.len(), n);
         assert_eq!(ship.prev_inside_dest.len(), n);
+        assert_eq!(ship.prev_pos.len(), n);
 
         let mut body = BodyStore {
             ids: SlotMap::new(),
@@ -248,6 +257,7 @@ mod tests {
         assert_eq!(ship.lod.len(), n);
         assert_eq!(ship.prev_fuel.len(), n);
         assert_eq!(ship.prev_inside_dest.len(), n);
+        assert_eq!(ship.prev_pos.len(), n);
 
         // ids_at wraps the dense row into a typed CraftId.
         assert_eq!(ship.ids_at(0), id0);
