@@ -1,0 +1,282 @@
+//! THE single ingestion path (lever invariant, §4.4). Sorts commands by the
+//! canonical `command_sort_key`, resolves each `NavDest` into a resolved
+//! `NavState::Seeking`, logs every command tick-stamped, and emits an
+//! `ActionIngested` event. No out-of-band store mutation happens anywhere else.
+
+use crate::config::ConfigHash;
+use crate::contract::{Command, Event, EventKind, command_sort_key};
+use crate::ephemeris::Ephemeris;
+use crate::events::EventStream;
+use crate::math::Vec3;
+use crate::stores::{NavState, ShipStore};
+use crate::time::Tick;
+use crate::types::{CommandKind, EntityRef, NavDest, Target};
+
+/// Tick-stamped append-only command log. Replay re-feeds these entries; the
+/// policy is never re-run (§6). `config_hash` is the provenance stamp of the
+/// `RunConfig` this log was recorded under — Task 14 compares it against a
+/// freshly-computed hash to detect a config/replay mismatch.
+pub struct ActionLog {
+    pub entries: Vec<(Tick, Command)>,
+    /// Parallel to `entries`, pushed in lockstep by `record` (the SINGLE writer),
+    /// so `at`/`since_commands` return zero-copy `&[Command]`. The lockstep push
+    /// is what makes the parallel vec safe — it can never desync from `entries`.
+    pub commands_flat: Vec<Command>,
+    pub config_hash: ConfigHash,
+}
+
+impl ActionLog {
+    /// Construct a log stamped with the recording run's config hash.
+    pub fn new(config_hash: ConfigHash) -> Self {
+        ActionLog {
+            entries: Vec::new(),
+            commands_flat: Vec::new(),
+            config_hash,
+        }
+    }
+
+    /// The ONLY writer: pushes BOTH vecs in lockstep so they cannot diverge.
+    pub fn record(&mut self, tick: Tick, cmd: Command) {
+        self.entries.push((tick, cmd));
+        self.commands_flat.push(cmd);
+    }
+
+    /// All commands logged exactly at `tick`, in insertion (canonical) order,
+    /// as a zero-copy contiguous slice (entries are append-only, tick-monotone).
+    pub fn at(&self, tick: Tick) -> &[Command] {
+        let start = self.entries.partition_point(|(t, _)| *t < tick);
+        let end = self.entries.partition_point(|(t, _)| *t <= tick);
+        &self.commands_flat[start..end]
+    }
+
+    /// Every command logged at `tick >= since`, in insertion (canonical) order,
+    /// as a zero-copy contiguous tail slice. Task 12's `StateView::recent_commands`
+    /// (which the locked contract fixes as returning `&[Command]`) is built on this.
+    pub fn since_commands(&self, since: Tick) -> &[Command] {
+        let start = self.entries.partition_point(|(t, _)| *t < since);
+        &self.commands_flat[start..]
+    }
+}
+
+/// Construct an `ActionIngested` event. Lives HERE (not `events.rs`) so the
+/// single ingestion path owns its only event constructor and the module graph
+/// stays acyclic (Task 10 must not depend on a Task-11 symbol).
+fn action_ingested(tick: Tick, target: Target) -> Event {
+    Event {
+        tick,
+        kind: EventKind::ActionIngested { target },
+    }
+}
+
+/// Resolve a `NavDest` to a concrete world `Vec3` at `tick`.
+/// `Position` is already absolute; `Entity` is looked up via the ephemeris
+/// (bodies) or the ship store (craft). Returns `None` if the referent is gone.
+fn resolve_dest(
+    dest: NavDest,
+    tick: Tick,
+    ship: &ShipStore,
+    eph: &Ephemeris,
+) -> Option<Vec3> {
+    match dest {
+        NavDest::Position(p) => Some(p),
+        NavDest::Entity(EntityRef::Body(bid)) => {
+            // v1 ephemeris is indexed positionally; the BodyId slot is the row.
+            Some(eph.body_pos(bid.slot as usize, tick))
+        }
+        NavDest::Entity(EntityRef::Craft(cid)) => ship.craft_pos_by_id(cid),
+    }
+}
+
+/// THE single ingestion path. Sorts `cmds` into canonical order in place,
+/// then for each command: resolves the destination, sets the target craft's
+/// `NavState::Seeking`, logs the command tick-stamped, and emits
+/// `ActionIngested`. Lever invariant: this is the only craft-nav write path.
+pub fn ingest_into(
+    ship: &mut ShipStore,
+    eph: &Ephemeris,
+    log: &mut ActionLog,
+    events: &mut EventStream,
+    tick: Tick,
+    cmds: &mut [Command],
+) {
+    // Canonical, total, deterministic ordering across all Target scopes.
+    cmds.sort_by_key(command_sort_key);
+
+    for cmd in cmds.iter() {
+        // Log every command in canonical order (resolved values; §4.4 rule 2).
+        log.record(tick, *cmd);
+
+        match cmd.target {
+            Target::Entity(EntityRef::Craft(cid)) => {
+                let CommandKind::Destination { dest, burn_budget } = cmd.kind;
+                if let Some(idx) = ship.index_of(cid) {
+                    // dv budget: explicit cap, else Tsiolkovsky fuel-derived.
+                    let dv = burn_budget.unwrap_or_else(|| dv_from_fuel(ship, idx));
+                    // Validate the dest resolves now; drop silently if it does
+                    // not. The autopilot recomputes the live dest each tick, so
+                    // we store the dest reference (moving targets are tracked).
+                    if resolve_dest(dest, tick, ship, eph).is_some() {
+                        ship.nav[idx] = NavState::Seeking {
+                            dest,
+                            dv_remaining: dv,
+                        };
+                        events.emit(action_ingested(tick, cmd.target));
+                    }
+                }
+            }
+            // World / Sim / Body targets: no v1 CommandKind acts on them yet,
+            // but they are logged above so replay identity is preserved, and
+            // the ingestion event is still emitted for the legibility stream.
+            _ => {
+                events.emit(action_ingested(tick, cmd.target));
+            }
+        }
+    }
+}
+
+/// Fuel-derived Δv fallback when no explicit budget is given:
+/// Tsiolkovsky Δv = v_e * ln((dry + fuel) / dry), using effective params (§5.5).
+fn dv_from_fuel(ship: &ShipStore, idx: usize) -> f64 {
+    let eff = crate::stores::effective_params(&ship.spec[idx]);
+    let fuel = ship.fuel_mass[idx];
+    let dry = eff.dry_mass;
+    if dry <= 0.0 || fuel <= 0.0 {
+        0.0
+    } else {
+        eff.exhaust_velocity * ((dry + fuel) / dry).ln()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BaseSpec, BodyInit};
+    use crate::ids::CraftId;
+    use crate::time::Dt;
+
+    fn cfg_hash() -> ConfigHash {
+        // A stand-in provenance stamp; only its round-trip identity matters here.
+        ConfigHash(0xABCD_0001)
+    }
+
+    fn empty_ephemeris() -> Ephemeris {
+        // Zero bodies: NavDest::Position resolution needs no body lookup.
+        Ephemeris::precompute(&[] as &[BodyInit], Dt::new(1.0), 1)
+    }
+
+    fn ship_store_with(n: usize) -> ShipStore {
+        let mut store = ShipStore::empty();
+        for _ in 0..n {
+            store.push(
+                BaseSpec {
+                    base_dry_mass: 1.0,
+                    base_max_thrust: 1.0,
+                    base_exhaust_velocity: 1.0,
+                    base_fuel_capacity: 1.0,
+                },
+                Vec3::ZERO,
+                Vec3::ZERO,
+                0.5, // fuel_mass
+            );
+        }
+        store
+    }
+
+    fn dest_for(id: CraftId, x: f64) -> Command {
+        Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Destination {
+                dest: NavDest::Position(Vec3::new(x, 0.0, 0.0)),
+                burn_budget: Some(2.0),
+            },
+        }
+    }
+
+    #[test]
+    fn log_records_queries_by_tick_and_since() {
+        let mut log = ActionLog::new(cfg_hash());
+        log.record(Tick(5), dest_for(CraftId { slot: 0, generation: 1 }, 1.0));
+        log.record(Tick(5), dest_for(CraftId { slot: 1, generation: 1 }, 2.0));
+        log.record(Tick(6), dest_for(CraftId { slot: 0, generation: 1 }, 3.0));
+        assert_eq!(log.at(Tick(5)).len(), 2);
+        assert_eq!(log.at(Tick(6)).len(), 1);
+        assert_eq!(log.at(Tick(7)).len(), 0);
+        assert_eq!(log.entries.len(), 3);
+        // since_commands returns a zero-copy &[Command] tail slice; commands_flat
+        // is pushed in lockstep with entries by the single writer, so no desync.
+        assert_eq!(log.since_commands(Tick(0)).len(), 3);
+        assert_eq!(log.since_commands(Tick(6)).len(), 1);
+        assert_eq!(log.since_commands(Tick(7)).len(), 0);
+        assert_eq!(log.commands_flat.len(), log.entries.len());
+        // config_hash provenance is preserved verbatim for Task 14's guard.
+        assert_eq!(log.config_hash, cfg_hash());
+    }
+
+    #[test]
+    fn out_of_order_yields_same_navstate_as_presorted() {
+        let eph = empty_ephemeris();
+
+        // Build two identical stores; feed one shuffled, one pre-sorted.
+        let mut store_a = ship_store_with(2);
+        let mut store_b = ship_store_with(2);
+        let id0 = store_a.ids_at(0);
+        let id1 = store_a.ids_at(1);
+
+        let mut shuffled = vec![dest_for(id1, 9.0), dest_for(id0, 4.0)];
+        let mut presorted = shuffled.clone();
+        presorted.sort_by_key(command_sort_key);
+
+        let mut log_a = ActionLog::new(cfg_hash());
+        let mut log_b = ActionLog::new(cfg_hash());
+        let mut ev_a = EventStream::new();
+        let mut ev_b = EventStream::new();
+
+        ingest_into(&mut store_a, &eph, &mut log_a, &mut ev_a, Tick(0), &mut shuffled);
+        ingest_into(&mut store_b, &eph, &mut log_b, &mut ev_b, Tick(0), &mut presorted);
+
+        // Resolved NavState must be identical regardless of input order.
+        for i in 0..2 {
+            match (store_a.nav[i], store_b.nav[i]) {
+                (
+                    NavState::Seeking { dest: da, dv_remaining: va },
+                    NavState::Seeking { dest: db, dv_remaining: vb },
+                ) => {
+                    assert_eq!(da, db, "dest mismatch at craft {i}");
+                    assert_eq!(va, vb, "dv mismatch at craft {i}");
+                }
+                other => panic!("expected both Seeking at {i}, got {other:?}"),
+            }
+        }
+
+        // The log is sorted into canonical order on both paths -> identical.
+        assert_eq!(log_a.entries, log_b.entries);
+
+        // dv budget honoured: burn_budget Some(2.0) -> dv_remaining 2.0.
+        if let NavState::Seeking { dv_remaining, .. } = store_a.nav[0] {
+            assert_eq!(dv_remaining, 2.0);
+        } else {
+            panic!("craft 0 not Seeking");
+        }
+    }
+
+    #[test]
+    fn ingest_emits_action_ingested_event() {
+        let eph = empty_ephemeris();
+        let mut store = ship_store_with(1);
+        let id0 = store.ids_at(0);
+        let mut log = ActionLog::new(cfg_hash());
+        let mut ev = EventStream::new();
+        let mut cmds = vec![dest_for(id0, 4.0)];
+        ingest_into(&mut store, &eph, &mut log, &mut ev, Tick(3), &mut cmds);
+
+        let emitted = ev.since(Tick(0));
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].tick, Tick(3));
+        match emitted[0].kind {
+            EventKind::ActionIngested { target } => {
+                assert_eq!(target, Target::Entity(EntityRef::Craft(id0)));
+            }
+            other => panic!("expected ActionIngested, got {other:?}"),
+        }
+    }
+}

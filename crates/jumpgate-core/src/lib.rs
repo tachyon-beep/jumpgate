@@ -15,11 +15,14 @@
 //! files).
 #![forbid(unsafe_code)]
 
+pub mod autopilot;
 pub mod config;
 pub mod contract;
 pub mod ephemeris;
+pub mod events;
 pub mod hash;
 pub mod ids;
+pub mod ingest;
 pub mod integrator;
 pub mod math;
 pub mod provenance;
@@ -35,13 +38,16 @@ pub mod types;
 // as it lands (plan-2: Ephemeris/VelocityVerlet/Rk4/substep_count/gravity_accel/
 // thrust_accel_and_burn/autopilot_command; plan-3: World/Observer/FullObserver/
 // View/ActionLog/EventStream/state_hash/replay symbols).
+pub use autopilot::{ARRIVAL_RADIUS, autopilot_command};
 pub use config::{
     BaseSpec, BodyInit, ConfigHash, CraftInit, OrbitalElements, RunConfig, SubstepCfg,
 };
 pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
 pub use ephemeris::Ephemeris;
+pub use events::EventStream;
 pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC};
 pub use ids::{BodyId, CraftId, SlotMap};
+pub use ingest::{ActionLog, ingest_into};
 pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
 pub use math::{G_CANONICAL, Vec3};
 pub use provenance::{PROVENANCE, Provenance};
