@@ -413,11 +413,12 @@ the **largest** a craft ever sees because `a_max = max_thrust / (dry + fuel)` is
 The guard additionally rejects `base_dry_mass <= 0` (division) and any non-finite
 `a_max_empty`.
 
-> **Note:** `K_BRAKE` is now `guidance.k_brake` at the autopilot, but the reset guard checks
-> the *worst case over fuel*, not over guidance policy; it uses the **default**
-> `GuidanceParams::default().k_brake = 0.5` baked into the `limit`. If a future run overrides
-> `k_brake`, the reset guard must read `cfg.guidance.k_brake` rather than the default — see
-> §6.5 open item. For v1 (default-only `k_brake`) the constant `0.5` is correct.
+> **Note (RESOLVED, Q2):** `k_brake` is a *fleet-wide, per-run* policy in `GuidanceParams`
+> (Class-2), shared by every craft in a run; there is **no per-ship `k_brake`** in v1 ("brake
+> differently" = run a different fleet/config). The reset guard reads the run's actual
+> `cfg.guidance.k_brake` (NOT a hardcoded `0.5`), so the bound is correct for any fleet,
+> including one that sets a non-default brake margin. The guard still takes the worst case
+> *over fuel* (empty tank), which is orthogonal to the policy value.
 
 ### 6.2 Derivation
 
@@ -474,7 +475,7 @@ pub fn reset(cfg: RunConfig) -> Result<(World, ConfigHash), ResetError>
 
 Before any store is built, loop `for (i, c) in cfg.craft.iter().enumerate()`:
 `let dry = c.spec.base_dry_mass; let a_max_empty = c.spec.base_max_thrust / dry;`
-`let dt = cfg.dt.get(); let limit = ARRIVAL_RADIUS / (2.0 * GuidanceParams::default().k_brake);`
+`let dt = cfg.dt.get(); let limit = ARRIVAL_RADIUS / (2.0 * cfg.guidance.k_brake);`  // per-run policy (Q2)
 reject the first violating craft with:
 
 ```rust
@@ -819,11 +820,10 @@ settleable from code alone (§14).
    `2e-3` (old `V_CRUISE` magnitude) or a small multiple of `v_err_eps`; must be fixed by
    measurement (fast-flyby-must-not-fire + real-arrival-must-fire tests). Implementation-plan
    item, not a blocker.
-2. **`k_brake` override vs the reset guard** (§6.1 note): the reset `limit` uses the *default*
-   `k_brake = 0.5`. If v1 should allow per-run `k_brake` overrides, the guard must read
-   `cfg.guidance.k_brake` instead (and the §6 derivation re-states with that value). For
-   default-only `k_brake`, the constant is correct. Confirm whether per-run `k_brake` is a v1
-   capability.
+2. **`k_brake` override vs the reset guard** (§6.1 note): **RESOLVED 2026-06-09** — `k_brake`
+   is fleet-wide, per-run policy in `GuidanceParams` (no per-ship override; "brake differently"
+   = a different fleet/config). The reset guard reads `cfg.guidance.k_brake`, so it is correct
+   for any fleet. No further decision needed.
 3. **Body-mass/μ correctness fix direction** (§12.4): **RESOLVED 2026-06-09** — varied star
    types are a design goal, so the ephemeris will use `μ = G·(M_central + m_body)` (heavier
    star → faster/tighter orbits). Tracked as **jumpgate-fca8c9e0c0** (P2 bug), a *separate*
