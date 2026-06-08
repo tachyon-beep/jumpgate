@@ -202,6 +202,19 @@ impl World {
     fn ship_index(&self, id: CraftId) -> Option<usize> {
         self.ships.ids.dense_index(id.slot, id.generation)
     }
+
+    /// Fuel-derived Δv budget for a live craft (D9): `tsiolkovsky_dv` over effective
+    /// params + current fuel. `0.0` for a stale id. The single source the live ingest
+    /// path uses when no explicit `burn_budget` is given.
+    pub(crate) fn dv_from_fuel_for(&self, id: CraftId) -> f64 {
+        match self.ship_index(id) {
+            Some(i) => {
+                let eff = effective_params(&self.ships.spec[i]);
+                crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, self.ships.fuel_mass[i])
+            }
+            None => 0.0,
+        }
+    }
     fn body_index(&self, id: BodyId) -> Option<usize> {
         self.bodies.ids.dense_index(id.slot, id.generation)
     }
@@ -631,6 +644,28 @@ mod tests {
         // The craft moved but did not blow up: radius stays within a sane band.
         let r = world.craft_pos(world.craft_ids()[0]).unwrap().length();
         assert!(r > 0.5 * start_r && r < 2.0 * start_r, "coast stayed bounded: r={r}");
+    }
+
+    #[test]
+    fn live_ingest_no_budget_uses_fuel_derived_dv_not_infinity() {
+        use crate::types::{EntityRef, NavDest, Target};
+        let (mut world, _h) = World::reset(one_body_one_thrusting_craft()).expect("resolvable");
+        let id = world.ships.ids_at(0); // typed CraftId for dense row 0 (no-despawn v1)
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Destination {
+                dest: NavDest::Position(Vec3::new(1.0, 0.0, 0.0)),
+                burn_budget: None, // no explicit budget -> must derive from fuel, not INFINITY
+            },
+        }];
+        crate::ingest::ingest_commands(&mut world, Tick(0), &mut cmds);
+        match world.ships.nav[0] {
+            NavState::Seeking { dv_remaining, .. } => {
+                assert!(dv_remaining.is_finite(), "dv must be finite, got {dv_remaining}");
+                assert!(dv_remaining > 0.0, "fuelled craft has positive dv budget");
+            }
+            other => panic!("expected Seeking, got {other:?}"),
+        }
     }
 
     #[test]

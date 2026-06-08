@@ -148,7 +148,9 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
         // logged + ActionIngested-emitted (the seam) but otherwise inert.
         if let Target::Entity(EntityRef::Craft(id)) = cmd.target {
             let CommandKind::Destination { dest, burn_budget } = cmd.kind;
-            let dv = burn_budget.unwrap_or(f64::INFINITY);
+            // dv budget: explicit cap, else Tsiolkovsky fuel-derived (D9/M5) — path-
+            // independent with the slice path, and never INFINITY into dv_remaining.
+            let dv = burn_budget.unwrap_or_else(|| world.dv_from_fuel_for(id));
             world.set_nav(id, NavState::Seeking { dest, dv_remaining: dv });
         }
         world.events_mut().emit(Event {
