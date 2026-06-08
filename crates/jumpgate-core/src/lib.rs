@@ -24,6 +24,7 @@ pub mod rng;
 pub mod contract;
 pub mod stores;
 pub mod ephemeris;
+pub mod integrator;
 
 // Crate-root re-export surface. Downstream tasks (and the jumpgate-py facade)
 // import seam/physics/config types through `jumpgate_core::{...}` rather than
@@ -38,6 +39,7 @@ pub use contract::{
     command_sort_key, Command, Event, EventKind, Integrator, StateView,
 };
 pub use ephemeris::Ephemeris;
+pub use integrator::{gravity_accel, substep_count, Rk4, VelocityVerlet};
 pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC};
 pub use ids::{BodyId, CraftId, SlotMap};
 pub use math::{Vec3, G_CANONICAL};
