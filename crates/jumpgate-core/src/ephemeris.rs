@@ -44,8 +44,19 @@ impl Ephemeris {
     pub fn precompute(bodies: &[BodyInit], dt: Dt, window: u64) -> Ephemeris {
         let n_samples = (window as usize) + 1;
         let dt_days = dt.get();
-        // Central gravitational parameter in canonical units (M_sun = 1).
-        let mu = G_CANONICAL;
+        // Central mass in canonical units (solar masses): the sum of the masses
+        // of every FIXED focus body (a < KEPLER_A_EPSILON). In v1 there is exactly
+        // one such star, so this sum is just that star's mass; summing is the
+        // deterministic, degenerate-safe rule (well-defined for 0 or >1 fixed
+        // bodies). Each orbiting body's gravitational parameter is then
+        // mu = G_CANONICAL * (M_central + body.mass), so a heavier star (or a
+        // heavier body) gives a faster/tighter orbit. With one unit-mass star and
+        // a massless body this reduces to the old hardcoded mu = G_CANONICAL.
+        let m_central: f64 = bodies
+            .iter()
+            .filter(|b| b.elements.a < KEPLER_A_EPSILON)
+            .map(|b| b.mass)
+            .sum();
 
         let mut pos = Vec::with_capacity(bodies.len());
         let mut vel = Vec::with_capacity(bodies.len());
@@ -62,6 +73,9 @@ impl Ephemeris {
                     vcol.push(Vec3::ZERO);
                 }
             } else {
+                // Per-body gravitational parameter: the central star(s) plus this
+                // body's own mass (two-body relative motion). Heavier => faster.
+                let mu = G_CANONICAL * (m_central + body.mass);
                 // Mean motion n = sqrt(mu / a^3). Computed ONCE per body.
                 let n_motion = (mu / (e.a * e.a * e.a)).sqrt();
                 for k in 0..n_samples {
@@ -256,11 +270,71 @@ mod tests {
         }
     }
 
+    /// MASS-DRIVES-OWN-ORBIT (jumpgate-fca8c9e0c0). Two scenes that differ ONLY in
+    /// the central star's mass; an identical massless orbiter (a=1, e=0, mass=0) is
+    /// at index 0 in both. For a circular orbit |v| = sqrt(mu/a) and mean motion
+    /// n ∝ sqrt(mu), with mu = G_CANONICAL*(M_central + m_body). So the heavier
+    /// star MUST give the planet a strictly larger speed / mean motion (shorter
+    /// period). On the OLD hardcoded `mu = G_CANONICAL` both scenes are identical
+    /// and this fails; after the fix B (M=2) strictly exceeds A (M=1). Read via the
+    /// public `body_vel` and `body_pos` surfaces, so it genuinely depends on mass.
+    #[test]
+    fn heavier_central_star_gives_faster_tighter_orbit() {
+        let dt = Dt::new(1.0);
+        let window = 30u64;
+        let orbiter = circular_body(); // a=1, e=0, mass=0 — identical in both scenes
+
+        let star = |mass: f64| BodyInit {
+            mass,
+            elements: OrbitalElements {
+                a: 0.0,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
+        };
+
+        // Orbiter at index 0; only the star's mass differs between the scenes.
+        let scene_a = Ephemeris::precompute(&[orbiter.clone(), star(1.0)], dt, window);
+        let scene_b = Ephemeris::precompute(&[orbiter, star(2.0)], dt, window);
+
+        // |v| for a circular orbit equals sqrt(mu/a); mu_B = 2*mu_A => |v_B| > |v_A|.
+        let speed_a = scene_a.body_vel(0, Tick(0)).length();
+        let speed_b = scene_b.body_vel(0, Tick(0)).length();
+        assert!(
+            speed_b > speed_a * (1.0 + 1e-6),
+            "heavier star must give the planet a strictly larger orbital speed \
+             (mass ignored?): |v_A|={speed_a}, |v_B|={speed_b}"
+        );
+
+        // Mean motion (angle swept from tick 0) is ∝ sqrt(mu): the heavier-star
+        // planet sweeps a strictly larger angle over the same window => shorter
+        // period. Both start at (1,0,0) so this is the swept angle from periapsis.
+        let ang = |eph: &Ephemeris| -> f64 {
+            let p0 = eph.body_pos(0, Tick(0)).normalize_or_zero();
+            let pk = eph.body_pos(0, Tick(window)).normalize_or_zero();
+            p0.dot(pk).clamp(-1.0, 1.0).acos()
+        };
+        let ang_a = ang(&scene_a);
+        let ang_b = ang(&scene_b);
+        assert!(
+            ang_b > ang_a * (1.0 + 1e-6),
+            "heavier star must sweep a strictly larger angle (faster mean motion / \
+             shorter period): ang_A={ang_a}, ang_B={ang_b}"
+        );
+    }
+
     #[test]
     fn circular_orbit_constant_radius() {
         let dt = Dt::new(1.0);
         let window = 400u64; // ~ a bit more than one 365-day orbit
-        let eph = Ephemeris::precompute(&[circular_body()], dt, window);
+        // Orbiter at index 0 (mass 0) + central star at index 1: under the
+        // mu = G*(M_central + m_body) rule the lone (M_central=0, m=0) scene would
+        // give mu=0 and freeze the body, making this a tautology — the star pins
+        // M_central=1.0 so mu=G_CANONICAL and the body actually orbits.
+        let eph = Ephemeris::precompute(&[circular_body(), central_star()], dt, window);
         let r0 = eph.body_pos(0, Tick(0)).length();
         assert!((r0 - 1.0).abs() < 1e-9, "initial radius {r0} != 1 AU");
         for t in 0..=window {
@@ -275,7 +349,9 @@ mod tests {
     #[test]
     fn subtick_endpoints_match_samples() {
         let dt = Dt::new(1.0);
-        let eph = Ephemeris::precompute(&[circular_body()], dt, 10);
+        // Star at index 1 gives M_central=1.0 so the index-0 orbiter actually moves
+        // (mu = G*(1.0+0.0) = G_CANONICAL) rather than freezing at mu=0.
+        let eph = Ephemeris::precompute(&[circular_body(), central_star()], dt, 10);
         let p_t = eph.body_pos(0, Tick(3));
         let p_t1 = eph.body_pos(0, Tick(4));
         let at0 = eph.body_pos_subtick(0, Tick(3), 0.0);
@@ -288,7 +364,9 @@ mod tests {
     fn precompute_is_bit_identical() {
         let dt = Dt::new(0.5);
         let window = 200u64;
-        let bodies = [circular_body()];
+        // Star at index 1 (M_central=1.0) so the index-0 orbiter actually moves
+        // under the mu = G*(M_central + m_body) rule (else mu=0 freezes it).
+        let bodies = [circular_body(), central_star()];
         let a = Ephemeris::precompute(&bodies, dt, window);
         let b = Ephemeris::precompute(&bodies, dt, window);
         for t in 0..=window {
@@ -357,7 +435,9 @@ mod tests {
     fn lookup_past_window_clamps_to_last_sample() {
         let dt = Dt::new(1.0);
         let window = 5u64;
-        let eph = Ephemeris::precompute(&[circular_body()], dt, window);
+        // Star at index 1 (M_central=1.0) so the index-0 orbiter actually moves
+        // under the mu = G*(M_central + m_body) rule (else mu=0 freezes it).
+        let eph = Ephemeris::precompute(&[circular_body(), central_star()], dt, window);
         let last = eph.body_pos(0, Tick(window));
         let past = eph.body_pos(0, Tick(window + 1000));
         assert_eq!(
@@ -398,9 +478,15 @@ mod tests {
         let window = 100u64; // a ~ 1 AU => period ~365 d; 100 d sweeps ~100 deg
         let a = 1.0_f64;
         let e = 0.3_f64;
-        // mu convention matches kepler_state: n = sqrt(mu/a^3) with mu = G_CANONICAL
-        // (central mass M_sun = 1 folded in). vis-viva: v^2 = mu*(2/r - 1/a).
-        let mu = G_CANONICAL;
+        // This scene has NO fixed (a<eps) body, so M_central = 0; the orbiting
+        // body carries mass 1.0. The expected mu is DERIVED FROM THE SAME RULE the
+        // production code uses — mu = G_CANONICAL * (M_central + m_body) — so the
+        // vis-viva check holds against the rule, not a divorced constant. Here that
+        // is G_CANONICAL * (0.0 + 1.0) = G_CANONICAL exactly, so the numbers are
+        // unchanged from before the mass-driven-orbit fix. vis-viva: v^2 = mu*(2/r - 1/a).
+        let m_central = 0.0_f64; // no a<KEPLER_A_EPSILON body in this scene
+        let m_body = 1.0_f64; // inclined_eccentric_body().mass
+        let mu = G_CANONICAL * (m_central + m_body);
         let r_peri = a * (1.0 - e); // 0.7 AU
         let r_apo = a * (1.0 + e); // 1.3 AU
 
