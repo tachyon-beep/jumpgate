@@ -25,6 +25,7 @@ pub mod contract;
 pub mod stores;
 pub mod ephemeris;
 pub mod integrator;
+pub mod ship;
 
 // Crate-root re-export surface. Downstream tasks (and the jumpgate-py facade)
 // import seam/physics/config types through `jumpgate_core::{...}` rather than
@@ -44,6 +45,7 @@ pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC};
 pub use ids::{BodyId, CraftId, SlotMap};
 pub use math::{Vec3, G_CANONICAL};
 pub use rng::{RngStream, RngStreams};
+pub use ship::thrust_accel_and_burn;
 pub use stores::{effective_params, BodyStore, Effective, NavState, ShipStore};
 pub use time::{sim_time, Dt, Tick};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, Target};
