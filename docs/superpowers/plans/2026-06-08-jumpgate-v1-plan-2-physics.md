@@ -7,7 +7,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop. Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 **This plan covers Tasks 7–9.** Prerequisite: Plan 1 complete.
 
@@ -21,7 +21,7 @@ Precompute body positions+velocities over the tick window from classical orbital
 
 **CROSS-TASK CONTRACT SURFACE (systemic rule, applied here).** Per the workspace contract-surface document produced before Task 3, the task that PROVIDES a symbol must define every method any downstream task calls AND cover those methods in its own test suite. Task 7 is the sole provider of `Ephemeris`. Downstream callers (Task 9 `VelocityVerlet`/`gravity_accel`, Task 10 `World`/`StateView::body_pos`) call exactly three methods: `Ephemeris::precompute`, `Ephemeris::body_pos`, `Ephemeris::body_pos_subtick`. All three are defined here and all three are exercised by this task's tests (including the `a = 0.0` central-body case and the clamp-past-window case). Do not let a downstream task add an `Ephemeris` method without adding it (and its test) here.
 
-**Depends on Task 6** (which must already provide, in `jumpgate-core`): `math.rs` with `Vec3` + `G_CANONICAL`; `time.rs` with `Tick(u64)` and `Dt` (`Dt::get`, `Dt::bits`); `config.rs` (created earlier in the acyclic sequence math → time → types → ids → config → contract → stores) with `OrbitalElements { a, e, i, raan, argp, m0 }` and `BodyInit { mass, elements }`. This task does not redefine any of those — it imports them. It also does NOT touch `hash.rs`: `Ephemeris` tables are derived from `tick` and are not themselves appended to the per-tick state hash (only craft state + the SlotMap cursor are, per the HASH_FIELD_ORDER spec), so this task introduces no new hashed field and the golden-hash test is unaffected.
+**Depends on Task 6** (which must already provide, in `jumpgate-core`): `math.rs` with `Vec3` + `G_CANONICAL`; `time.rs` with `Tick(u64)` and `Dt` (`Dt::get`, `Dt::bits`); `config.rs` (created earlier in the canonical acyclic sequence math → time → ids → types → config → hash → rng → contract → stores; `ids` BEFORE `types`) with `OrbitalElements { a, e, i, raan, argp, m0 }` and `BodyInit { mass, elements }`. This task does not redefine any of those — it imports them. It also does NOT touch `hash.rs`: `Ephemeris` tables are derived from `tick` and are not themselves appended to the per-tick state hash (only craft state + the SlotMap cursor are, per the HASH_FIELD_ORDER spec), so this task introduces no new hashed field and the golden-hash test is unaffected.
 
 Files:
 - Create: `crates/jumpgate-core/src/ephemeris.rs`
@@ -492,15 +492,15 @@ Velocity-Verlet (two-eval moving field) and RK4 as **impls of the `Integrator` t
 - `VelocityVerlet` (struct), `Rk4` (struct) — owned by this task
 - `pub fn substep_count(total_accel_mag: f64, cfg: SubstepCfg) -> u32` — owned by this task
 - `pub fn gravity_accel(p: Vec3, body_positions: &[(Vec3, f64)], softening: f64) -> Vec3` — owned by this task
-- `SubstepCfg { pub accel_ref: f64, pub max_substeps: u32 }` (defined in `config.rs`, Task 7)
+- `SubstepCfg { pub accel_ref: f64, pub max_substeps: u32 }` (defined in `config.rs`, Task 3 — already built)
 - `Vec3`, `G_CANONICAL` (from `math.rs`)
 
-> **CONTRACT AMENDMENT (carried from the substep-redesign fix, originates in Task 7):** the `SubstepCfg` field formerly named `accel_bin_base: f64` is renamed to `accel_ref: f64` and re-typed in MEANING from "log base" to "reference acceleration in AU/day²". The log base is now FIXED at 2 inside `substep_count`. Task 7 defines `SubstepCfg { pub accel_ref: f64, pub max_substeps: u32 }`; Tasks 8/15/17 consume `accel_ref`. This task assumes that amended definition is already in `config.rs`.
+> **FIELD CONTRACT (settled in the plan-1 lock review):** `SubstepCfg.accel_ref: f64` in `config.rs` is a **reference acceleration in AU/day²**, NOT a log base — the log base is FIXED at 2 inside `substep_count`. The locked `config.rs` field was renamed `accel_bin_base → accel_ref` (hash-neutral: the f64 value is hashed, not the field name) so the name matches this meaning; Tasks 8/15/17 consume `accel_ref`. The definition already exists in `config.rs`; this task only consumes it.
 
 **Design notes (load-bearing — read before coding):**
 - `gravity_accel` uses the SOFTENED kernel `G·M / (r² + ε²)^1.5` summed over all bodies. A hard distance cutoff is FORBIDDEN (it is a force discontinuity that itself causes artifacts). `body_positions: &[(Vec3, f64)]` is `(body_position, body_mass)`. The acceleration contribution from one body is `G_CANONICAL * M * d / (|d|² + ε²)^1.5` where `d = body_pos − p`.
 - The `Integrator::step_craft` closure signature is `&dyn Fn(Vec3, f64) -> Vec3` where the first arg is a candidate position and the second is `sub_t` (the sub-tick time offset, in DAYS, from the start of the tick). The closure returns TOTAL local acceleration (gravity + thrust) at that `(pos, sub_t)`. The integrator calls this closure; it does not compute gravity or thrust itself.
-- VelocityVerlet MUST sample the field at BOTH `t_n` and `t_{n+1}` (it calls `accel_at` at the start-of-substep position/time AND at the end-of-substep position/time). A single-eval implementation silently degrades to O(dt) — tag this in a code comment so the collapse cannot be reintroduced.
+- VelocityVerlet MUST sample the field at BOTH `t_n` and `t_{n+1}` (it calls `accel_at` at the start-of-substep position/time AND at the end-of-substep position/time). A single-eval implementation silently degrades to O(dt). **The guard is a TEST, not a comment** (spec §5.2/§8): Step 12 (the coast-arc test) uses an *autonomous* field and so passes a single-eval impl false-green; Step 12b adds the *moving-field convergence-order* test that actually catches the collapse (halve `dt` ⇒ Verlet global error must drop ~4×, not ~2×). Tag it in a comment too, but the test is what enforces it.
 - **substep_count is a REFERENCE-ACCELERATION schedule, not a log-base-binning one.** `n = 1 + floor(log2(max(1.0, mag / accel_ref)))`, clamped to `[1, max_substeps]`. `accel_ref` is a physical reference acceleration in AU/day². At/below `accel_ref`, exactly 1 substep; every doubling of `mag` above `accel_ref` adds exactly one substep. **Why this and not `floor(ln(ratio)/ln(base))`:** all production configs use a reference acceleration `< 1`; with the old log-base form `floor(ln(ratio)/ln(base))` goes NEGATIVE for every realistic acceleration, pinning `n` to 1 always — a false-green where the only test showing `n>1` used `base=10.0`, a regime never deployed. With `accel_ref = 1e-4`, a craft at 1 AU from a 1 M_sun body (`g ≈ 2.96e-4`) gets `n=2`; at 0.1 AU (`g ≈ 2.96e-2`) gets `n=9`. This is what makes Task 15's energy-blowup test actually exercise substepping.
 
 ---
@@ -1001,12 +1001,72 @@ Velocity-Verlet (two-eval moving field) and RK4 as **impls of the `Integrator` t
   ```
   EXPECTED: PASSES (both integrators implemented). If the gap exceeds tolerance, raise `n` in the test (both must use the same `n`); do NOT loosen below a coarse 1e-3 without re-deriving — a large gap signals a real integrator bug.
 
+  > **NOTE (spec §5.2/§8): Step 12 cannot catch a single-eval Verlet.** Its field is autonomous (`|p, _t| gravity_accel(...)`, `_t` discarded, body fixed), so a one-eval Verlet lands within `1e-3` of RK4 and passes false-green. The actual guard is Step 12b below.
+
+- [ ] **Step 12b: Add the moving-field convergence-order test (the two-eval Verlet guard).**
+
+  This is the test the spec's "two-eval is a tested invariant" requirement (§5.2/§8) maps to. The attractor MOVES during the tick (field is genuinely time-dependent), so a single-eval Verlet — which silently degrades to semi-implicit Euler (first order) — is distinguishable from the correct two-eval form (second order) by *convergence rate*: halving `dt` drops a 2nd-order method's global error ~4×, a 1st-order method's only ~2×.
+
+  > **UNVERIFIED DESIGN SKETCH — validate it, do not just tune bounds.** The code below was authored, not executed. The *concept* is sound (single-eval ⇒ first order ⇒ ratio ~2; two-eval ⇒ second order ⇒ ratio ~4), but whether these specific scales (`total=4.0`, `dt = total/{64,128}`, these positions/velocities/`bvel`) land in the asymptotic regime where the ratio cleanly separates 4 from 2 is NOT confirmed — at large `dt` the ratio can be anything. Before pinning the bound, confirm empirically that the correct two-eval Verlet yields ratio ≳ 3.5 AND a deliberately-broken single-eval yields ratio ≲ 2.5 at the chosen scales (shrink `dt` / lengthen the arc until it does). The invariant is "the test SEPARATES 2nd- from 1st-order," not the literal constants.
+
+  ```rust
+  #[test]
+  fn verlet_is_second_order_in_a_moving_field() {
+      let m = 1.0_f64;
+      let softening = 1.0e-6_f64;
+      // Attractor drifts during the tick => `accel_at` truly depends on sub_t (days).
+      let bvel = Vec3::new(0.2, 0.0, 0.0);
+      let field = |p: Vec3, t: f64| {
+          let body = Vec3::new(-0.5, 0.3, 0.0).add(bvel.scale(t));
+          gravity_accel(p, &[(body, m)], softening)
+      };
+      let pos0 = Vec3::new(1.0, 0.0, 0.0);
+      let vel0 = Vec3::new(0.0, 0.9, 0.0);
+      let verlet = VelocityVerlet;
+      let rk4 = Rk4;
+      let total = 4.0_f64;
+
+      // High-resolution RK4 reference (fine fixed step, n=1), carrying a tick clock.
+      let mut rref = (pos0, vel0);
+      let ref_steps = 4096u32;
+      let h = total / ref_steps as f64;
+      let mut t0 = 0.0_f64;
+      for _ in 0..ref_steps {
+          let f = |p: Vec3, st: f64| field(p, t0 + st);
+          rref = rk4.step_craft(rref.0, rref.1, &f, h, 1);
+          t0 += h;
+      }
+
+      // Verlet global error at dt and dt/2; the ratio is the order signal.
+      let err = |steps: u32| {
+          let dt = total / steps as f64;
+          let mut s = (pos0, vel0);
+          let mut tt = 0.0_f64;
+          for _ in 0..steps {
+              let f = |p: Vec3, st: f64| field(p, tt + st);
+              s = verlet.step_craft(s.0, s.1, &f, dt, 1);
+              tt += dt;
+          }
+          s.0.sub(rref.0).length()
+      };
+      let ratio = err(64) / err(128);
+      // 2nd order => ~4x; a single-eval (O(dt)) Verlet gives ~2x and trips this.
+      assert!(ratio > 3.0, "verlet convergence ratio {} (want ~4; <3 = collapsed to first order)", ratio);
+  }
+  ```
+
+  Run:
+  ```
+  cargo test -p jumpgate-core integrator::tests::verlet_is_second_order -- --nocapture
+  ```
+  EXPECTED: PASSES for the correct two-eval `VelocityVerlet`. If a refactor reduces `step_craft` to one field evaluation per substep, `ratio` falls toward ~2 and this FAILS. Do NOT loosen the `> 3.0` bound to make a one-eval impl pass — fix the integrator.
+
 - [ ] **Step 13: Run the full integrator test set and clippy.**
 
   ```
   cargo test -p jumpgate-core integrator -- --nocapture
   ```
-  EXPECTED: `test result: ok. 6 passed` (gravity_softened, substep_count_reference_accel_grounded, verlet_coast, rk4_coast, near_circular, verlet_and_rk4).
+  EXPECTED: `test result: ok. 7 passed` (gravity_softened, substep_count_reference_accel_grounded, verlet_coast, rk4_coast, near_circular, verlet_and_rk4, verlet_is_second_order).
 
   ```
   cargo clippy -p jumpgate-core --all-targets -- -D warnings

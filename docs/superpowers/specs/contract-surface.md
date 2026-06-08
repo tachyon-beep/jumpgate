@@ -40,14 +40,15 @@ reconciliation explicitly here and in the module declaration order in `lib.rs`.
 | `G_CANONICAL` | Task 2 (`math`) | const | integrator, ephemeris |
 | `Tick`,`Dt`,`sim_time` | Task 3 (`time`) | `Tick(u64)`; `Dt::new/get/bits`; `sim_time(Tick,Dt)` | config, hash, world, ephemeris, events, replay |
 | `CraftId`,`BodyId` | Task 3 (`ids`) | tuple `{slot,gen}`; `Ord`/`Hash` derives | types, stores, contract, world, hash, py |
-| `SlotMap<T>` | Task 3 (`ids`) | `new`,`len`,`is_empty`,`cursor`,`insert`,`get`,`remove`,`gen_of` | stores, world; `cursor()` is HASHED state |
+| `SlotMap<T>` | Task 3 (`ids`) | `new`,`len`,`is_empty`,`cursor`,`insert`,`get`,`remove`,`gen_of`,`dense_index`,`id_at` | stores, world; `cursor()` is HASHED state |
 | `Lod` | Task 3 (`types`) | `Player`/`NpcInteraction`/`Nothing` | stores (`lod:Vec<Lod>`), contract, world dispatch |
 | `EntityRef`,`Target`,`NavDest`,`CommandKind` | Task 3 (`types`) | enum variants | contract (`Command`,`Event`), stores (`NavState`), ingest |
 | `BaseSpec`,`OrbitalElements`,`BodyInit`,`CraftInit`,`SubstepCfg`,`RunConfig`,`ConfigHash` | Task 3 (`config`) | `RunConfig::config_hash`; field access | world::reset, ephemeris, replay, py |
 | `FnvHasher`,`HASH_MAGIC`,`HASH_FORMAT_VERSION`,`HASH_FIELD_ORDER` | Task 3 (`hash`) | `new`,`write_u64`,`finish`; consts; canonical order | Task 13 `state_hash`, replay, world |
 | `RngStreams`,`RngStream` | Task 5 (`rng`) | `from_master`,`stream` | world |
-| `Command`,`Event`,`EventKind`,`command_sort_key`,`Integrator`,`StateView`,`Observer`,`FullObserver`,`View` | Task 6 (`contract`) | one definition each | integrator, ingest, events, world, py |
+| `Command`,`Event`,`EventKind`,`command_sort_key`,`Integrator`,`StateView` | Task 6 (`contract`) | one definition each | integrator, ingest, events, world, py |
 | `NavState`,`ShipStore`,`BodyStore`,`Effective`,`effective_params` | Task 4 (`stores`) | field access; `effective_params(&BaseSpec)` | world, integrator, autopilot, ship |
+| `World`,`Observer`,`FullObserver`,`View`,`project` | Task 12 (`world`) | `World::{reset,step,project}`; `impl StateView for World`; `View` accessors; `Observer::visible` | ingest, events, replay, py |
 
 ## Hash-ownership invariant
 
@@ -59,3 +60,13 @@ There are TWO distinct FNV-1a hashes, never sharing state or magic:
   Its canonical field order is `HASH_FIELD_ORDER` (Task 3, this task), and ANY
   task that adds a hashed field MUST append to `HASH_FIELD_ORDER`, bump
   `HASH_FORMAT_VERSION`, and update the golden-hash test.
+
+## Canonical-arithmetic invariant (spec §6 FMA decision)
+
+`f64::mul_add` / `f32::mul_add` are **banned in the hashed path** via
+`clippy.toml` `disallowed-methods` (the project resolved spec §6's FMA choice to
+the BAN side, not the mandate side). All hashed-path reductions (the gravity sum
+over bodies, any multi-entity fold) are written as explicit `a * b + c` and
+iterate in a **fixed documented order** (sorted id / stable index) because f64
+add is non-associative — so the canonical arithmetic form is "whatever is
+written", never implementation-dependent fused codegen.

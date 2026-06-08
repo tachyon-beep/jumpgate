@@ -7,7 +7,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop. Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 **This plan covers Tasks 16–18.** Prerequisite: Plan 1, Plan 2, Plan 3 complete.
 
@@ -33,8 +33,8 @@ This is pure Rust and lives in `jumpgate-py` but uses NO PyO3 yet — it is unit
 **Contract types in play:** `View`, `StateView`, `Vec3`, `CraftId`, `write_obs_frame_relative`.
 
 **Preconditions / cross-task dependencies (verify before the commands below run):**
-- `crates/jumpgate-py/Cargo.toml` declares `crate-type = ["cdylib", "rlib"]` and the PyO3 `extension-module` feature is OPTIONAL / non-default. `cargo test -p jumpgate-py` builds the crate; if `extension-module` were forced on, the test binary would fail to link libpython. `obs.rs` itself is PyO3-free by design, so the test target only needs the rlib path. If an earlier task owns that Cargo.toml and this is not yet true, fix it there first (add `rlib` to `crate-type`, gate `extension-module` behind an opt-in feature).
-- The gatherer reads `View` via accessors shaped like the `StateView` contract (`craft_pos`, `craft_vel`, `craft_fuel`, plus a fuel-capacity accessor — `StateView` exposes only fuel *mass*, so capacity must come from `View`'s `Effective`/`BaseSpec`). These accessor NAMES are owned by Task 12's `View`. If Task 12 named them differently, ONLY the gatherer (`write_obs_frame_relative`) rebinds; the tested helper `write_obs_parts` is unaffected. Do not invent a rich `View` API.
+- `crates/jumpgate-py/Cargo.toml` declares `crate-type = ["cdylib", "rlib"]` and enables the PyO3 `extension-module` feature UNCONDITIONALLY (always on, alongside `abi3-py312`): `pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }`. Because `extension-module` suppresses linking libpython, a plain `cargo test -p jumpgate-py` test binary may FAIL to link on Linux (the classic PyO3 gotcha) even though `obs.rs` itself is PyO3-free. This is a real build concern the implementer must resolve — do NOT assume `cargo test` "links without libpython." The pragmatic path: exercise the PURE obs logic (`write_obs_parts`, the `OBS_DIM` layout) via unit tests that do not require the pyo3/libpython link where possible, and exercise the full PyO3 surface through the Python smoke/determinism test (Task 18, via `maturin develop --release` + pytest), which is the linkage-correct path. Do NOT make `extension-module` optional/non-default to dodge this — the locked Cargo.toml keeps it always-on by design.
+- The gatherer reads `View` via accessors shaped like the `StateView` contract (`craft_pos`, `craft_vel`, `craft_fuel`, plus `craft_fuel_capacity` for effective fuel capacity — `StateView` exposes capacity directly via the `craft_fuel_capacity` accessor, the §5.5 effective-param seam, where effective == base in v1; no `View` `Effective`/`BaseSpec` detour is needed, and plan-4's own later step calls `view.craft_fuel_capacity(ego)`). These accessor NAMES are owned by Task 12's `View`. If Task 12 named them differently, ONLY the gatherer (`write_obs_frame_relative`) rebinds; the tested helper `write_obs_parts` is unaffected. Do not invent a rich `View` API.
 
 ---
 
@@ -336,7 +336,7 @@ Build `JumpgateEnv`: a PyO3 `#[pyclass]` holding `Vec<World>` (one per env), tha
 - Per-env seed: `master_seed = seed.wrapping_add(env_idx as u64)` so vectorized envs are distinct and reproducible (a single shared seed would make all envs identical).
 - Flat-buffer index math: per-craft block `base = (env*num_craft + craft)*action_dim` for actions / `*obs_dim` for obs; reward / terminated / truncated are sized `num_envs*num_craft` and indexed `env*num_craft + craft`.
 - Reward: `compute_reward(prev_fuel, cur_fuel, arrived, dt)` = `-(prev_fuel - cur_fuel)` (fuel spent penalty) `- 0.001*dt` (time penalty) `+ if arrived { 1.0 } else { 0.0 }` (task-success bonus, §7.4). All f64, downcast to f32 at the buffer boundary.
-- Config template: `new()` builds a minimal `RunConfig` from contract types — one `BodyInit` (a central star) and `num_craft` identical `CraftInit`. No scenario-builder fn is referenced (none exists in the contract or tasks 14/16). The `SubstepCfg.accel_bin_base` value is calibrated to the redesigned reference-acceleration scale from Task 8: characteristic gravity at 1 AU from a 1 M☉ star is `a = G_CANONICAL·M/r² ≈ 2.96e-4 AU/day²`, so `accel_bin_base = 3.0e-4` keeps the substep count near 1 at cruise and only escalates on close approach. (A value like `1e-6` would saturate `max_substeps` every tick — wrong scale.)
+- Config template: `new()` builds a minimal `RunConfig` from contract types — one `BodyInit` (a central star) and `num_craft` identical `CraftInit`. No scenario-builder fn is referenced (none exists in the contract or tasks 14/16). The `SubstepCfg.accel_ref` value is calibrated to the redesigned reference-acceleration scale from Task 8: characteristic gravity at 1 AU from a 1 M☉ star is `a = G_CANONICAL·M/r² ≈ 2.96e-4 AU/day²`, so `accel_ref = 3.0e-4` keeps the substep count near 1 at cruise and only escalates on close approach. (A value like `1e-6` would saturate `max_substeps` every tick — wrong scale.)
 
 **Files**
 - Create: `crates/jumpgate-py/src/env.rs`
@@ -431,7 +431,7 @@ mod tests {
 }
 ```
 
-Run it (the test crate must link WITHOUT libpython — task 15 keeps `extension-module` a non-default feature, so plain `cargo test` does not pull pyo3's `extension-module`):
+Run it. NOTE: the locked `jumpgate-py/Cargo.toml` enables `extension-module` UNCONDITIONALLY, so this `cargo test -p jumpgate-py` invocation is NOT guaranteed to link as written on Linux — `extension-module` suppresses libpython linking and the test binary may fail to link. Treat this as a real build concern: prefer exercising the pure `decode_action` logic via tests that avoid the pyo3/libpython link where possible, and validate the full env surface through the Python smoke/determinism test (Task 18). Do not assume this command links cleanly out of the box:
 
 ```
 cargo test -p jumpgate-py decode_action -- --nocolor
@@ -559,10 +559,10 @@ fn config_template(num_craft: usize) -> RunConfig {
         master_seed: 0,
         dt: Dt::new(1.0),
         softening: 1.0e-4,
-        // accel_bin_base calibrated to Task-8 reference accel: gravity at 1 AU
+        // accel_ref calibrated to Task-8 reference accel: gravity at 1 AU
         // from 1 M_sun is ~2.96e-4 AU/day^2, so 3.0e-4 keeps substeps near 1 at
         // cruise and escalates only on close approach (not the saturating 1e-6).
-        substep_cfg: SubstepCfg { accel_bin_base: 3.0e-4, max_substeps: 64 },
+        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
         ephemeris_window: 100_000,
         bodies: vec![star],
         craft,
@@ -735,8 +735,10 @@ EXPECTED: `test result: ok. 4 passed; 0 failed`.
 Confirm the `#[pymethods]` FFI surface compiles and links against libpython through maturin, and that the class is importable.
 
 ```
-/home/john/jumpgate/archive/.venv/bin/python -m maturin develop -m crates/jumpgate-py/Cargo.toml
+/home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release -m crates/jumpgate-py/Cargo.toml
 ```
+
+> **`--release` is load-bearing for Tier B (spec §6).** `maturin develop` defaults to a DEBUG build (`codegen-units=256`, `opt-level=0`), which never gets the workspace `[profile.release]` FP-determinism profile (`codegen-units=1`, no fast-math). The cdylib that runs RL training and any core-golden cross-check MUST be the release build, or per-tick hashes pinned from the core release tests will not match the training binary (Tier B is same-binary only). Use a plain debug `maturin develop` only for fast non-determinism iteration; all reproducibility assertions run against `--release`.
 
 EXPECTED: ends with `📦 Built wheel ...` then `🛠 Installed jumpgate-...` and exit code 0.
 
@@ -835,8 +837,10 @@ A `gymnasium.Env` subclass wrapping the native `JumpgateEnv` (from Task 17), plu
   The Python test cannot even import until the compiled extension is installed into the project venv. Build it now (the manifest is passed on the CLI — this is where `-m` belongs, not in `pyproject.toml`):
 
   ```bash
-  /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --manifest-path /home/john/jumpgate/crates/jumpgate-py/Cargo.toml
+  /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release --manifest-path /home/john/jumpgate/crates/jumpgate-py/Cargo.toml
   ```
+
+  > **`--release` is required for the determinism test below.** The same-seed bit-identical obs-sequence assertion (and any core-golden cross-check) is only meaningful on the Tier-B FP profile, which `maturin develop` does NOT apply by default (it builds debug). See spec §6.
 
   EXPECTED: ends with a line containing `Installed jumpgate-0.1.0` (or `🛠 Installed jumpgate`), exit code 0.
 
@@ -846,7 +850,7 @@ A `gymnasium.Env` subclass wrapping the native `JumpgateEnv` (from Task 17), plu
   /home/john/jumpgate/archive/.venv/bin/python -c "from jumpgate._native import JumpgateEnv; e=JumpgateEnv(1,1); print(e.obs_dim, e.action_dim)"
   ```
 
-  EXPECTED: two integers printed (e.g. `13 4`), exit code 0. (The exact values come from Task 17's obs/action schema; record them — call them `OBS_DIM` and `ACTION_DIM` below.)
+  EXPECTED: two integers printed (e.g. `32 4`), exit code 0. (The exact values come from Task 17's obs/action schema; record them — call them `OBS_DIM` and `ACTION_DIM` below.)
 
 - [ ] **Step 3: Write the failing smoke + determinism test (TDD red)**
 
@@ -1107,7 +1111,8 @@ A `gymnasium.Env` subclass wrapping the native `JumpgateEnv` (from Task 17), plu
     unconditionally).
   - pyproject.toml: maturin>=1.12,<2.0 (confirmed toolchain); manifest-path is
     CLI-only, passed to `maturin develop -m`, not a [tool.maturin] key.
-  - Built via `maturin develop --manifest-path crates/jumpgate-py/Cargo.toml`.
+  - Built via `maturin develop --release --manifest-path crates/jumpgate-py/Cargo.toml`
+    (`--release` required: Tier-B FP profile must reach the training cdylib, spec §6).
 
   Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
   EOF

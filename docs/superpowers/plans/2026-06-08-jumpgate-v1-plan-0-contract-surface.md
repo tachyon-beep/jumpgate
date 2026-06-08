@@ -6,7 +6,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop. Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 ---
 
@@ -15,11 +15,11 @@
 Cross-cutting decisions consolidated from the adversarial plan review (architecture/quality/reality/systems panel). They override any task-local drift.
 
 1. **Pinned dependency versions (workspace-wide, exact `=`):** `rand_chacha = "=0.10.0"`, `rand_core = "=0.10.1"`. No other RNG crate. `pyo3 = "0.23"`, `numpy = "0.23"` in `jumpgate-py` only. No `serde`/`glam`/`rayon` anywhere in the hashed path.
-2. **Acyclic module order** (dependency edges, not just declaration order): `math -> time -> ids -> types -> config -> contract -> stores -> ephemeris -> integrator -> ship -> autopilot -> ingest -> events -> hash -> world -> replay`. `ids` precedes `types` because `EntityRef = Craft(CraftId) | Body(BodyId)` and `NavDest = Position(Vec3) | Entity(EntityRef)` reference the id types. Primitive seam enums (`Lod`, `NavDest`) live in `types.rs` (Task 3) so `stores` (Task 4) never forward-imports `contract` (Task 6).
+2. **Acyclic module order** (dependency edges, not just declaration order — this is the ONE canonical DAG; it matches `specs/contract-surface.md` and the committed `lib.rs` `pub mod` order): `math -> time -> ids -> types -> config -> hash -> rng -> contract -> stores -> ephemeris -> integrator -> ship -> autopilot -> ingest -> events -> world -> replay`. `ids` precedes `types` because `EntityRef = Craft(CraftId) | Body(BodyId)` and `NavDest = Position(Vec3) | Entity(EntityRef)` reference the id types. Primitive seam enums (`Lod`, `NavDest`) live in `types.rs` (Task 3) so `stores` (Task 4) never forward-imports `contract` (Task 6). **`hash` is early** here as the *anchor* (`FnvHasher` + `HASH_MAGIC`/`HASH_FORMAT_VERSION`/`HASH_FIELD_ORDER`, Task 3, no deps); the `state_hash(world)` *function* lands in Task 13 and reads `World`, but it adds no new module edge. (Any task body that writes `types -> ids` is stale: that order is uncompilable against the fixed contract.)
 3. **Single-definition rule.** The `Integrator` trait and the `StateView` trait are each defined **exactly once**, in `contract.rs`. All other modules import them from `crate::contract` and write impls only. (Task 8 includes a `grep` guard asserting exactly one `pub trait Integrator`.)
 4. **One canonical FNV-1a field order.** The shared `FnvHasher` + `HASH_MAGIC`/`HASH_FORMAT_VERSION` + numbered `HASH_FIELD_ORDER` anchor lands in `hash.rs` in **Task 3**; **Task 13 modifies that file** to add `state_hash`/`write_store_cursor` and append store fields to the numbered order (it does NOT re-create `hash.rs`). `hash.rs` is the single authority for the per-tick state-hash field ordering over `f64::to_bits()` (little-endian), including the slot-map allocator cursor, behind the `MAGIC + FORMAT_VERSION` header. `config_hash` (Task 3) uses a **deliberately separate local FNV** (same FNV-1a constants/discipline, distinct seed tag) — run-identity hash and per-tick state hash are intentionally never the same hasher. Golden hash constants are filled from the first green run.
 5. **`Lod`/`Wake` is a built v1 must-shape seam** (not a do-not-build item): the `Lod` enum, a `Wake` `EventKind` variant, and a Lod-dispatch branch in `World::step` ship in v1 (single tier implemented; scheduler deferred).
-6. **Determinism floor (every task upholds it):** integer `tick: u64` (`dt` fixed at init, never a `step()` arg); master seed to named separate `ChaCha8Rng` sub-streams; canonical sorted-by-target command application via one ingestion path; replay re-feeds the action log; `clippy` `disallowed-methods` bans `SystemTime`/`Instant::now`/`thread_rng`/`from_entropy`/`env::var`.
+6. **Determinism floor (every task upholds it):** integer `tick: u64` (`dt` fixed at init, never a `step()` arg); master seed to named separate `ChaCha8Rng` sub-streams; canonical sorted-by-target command application via one ingestion path; replay re-feeds the action log; `clippy` `disallowed-methods` bans `SystemTime`/`Instant::now`/`thread_rng`/`from_entropy`/`env::var`, **and `f64::mul_add`/`f32::mul_add`** (spec §6 FMA decision resolved to the BAN side: every hashed-path reduction is explicit `a * b + c` iterated in a fixed documented order, so the canonical arithmetic form is pinned, never implementation-dependent fused codegen).
 
 ---
 
@@ -37,14 +37,15 @@ Cross-cutting decisions consolidated from the adversarial plan review (architect
 │   │       ├── lib.rs              # forbid(unsafe_code); pub re-exports; module wiring; crate-level docs of the contract
 │   │       ├── math.rs             # hand-rolled f64 Vec3 (+ scalar ops, dot, length, norm); units constants (AU, M_sun, day, G_canonical, softening default)
 │   │       ├── ids.rs              # CraftId{slot,gen}, BodyId{slot,gen}; generational slot-map SlotMap<T> with hashable allocator cursor
+│   │       ├── types.rs            # primitive seam enums (Lod, EntityRef, Target, NavDest, CommandKind); no methods; split out so stores.rs resolves them before contract.rs (breaks the stores<->contract cycle)
 │   │       ├── time.rs             # Tick(u64), dt fixed-at-init wrapper, sim_time = tick*dt derivation helper
 │   │       ├── config.rs           # RunConfig (bodies, craft count, per-ship BaseSpec, master seed, dt bits, softening, substep params); ConfigHash compute (FNV-1a over to_bits)
 │   │       ├── rng.rs              # RngStreams: master u64 -> named separate ChaCha8Rng sub-streams via fixed derivation
-│   │       ├── contract.rs         # SHARED CONTRACT: Target/EntityRef, Command/CommandKind/Destination, Event/EventKind, Lod, Integrator trait, StateView trait (signatures; landed early)
+│   │       ├── contract.rs         # SHARED CONTRACT DTOs+traits: Command, command_sort_key, Event/EventKind (incl Wake), Integrator trait, StateView trait (signatures; landed early). Seam enums live in types.rs.
 │   │       ├── stores.rs           # ShipStore (SoA: pos,vel,fuel_mass,nav_state,lod), BodyStore (SoA: orbital elements, ephemeris handles), BaseSpec, effective-param accessor
 │   │       ├── ephemeris.rs        # Kepler-solve-once at init -> integer-tick body position+velocity table; deterministic sub-tick interpolation (linear; cubic-Hermite seam)
-│   │       ├── integrator.rs       # Integrator trait impls: VelocityVerlet (two-eval moving-field, tagged) + RK4 (golden); substep_count(total_accel_mag) pure fn; softening in accel kernel
-│   │       ├── ship.rs             # Tsiolkovsky variable-mass: accel = F/(eff_dry_mass+fuel_mass); fuel consumption by eff exhaust velocity; substep-granular mass update
+│   │       ├── integrator.rs       # Integrator trait impls: VelocityVerlet (two-eval moving-field, gated by a moving-field convergence test — Plan 2) + RK4 (golden); substep_count(total_accel_mag) pure fn (explicit integer quantization, stated rounding); softening in accel kernel; fixed body-sum order
+│   │       ├── ship.rs             # Tsiolkovsky variable-mass: accel = F/(eff_dry_mass+fuel_mass); fuel consumption by eff exhaust velocity; fuel debited ONCE per tick in v1 (thrust tick-constant ⇒ accel_at stays pure Fn); substep-granular mass-bleed deferred
 │   │       ├── autopilot.rs        # deterministic guidance law: reads resolved nav_state field -> per-substep thrust vector; arrival/budget/fuel cutoff
 │   │       ├── ingest.rs           # single ing_command path; canonical total ordering across World/Sim/Entity targets; ActionLog (tick-stamped); lever invariant enforcement
 │   │       ├── events.rs           # EventStream record buffer; emit at tick boundary against quantized state; Arrival + FuelEmpty detectors (no reactivity/bus)
@@ -153,7 +154,7 @@ pub struct RunConfig {
     pub craft: Vec<CraftInit>,
 }
 #[derive(Clone, Copy, Debug)]
-pub struct SubstepCfg { pub accel_bin_base: f64, pub max_substeps: u32 } // N = f(total accel mag)
+pub struct SubstepCfg { pub accel_ref: f64, pub max_substeps: u32 } // N = 1+floor(log2(max(1, mag/accel_ref))), clamped [1,max_substeps]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConfigHash(pub u64);
 impl RunConfig { pub fn config_hash(&self) -> ConfigHash; } // FNV-1a over seed,dt.bits,fields via to_bits
@@ -169,7 +170,8 @@ impl RngStreams {
     pub fn stream(&mut self, which: RngStream) -> &mut rand_chacha::ChaCha8Rng;
 }
 
-// ---- contract.rs  (SHARED; landed early, bodies stubbed) ----
+// ---- types.rs (primitive seam enums: EntityRef/Target/NavDest/CommandKind/Lod; Task 3) ----
+// (split into types.rs so stores.rs resolves them before contract.rs — see convention #2)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntityRef { Craft(CraftId), Body(BodyId) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -181,6 +183,10 @@ pub enum CommandKind {
     /// v1's ONLY variant. burn_budget: optional scalar Δv cap.
     Destination { dest: NavDest, burn_budget: Option<f64> },
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lod { Player, NpcInteraction, Nothing } // v1 implements Player only
+
+// ---- contract.rs  (SHARED DTOs + traits; Task 6; landed early, bodies stubbed) ----
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Command { pub target: Target, pub kind: CommandKind }
 /// Total, deterministic ordering across World/Sim/Entity scopes for canonical apply.
@@ -193,12 +199,14 @@ pub enum EventKind {
     ThrustApplied { craft: CraftId, dv: f64 },
     ActionIngested { target: Target },
     Reward    { craft: CraftId, value: f64 },
+    /// Emitted by the LOD-dispatch seam in `World::step` on a Dormant->Active
+    /// transition (the §3.2 wake hook). Convention #5 v1 must-ship seam.
+    Wake { craft: CraftId },
 }
+/// Keyed by integer `tick` ONLY (fixed-rate clock, spec §3.1). Sub-tick event resolution
+/// is a deliberate future HASH_FORMAT_VERSION epoch — do NOT add a sub_index field in v1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Event { pub tick: Tick, pub kind: EventKind }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Lod { Player, NpcInteraction, Nothing } // v1 implements Player only
 
 /// Verlet needs body pos at BOTH t_n and t_{n+1}; impls take an ephemeris sampler.
 pub trait Integrator {
@@ -219,6 +227,9 @@ pub trait StateView {
     fn craft_pos(&self, id: CraftId) -> Option<Vec3>;
     fn craft_vel(&self, id: CraftId) -> Option<Vec3>;
     fn craft_fuel(&self, id: CraftId) -> Option<f64>;
+    /// Effective fuel capacity, read via `effective_params(&spec).fuel_capacity`
+    /// (NEVER `base_fuel_capacity` — §5.5 effective-param accessor seam).
+    fn craft_fuel_capacity(&self, id: CraftId) -> Option<f64>;
     fn body_ids(&self) -> Vec<BodyId>;
     fn body_pos(&self, id: BodyId, tick: Tick) -> Option<Vec3>;   // derived from tick via ephemeris
     fn recent_commands(&self, since: Tick) -> &[Command];
@@ -236,6 +247,8 @@ pub struct ShipStore {
     pub spec: Vec<BaseSpec>,
     pub nav: Vec<NavState>,
     pub lod: Vec<Lod>,
+    pub prev_fuel: Vec<f64>,          // prior-tick snapshot for edge-triggered events (hashed words 14/15)
+    pub prev_inside_dest: Vec<bool>,  // prior-tick "inside arrival radius" snapshot
 }
 pub struct BodyStore { pub ids: SlotMap<()>, pub mass: Vec<f64>, pub eph_index: Vec<usize> }
 /// effective = base × component-mods × wear; v1 mods/wear = identity (effective==base).
@@ -253,7 +266,7 @@ impl Ephemeris {
 // ---- integrator.rs ----
 pub struct VelocityVerlet;
 pub struct Rk4;
-impl Integrator for VelocityVerlet { /* two body-pos evals per step, tagged moving-field */ }
+impl Integrator for VelocityVerlet { /* two body-pos evals per step; moving-field, convergence-order tested (Plan 2) */ }
 impl Integrator for Rk4 { /* golden/validation */ }
 /// N = pure fn of QUANTIZED total local acceleration magnitude (gravity+thrust); identical on replay.
 pub fn substep_count(total_accel_mag: f64, cfg: SubstepCfg) -> u32;
@@ -305,7 +318,18 @@ impl FnvHasher {
 }
 pub const HASH_MAGIC: u64;
 pub const HASH_FORMAT_VERSION: u32;
-/// canonical order: header, tick, then bodies-then-craft by sorted id, incl SlotMap cursor.
+/// canonical order (v1): a single FLAT FNV-1a stream — header, tick, then bodies then
+/// craft by sorted id, incl each SlotMap cursor (matches the committed hash.rs anchor).
+/// A per-entity sub-digest FOLD is the RESERVED HASH_FORMAT_VERSION upgrade path
+/// (kind-local appends + entity-granular divergence localization), NOT built in v1 (spec §6).
+/// NavState word (field 12) is
+/// DISCRIMINANT-FIRST, FIXED-ARITY-PER-VARIANT and self-delimiting:
+///   Idle    => disc 0
+///   Seeking => disc 1, then NavDest discriminant, then
+///                Position => 3 to_bits words  OR  Entity => (kind,slot,gen) triple,
+///              then dv_remaining.to_bits()
+/// (folding the NavDest discriminant is what makes Position(x,0,0) != Entity(slot=x);
+///  burn_budget is NOT hashed here — it lives on CommandKind / the action log.)
 pub fn state_hash(world: &World) -> u64;
 
 // ---- replay.rs ----

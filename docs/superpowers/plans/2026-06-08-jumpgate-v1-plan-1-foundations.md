@@ -7,7 +7,7 @@
 
 **Architecture:** Two crates: a pure-Rust `jumpgate-core` (`#![forbid(unsafe_code)]`) that is the sole authoritative writer (SoA stores, tick-indexed ephemeris, velocity-Verlet behind an Integrator trait with accel-keyed integer substepping, Tsiolkovsky variable-mass craft, autopilot guidance, one typed Command/Target ingestion path, a typed Event stream, FNV-1a state hashing, and log-replay), and a `jumpgate-py` PyO3 cdylib facade that writes frame-relative f32 observations into caller-provided buffers and presents the Gymnasium 5-tuple. All facades read through one `StateView` trait that exposes command+event history, not just physics; the engine is shaped (Target sum, Event typing, observer-parameterized projection, effective-param accessor, slot-map ids, Lod seam) so combat/upgrades/fog-of-war drop in without a contract break.
 
-**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop. Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
+**Tech Stack:** Rust 2021 edition (rustc/cargo 1.95; edition 2021 is deliberate — `gen` is a reserved keyword in edition 2024 but is used as a struct field in `CraftId`/`BodyId`/slot-map generations); jumpgate-core deps: rand_chacha (pinned, ChaCha8Rng) + rand_core only; no serde/glam/rayon in the hashed path; hand-rolled f64 Vec3. jumpgate-py: pyo3 0.23 + numpy 0.23 (abi3-py312, extension-module). Build via /home/john/jumpgate/archive/.venv/bin/python -m maturin develop --release (the `--release` is REQUIRED so the Tier-B FP determinism profile reaches the training cdylib — `maturin develop` defaults to a debug build; see spec §6). Python test deps already present: gymnasium 1.2.3, numpy 2.4.6, torch 2.9.1. Workspace-root clippy.toml with disallowed-methods. FNV-1a hashing hand-rolled over f64::to_bits little-endian.
 
 **This plan covers Tasks 1–6.** Prerequisite: (none — start here, after Plan 0).
 
@@ -427,7 +427,7 @@ Carry-forward for later tasks:
 - The `scaffold_ok()` fns in both crates are placeholders to be deleted as real modules land (math.rs first, etc.); the `_native` module name and `python-source = "../../python"` are now load-bearing contract points the gym-binding task must not rename.
 - The rand 0.10 family pin and the `Rng` (not `RngCore`) trait + `from_seed`/`seed_from_u64` API are the SINGLE source of truth: Task 5 (rng.rs) writes against this API and runs NO `cargo update --precise` re-pin; Tasks 6/7-12/14/17 must use 0.10 idioms.
 - The `rand` dev-dep + `lint_activation_canary` module are load-bearing: do not remove them without re-proving the entropy ban another way.
-- Module-ordering rule for every later task: `lib.rs` declares `pub mod` ONLY for files that exist at that task's completion. The acyclic target order is `math -> time -> types -> ids -> config -> contract -> stores -> ...` (the seam primitives `Lod`/`NavDest`/`Target`/`EntityRef`/`CommandKind` live in a `types.rs` created BEFORE `stores.rs` consumes them and BEFORE `contract.rs` builds traits on them). A standalone cross-task contract-surface document (every type/method/const that crosses a task boundary, with the providing task obligated to define+test each downstream-called method) is produced BEFORE Task 3; it governs the SlotMap / ShipStore / View-accessor / commands_flat surfaces. The `Integrator` trait is defined exactly ONCE in `contract.rs`; `integrator.rs` writes only `impl crate::contract::Integrator for ...` (no second trait, no re-export). The FNV-1a hash has a single authoritative `HASH_FIELD_ORDER` enumeration + `HASH_VERSION` const + a golden zero-state hash test (so the Task 11 prev_fuel/prev_inside_dest additions can't silently shift the hash). The `Lod` seam ships exercised: a `Wake` `EventKind` variant + a (trivial) Lod-dispatch branch in `World::step`. None of these belong in Task 1 — listed here so the providing tasks honor them.
+- Module-ordering rule for every later task: `lib.rs` declares `pub mod` ONLY for files that exist at that task's completion. The acyclic target order is `math -> time -> ids -> types -> config -> hash -> rng -> contract -> stores -> ...` (`ids` BEFORE `types` — the canonical DAG in `contract-surface.md` / plan-0 conv #2; `types.rs` references `CraftId`/`BodyId`. The seam primitives `Lod`/`NavDest`/`Target`/`EntityRef`/`CommandKind` live in a `types.rs` created BEFORE `stores.rs` consumes them and BEFORE `contract.rs` builds traits on them). A standalone cross-task contract-surface document (every type/method/const that crosses a task boundary, with the providing task obligated to define+test each downstream-called method) is produced BEFORE Task 3; it governs the SlotMap / ShipStore / View-accessor / commands_flat surfaces. The `Integrator` trait is defined exactly ONCE in `contract.rs`; `integrator.rs` writes only `impl crate::contract::Integrator for ...` (no second trait, no re-export). The FNV-1a hash has a single authoritative `HASH_FIELD_ORDER` enumeration + `HASH_VERSION` const + a golden zero-state hash test (so the Task 11 prev_fuel/prev_inside_dest additions can't silently shift the hash). The `Lod` seam ships exercised: a `Wake` `EventKind` variant + a (trivial) Lod-dispatch branch in `World::step`. None of these belong in Task 1 — listed here so the providing tasks honor them.
 
 
 ---
@@ -1318,7 +1318,9 @@ This task does five things:
   /// N substeps = pure fn of QUANTIZED total local acceleration magnitude (Task 7).
   #[derive(Clone, Copy, Debug)]
   pub struct SubstepCfg {
-      pub accel_bin_base: f64,
+      /// Reference acceleration (AU/day²) for the substep schedule, NOT a log base:
+      /// `substep_count` (Task 8) uses `n = 1 + floor(log2(max(1, mag/accel_ref)))`.
+      pub accel_ref: f64,
       pub max_substeps: u32,
   }
 
@@ -1359,7 +1361,7 @@ This task does five things:
               master_seed: 42,
               dt: Dt::new(0.5),
               softening: 1e-4,
-              substep_cfg: SubstepCfg { accel_bin_base: 2.0, max_substeps: 64 },
+              substep_cfg: SubstepCfg { accel_ref: 2.0, max_substeps: 64 },
               ephemeris_window: 10_000,
               bodies: vec![BodyInit {
                   mass: 1.0,
@@ -1513,7 +1515,7 @@ This task does five things:
           h.write_u64(self.master_seed);
           h.write_u64(self.dt.bits());
           h.write_u64(self.softening.to_bits());
-          h.write_u64(self.substep_cfg.accel_bin_base.to_bits());
+          h.write_u64(self.substep_cfg.accel_ref.to_bits());
           h.write_u64(self.substep_cfg.max_substeps as u64);
           h.write_u64(self.ephemeris_window);
           // Counts folded BEFORE field values so cardinality changes always move
@@ -1869,7 +1871,7 @@ This task does five things:
 
 A deterministic generational `SlotMap<T>` with a hashable `cursor()` plus the dense-index navigation methods (`iter_ids`/`dense_index`/`id_at`) that Tasks 10–13 read through, the `CraftId`/`BodyId` id types, and the `ShipStore`/`BodyStore` SoA layouts with their constructor/accessor impl blocks (`empty`/`push`/`ids_at`/`index_of`/`craft_pos_by_id`/`craft_fuel_capacity`) plus the `effective_params` accessor (v1: `effective == base`). Strict TDD: every behavior gets a failing test first, run-it-fails, minimal impl, run-it-passes.
 
-**Depends on Task 3.** Task 3 lands the crate skeleton `crates/jumpgate-core` (`Cargo.toml` + `lib.rs`) with the `math.rs`, `time.rs`, `types.rs`, and `config.rs` modules. This task consumes `Vec3` (from `math.rs`), `BaseSpec` (from `config.rs`), and the seam types `NavDest` / `Lod` (from `types.rs` — the primitive-seam module created in Task 3 per the acyclic ordering `math -> time -> types -> ids -> config -> contract -> stores`). Those names/signatures are taken verbatim from the shared type contract; do not redefine them here. NOTE: `contract.rs` does NOT exist yet (it is built in Task 6, AFTER this task) — do not import from `crate::contract` anywhere in Task 4, and do not declare `pub mod contract` in `lib.rs` at this task's exit.
+**Depends on Task 3.** Task 3 lands the crate skeleton `crates/jumpgate-core` (`Cargo.toml` + `lib.rs`) with the `math.rs`, `time.rs`, `types.rs`, and `config.rs` modules. This task consumes `Vec3` (from `math.rs`), `BaseSpec` (from `config.rs`), and the seam types `NavDest` / `Lod` (from `types.rs` — the primitive-seam module created in Task 3 per the canonical acyclic ordering `math -> time -> ids -> types -> config -> hash -> rng -> contract -> stores`, `ids` BEFORE `types`). Those names/signatures are taken verbatim from the shared type contract; do not redefine them here. NOTE: `contract.rs` does NOT exist yet (it is built in Task 6, AFTER this task) — do not import from `crate::contract` anywhere in Task 4, and do not declare `pub mod contract` in `lib.rs` at this task's exit.
 
 **Cross-task contract surface this task PROVIDES** (every downstream caller's needs must be defined and tested HERE):
 - `SlotMap<T>`: `new`/`len`/`is_empty`/`cursor`/`insert`/`get`/`remove` (existing) + `iter_ids` (live `(slot,gen)` iterator), `dense_index(slot,gen) -> Option<usize>`, `id_at(idx) -> Option<(u32,u32)>`. None-on-stale-gen semantics for all three. Consumed by Tasks 10–13.
