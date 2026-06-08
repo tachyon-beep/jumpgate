@@ -103,16 +103,26 @@ impl Ephemeris {
     }
 
     /// Deterministic sub-tick position between sample `tick` and `tick+1`.
-    /// `frac` MUST be in `[0, 1]` — this is a caller-guaranteed contract (the
-    /// Task-8 integrator advances `frac` strictly within a single tick). Values
-    /// outside the range would silently EXTRAPOLATE and launder a wrong position
-    /// into the state hash, so a `debug_assert` traps a caller bug in dev/test
-    /// builds (deliberately not a silent clamp, which would mask the bug).
+    /// `frac` is nominally in `[0, 1]`, but may overshoot `1.0` by ~1 ULP: the
+    /// Task-8 integrator accumulates substep time as `t += h` with `h = dt/n`,
+    /// so for non-power-of-2 substep counts `n` (e.g. n ∈ {9, 11, 18, 20, ...})
+    /// the final `t` lands at `dt + ~1 ULP` and the World closure forms
+    /// `frac = (t+h)/dt = 1.0000000000000002`. That overshoot is deterministic
+    /// and semantically means "the tick endpoint", so this accessor CLAMPS
+    /// `frac` to `[0, 1]` (the next-sample endpoint) before interpolating —
+    /// correct AND deterministic. The `debug_assert` is a tolerance band that
+    /// still traps GROSS contract violations while tolerating the ~1-ULP slop.
     /// SEAM: cubic-Hermite drops in here using `self.vel[body_idx][i]` and
     /// `self.vel[body_idx][i+1]` (Hermite basis on `dt.get()` days) without
     /// changing this signature or any caller.
     pub fn body_pos_subtick(&self, body_idx: usize, tick: Tick, frac: f64) -> Vec3 {
-        debug_assert!((0.0..=1.0).contains(&frac), "frac must be in [0,1]");
+        debug_assert!(
+            (-1e-9..=1.0 + 1e-9).contains(&frac),
+            "frac must be ~within [0,1] (small FP overshoot from substep accumulation is tolerated)"
+        );
+        // Clamp the deterministic ~1-ULP substep-accumulation overshoot to the
+        // canonical endpoint; clamp of a deterministic value stays deterministic.
+        let frac = frac.clamp(0.0, 1.0);
         let i = usize::try_from(tick.0)
             .unwrap_or(usize::MAX)
             .min(self.n_samples.saturating_sub(1));
@@ -435,5 +445,31 @@ mod tests {
             .iter()
             .any(|&t| eph.body_pos(0, Tick(t)).z.abs() > 1e-6);
         assert!(any_z, "inclined orbit (i=0.5) never left z=0 plane (rotation lost)");
+    }
+
+    /// REGRESSION (holistic plan-2 cross-module defect): the Task-8 integrator
+    /// accumulates substep time so that for non-power-of-2 substep counts the
+    /// World closure forms `frac = (t+h)/dt = 1.0 + ~1 ULP`. The accessor must
+    /// NOT panic on that deterministic overshoot and must clamp it to the tick
+    /// endpoint (== `frac = 1.0`), not extrapolate past it. Symmetric check on
+    /// a tiny negative undershoot clamping to the `frac = 0.0` sample.
+    #[test]
+    fn subtick_frac_just_over_one_clamps_without_panic() {
+        let dt = Dt::new(1.0);
+        let eph = Ephemeris::precompute(&[inclined_eccentric_body()], dt, 10);
+
+        let at1 = eph.body_pos_subtick(0, Tick(3), 1.0);
+        let just_over = eph.body_pos_subtick(0, Tick(3), 1.0 + 2e-16);
+        assert_eq!(
+            just_over, at1,
+            "frac just over 1.0 must clamp to the tick endpoint (frac=1.0), not extrapolate"
+        );
+
+        let at0 = eph.body_pos_subtick(0, Tick(3), 0.0);
+        let just_under = eph.body_pos_subtick(0, Tick(3), 0.0 - 2e-16);
+        assert_eq!(
+            just_under, at0,
+            "frac just under 0.0 must clamp to the tick start (frac=0.0)"
+        );
     }
 }
