@@ -44,7 +44,7 @@ pub fn record_run(
     mut driver: impl FnMut(Tick) -> Vec<Command>,
 ) -> Recording {
     let config_hash = cfg.config_hash();
-    let (mut world, reset_hash) = World::reset(cfg.clone());
+    let (mut world, reset_hash) = World::reset(cfg.clone()).expect("resolvable config");
     debug_assert_eq!(
         reset_hash, config_hash,
         "World::reset must return the config's own hash"
@@ -102,7 +102,7 @@ pub fn replay_run(rec: &Recording) -> Result<(), Tick> {
         return Err(Tick(0));
     }
 
-    let (mut world, reset_hash) = World::reset(rec.config.clone());
+    let (mut world, reset_hash) = World::reset(rec.config.clone()).expect("resolvable config");
     debug_assert_eq!(
         reset_hash, fresh_hash,
         "World::reset must return the config's own hash"

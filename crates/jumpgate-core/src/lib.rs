@@ -59,7 +59,7 @@ pub use ship::thrust_accel_and_burn;
 pub use stores::{BodyStore, CraftStore, Effective, NavState, effective_params};
 pub use time::{Dt, Tick, sim_time};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, Target};
-pub use world::{FullObserver, Observer, View, World};
+pub use world::{FullObserver, Observer, ResetError, View, World};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.

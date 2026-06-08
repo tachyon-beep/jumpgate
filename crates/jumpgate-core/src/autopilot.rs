@@ -59,17 +59,16 @@ pub fn autopilot_command(
             let rel_vel = vel.sub(dest_vel);
             // True available thrust acceleration (variable mass).
             let a_max = eff.max_thrust / (eff.dry_mass + fuel_mass);
-            // §6.6 backstop (DEFERRED to Task 4): the intended assertion is
-            //   debug_assert!(a_max * dt * dt < ARRIVAL_RADIUS / (2.0 * guidance.k_brake), …)
-            // whose GUARANTOR is the reset-time resolvability guard + brakeable
-            // `base_config` retune that Task 4 (D6/§6) lands. Until that guard
-            // exists, today's high-thrust replay-equivalence configs are genuinely
-            // unbrakable by this invariant and would panic the debug build. The
-            // assert feeds NO arithmetic and is compiled out of release, so it is
-            // hash-neutral: deferring it has zero determinism impact on this commit.
-            // `dt` is threaded through the signature now so Task 4 re-enables the
-            // backstop without touching call sites.
-            let _ = dt;
+            // §6.6 backstop: the reset guard (Task 4) guarantees this for the
+            // empty-tank worst case; live a_max <= empty-tank a_max, so this can
+            // only fire if reset was bypassed or effective params drift above base.
+            // Compiled out of release; feeds NO arithmetic, so it cannot affect the hash.
+            debug_assert!(
+                a_max * dt * dt < ARRIVAL_RADIUS / (2.0 * guidance.k_brake),
+                "unbrakable config reached autopilot: a_max*dt^2={} >= R/(2K)={}",
+                a_max * dt * dt,
+                ARRIVAL_RADIUS / (2.0 * guidance.k_brake)
+            );
             // Max closing speed still stoppable within the remaining distance.
             // Left-to-right product (NOT an FMA): 2 * k_brake * a_max * (d - eps).
             let v_brake = (2.0 * guidance.k_brake * a_max * (d - ARRIVAL_RADIUS)).sqrt();

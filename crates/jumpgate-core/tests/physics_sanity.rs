@@ -110,7 +110,7 @@ fn circular_orbit_stays_bounded_over_many_orbits() {
     let n_orbits: u64 = 10;
     let total_ticks = ticks_per_orbit * n_orbits;
 
-    let (mut world, _cfg_hash) = World::reset(star_config(1, m, total_ticks + 8, craft));
+    let (mut world, _cfg_hash) = World::reset(star_config(1, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     let mut r_min = f64::INFINITY;
@@ -145,7 +145,7 @@ fn eccentric_close_approach_does_not_blow_up() {
     let period_days = std::f64::consts::TAU * (a * a * a / (G_CANONICAL * m)).sqrt();
     let total_ticks = (5.0 * period_days / DT_DAYS).ceil() as u64; // 5 orbits incl. 5 periapsis passes
 
-    let (mut world, _h) = World::reset(star_config(2, m, total_ticks + 8, craft));
+    let (mut world, _h) = World::reset(star_config(2, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     let mut r_min = f64::INFINITY;
@@ -181,7 +181,7 @@ fn coast_specific_energy_drift_is_bounded() {
     let period_days = std::f64::consts::TAU / (G_CANONICAL * m / (r0 * r0 * r0)).sqrt();
     let total_ticks = (period_days / DT_DAYS).ceil() as u64; // one orbit
 
-    let (mut world, _h) = World::reset(star_config(3, m, total_ticks + 8, craft));
+    let (mut world, _h) = World::reset(star_config(3, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     let energy = |p: Vec3, v: Vec3| -> f64 {
@@ -235,7 +235,7 @@ fn run_transfer(seed: u64, start: Vec3, dest: Vec3, budget: Option<f64>, max_tic
     -> Option<u64>
 {
     let craft = vec![thrusting_craft(start, Vec3::ZERO)];
-    let (mut world, _h) = World::reset(star_config(seed, 1.0, max_ticks + 8, craft));
+    let (mut world, _h) = World::reset(star_config(seed, 1.0, max_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     // single ingestion path: command the destination once at tick 0
@@ -335,7 +335,7 @@ fn transfer_to_moving_body_rendezvous() {
         guidance: GuidanceParams::default(),
     };
 
-    let (mut world, _h) = World::reset(cfg);
+    let (mut world, _h) = World::reset(cfg).expect("resolvable config");
     let cid = world.craft_ids()[0];
     let planet = world.body_ids()[1];
     // Sanity: the planet really is the moving body we think it is at tick 0.

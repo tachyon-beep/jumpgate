@@ -74,12 +74,56 @@ impl View {
     }
 }
 
+/// A `RunConfig` rejected by `World::reset`'s resolvability guard (§6). Part of
+/// the recorded contract surface (replay calls `reset` and asserts its hash), so
+/// it is re-exported from `lib.rs` for the gym/FFI layer to match on.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResetError {
+    /// Craft `craft_index`'s worst-case (empty-tank) braking cannot resolve the
+    /// arrival sphere at this `dt`: `a_max_empty * dt^2 >= limit` (limit = R/(2·k_brake)).
+    Unbrakable { craft_index: usize, a_max_empty: f64, dt: f64, limit: f64 },
+}
+
+impl std::fmt::Display for ResetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResetError::Unbrakable { craft_index, a_max_empty, dt, limit } => write!(
+                f,
+                "craft {craft_index} is unbrakable: a_max_empty*dt^2 = {} >= R/(2*k_brake) = {limit} \
+                 (a_max_empty={a_max_empty}, dt={dt}); remedy: lower max_thrust, raise dry_mass, or shrink dt",
+                a_max_empty * dt * dt
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ResetError {}
+
 impl World {
     /// Build a World from a RunConfig: precompute ephemeris, seed rng from the
     /// master seed, spawn bodies then craft, and return the config hash.
     /// `seed` and `dt` come from `cfg`; nothing is read from the environment.
-    pub fn reset(cfg: RunConfig) -> (World, ConfigHash) {
+    pub fn reset(cfg: RunConfig) -> Result<(World, ConfigHash), ResetError> {
         let hash = cfg.config_hash();
+        // §6 resolvability guard: reject any craft whose worst-case (empty-tank)
+        // braking would tunnel the arrival sphere at this dt. Reads only inputs
+        // already in config_hash (dt, base_max_thrust, base_dry_mass, guidance.k_brake),
+        // runs before tick 0, persists no state -> determinism-neutral.
+        let dt = cfg.dt.get();
+        let limit = crate::autopilot::ARRIVAL_RADIUS / (2.0 * cfg.guidance.k_brake);
+        // TODO(forward-debt, Person+Ship / spec §6.5): this reads the BASE max_thrust,
+        // but the Task-3 autopilot backstop reads the EFFECTIVE a_max. When EffectiveMods
+        // lands and multiplies max_thrust, a crew-boosted craft could pass here on base
+        // values yet violate the runtime backstop. The Person line resolves `mods` at reset
+        // BEFORE this guard; honour that ordering and read
+        // effective_params(&c.spec, &reset_mods).max_thrust here. Identity in v1 (no mods yet).
+        for (i, c) in cfg.craft.iter().enumerate() {
+            let dry = c.spec.base_dry_mass;
+            let a_max_empty = c.spec.base_max_thrust / dry;
+            if !(dry > 0.0 && a_max_empty.is_finite() && a_max_empty * dt * dt < limit) {
+                return Err(ResetError::Unbrakable { craft_index: i, a_max_empty, dt, limit });
+            }
+        }
         // Ephemeris::precompute (Task 9) must yield a FINITE position for an a==0.0
         // conic: a central star sits at the origin for all ticks (no NaN from a 0/0
         // mean-anomaly solve). The Task 7 gravity_accel softening (r^2 + eps^2)^1.5
@@ -139,7 +183,7 @@ impl World {
             dt,
             config: cfg,
         };
-        (world, hash)
+        Ok((world, hash))
     }
 
     // --- narrow mutators the single ingestion path writes through (Step 2) ---
@@ -447,12 +491,13 @@ mod tests {
             craft: vec![CraftInit {
                 spec: BaseSpec {
                     base_dry_mass: 1e-12,
-                    // Recalibrated from the plan's 1e-9: with dry+fuel == 2e-12,
-                    // thrust accel == max_thrust / 2e-12, so 1e-9 yields ~500 AU/day²
-                    // (Δv≈500/tick) which overshoots the 0.05 burn_budget on the very
-                    // first tick and flings the craft away. 1e-13 gives accel≈0.05,
-                    // exactly one budgeted burn toward the dest, then a clean coast in.
-                    base_max_thrust: 1e-13,
+                    // Thrust set below the resolvability ceiling (coast fixture; value is
+                    // not behavioural). The craft never `Seeking`s in any of this fixture's
+                    // tests, so thrust magnitude is behaviourally irrelevant; coast
+                    // trajectories under gravity do not read max_thrust. At dry+fuel == 2e-12,
+                    // a_max_empty = 1e-17/1e-12 = 1e-5, so a_max_empty*dt^2 = 1e-5*1^2 = 1e-5
+                    // < R/(2*k_brake) = 1e-4 -> passes the §6 reset guard.
+                    base_max_thrust: 1e-17,
                     base_exhaust_velocity: 1e-3,
                     base_fuel_capacity: 1e-12,
                 },
@@ -510,11 +555,47 @@ mod tests {
         }
     }
 
+    /// A parameterized variant of `one_body_one_thrusting_craft` that lets a test
+    /// set `base_max_thrust` to exercise the §6 resolvability guard.
+    fn one_body_one_thrusting_craft_with_thrust(max_thrust: f64) -> RunConfig {
+        let mut cfg = one_body_one_thrusting_craft();
+        cfg.craft[0].spec.base_max_thrust = max_thrust;
+        cfg
+    }
+
+    #[test]
+    fn reset_rejects_unbrakable_high_thrust_craft() {
+        // dry=1e-9, max_thrust=1e-11 (10x the passing fixture) at dt=0.25:
+        // a_max_empty = 1e-2, a_max*dt^2 = 6.25e-4 >= R=1e-4 -> REJECT.
+        let cfg = one_body_one_thrusting_craft_with_thrust(1.0e-11);
+        // `World` is not `Debug` (it owns large stores), so map the Ok arm to its
+        // error-relevant shape before formatting rather than printing the World.
+        match World::reset(cfg).map(|_| ()) {
+            Err(ResetError::Unbrakable { craft_index, .. }) => assert_eq!(craft_index, 0),
+            other => panic!("expected Unbrakable, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reset_accepts_resolvable_thrusting_craft() {
+        // The real fixture: dry=1e-9, max_thrust=1e-12 -> a_max*dt^2 = 6.25e-5 < R -> Ok.
+        assert!(World::reset(one_body_one_thrusting_craft()).is_ok());
+    }
+
+    #[test]
+    fn reset_rejects_zero_dry_mass_craft() {
+        // dry = 0 -> a_max_empty = max_thrust/0 = INFINITY; the `dry > 0.0` /
+        // `is_finite()` guard branch must reject (else a divide-by-zero ship slips through).
+        let mut cfg = one_body_one_thrusting_craft();
+        cfg.craft[0].spec.base_dry_mass = 0.0;
+        assert!(matches!(World::reset(cfg), Err(ResetError::Unbrakable { craft_index: 0, .. })));
+    }
+
     #[test]
     fn reset_starts_at_tick_zero_and_hashes_config() {
         let cfg = one_body_one_craft();
         let expected = cfg.config_hash();
-        let (world, returned) = World::reset(cfg);
+        let (world, returned) = World::reset(cfg).expect("resolvable config");
         assert_eq!(returned, expected, "reset must return RunConfig::config_hash()");
         assert_eq!(world.tick(), Tick(0));
         assert_eq!(world.dt().get(), 1.0);
@@ -525,7 +606,7 @@ mod tests {
     #[test]
     fn step_advances_tick_and_coasts_under_gravity() {
         let cfg = one_body_one_craft();
-        let (mut world, _) = World::reset(cfg);
+        let (mut world, _) = World::reset(cfg).expect("resolvable config");
 
         let start_r = world.craft_pos(world.craft_ids()[0]).unwrap().length();
         let body = world.body_ids()[0];
@@ -561,7 +642,7 @@ mod tests {
         // velocity that the law must null first.
         let target = Vec3::new(5.3, 0.0, 0.0); // 0.3 AU hop from the 5 AU start
         let cfg = one_body_one_thrusting_craft();
-        let (mut world, _) = World::reset(cfg);
+        let (mut world, _) = World::reset(cfg).expect("resolvable config");
         let id = world.craft_ids()[0];
 
         let dest = NavDest::Position(target);
@@ -610,7 +691,7 @@ mod tests {
     #[test]
     fn dormant_craft_skips_physics() {
         let cfg = one_body_one_craft();
-        let (mut world, _) = World::reset(cfg);
+        let (mut world, _) = World::reset(cfg).expect("resolvable config");
         let id = world.craft_ids()[0];
         let p0 = world.craft_pos(id).unwrap();
 
@@ -636,7 +717,7 @@ mod tests {
     #[test]
     fn project_respects_observer_visibility_and_accessors() {
         let cfg = one_body_one_craft();
-        let (world, _) = World::reset(cfg);
+        let (world, _) = World::reset(cfg).expect("resolvable config");
         let cid = world.craft_ids()[0];
 
         let full = world.project(&FullObserver);

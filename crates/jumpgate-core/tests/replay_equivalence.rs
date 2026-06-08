@@ -25,7 +25,13 @@ fn base_config() -> RunConfig {
         craft: vec![CraftInit {
             spec: BaseSpec {
                 base_dry_mass: 1.0e-9,
-                base_max_thrust: 1.0e-6,
+                // Recalibrated for the §6 reset resolvability guard (Task 4): the old
+                // 1e-6 gave a_max_empty = 1e-6/1e-9 = 1000, 1000*0.5^2 = 250 >> the
+                // limit R/(2*k_brake) = 1e-4, an unbrakable (tunnelling) config. 1e-13
+                // gives a_max_empty = 1e-4, 1e-4*0.5^2 = 2.5e-5 < 1e-4 -> passes the
+                // guard with ~4x margin while still commanding a real (non-trivial)
+                // thrust burn (ThrustApplied fires; the tick-1 corruption diverges).
+                base_max_thrust: 1.0e-13,
                 base_exhaust_velocity: 0.02,
                 base_fuel_capacity: 1.0e-9,
             },
@@ -41,7 +47,7 @@ fn base_config() -> RunConfig {
 /// Discover it from a fresh reset rather than hardcoding, and assert the stable
 /// value so a slot-map generation-convention drift (Task 4) fails HERE, loudly.
 fn discover_craft_id() -> CraftId {
-    let (world, _hash) = World::reset(base_config());
+    let (world, _hash) = World::reset(base_config()).expect("resolvable config");
     let ids = world.craft_ids();
     assert_eq!(ids.len(), 1, "v1 scenario has exactly one craft");
     assert_eq!(
@@ -81,7 +87,7 @@ fn transfer_driver(craft: CraftId) -> impl FnMut(Tick) -> Vec<Command> {
 fn recorded_run_actually_thrusts() {
     let craft = discover_craft_id();
     let mut driver = transfer_driver(craft);
-    let (mut world, _hash) = World::reset(base_config());
+    let (mut world, _hash) = World::reset(base_config()).expect("resolvable config");
     let mut saw_thrust = false;
     for _ in 0..50 {
         let pre = world.tick();

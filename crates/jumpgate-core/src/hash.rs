@@ -255,16 +255,16 @@ mod tests {
 
     #[test]
     fn identical_worlds_hash_equal() {
-        let (wa, _) = World::reset(cfg_with_craft_x(2.0));
-        let (wb, _) = World::reset(cfg_with_craft_x(2.0));
+        let (wa, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        let (wb, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         assert_eq!(state_hash(&wa), state_hash(&wb));
     }
 
     #[test]
     fn perturbing_one_f64_changes_hash() {
         // Two worlds identical except one craft x-coordinate differs slightly.
-        let (wa, _) = World::reset(cfg_with_craft_x(2.0));
-        let (wb, _) = World::reset(cfg_with_craft_x(2.0 + 1e-9));
+        let (wa, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        let (wb, _) = World::reset(cfg_with_craft_x(2.0 + 1e-9)).expect("resolvable config");
         assert_ne!(state_hash(&wa), state_hash(&wb));
     }
 
@@ -274,7 +274,7 @@ mod tests {
         // header-only hash independently; state_hash mixes MORE after it, so it
         // must NOT equal the header-only hash (proves header present AND body
         // follows). This pins HASH_FIELD_ORDER entries 1-3.
-        let (w, _) = World::reset(cfg_with_craft_x(2.0));
+        let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let mut header_only = FnvHasher::new();
         header_only.write_u64(0u64); // word 3: tick 0 after reset
         assert_ne!(state_hash(&w), header_only.finish());
@@ -293,7 +293,7 @@ mod tests {
         use crate::types::{CommandKind, EntityRef, NavDest, Target};
         let x: f64 = 7.0;
 
-        let (mut wp, _) = World::reset(cfg_with_craft_x(2.0));
+        let (mut wp, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let cp = wp.craft_ids()[0];
         let mut cmds_p = vec![Command {
             target: Target::Entity(EntityRef::Craft(cp)),
@@ -305,7 +305,7 @@ mod tests {
         let tp = wp.tick();
         crate::ingest::ingest_commands(&mut wp, tp, &mut cmds_p);
 
-        let (mut we, _) = World::reset(cfg_with_craft_x(2.0));
+        let (mut we, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let ce = we.craft_ids()[0];
         let mut cmds_e = vec![Command {
             target: Target::Entity(EntityRef::Craft(ce)),
@@ -407,7 +407,7 @@ mod tests {
         // state_hash MUST include both store cursors (HASH_FIELD_ORDER 4, 5).
         // The independent recompute writes them; until Step 7 wires the cursors
         // into state_hash, the two digests diverge. Step 7 makes them equal.
-        let (w, _) = World::reset(cfg_with_craft_x(2.0));
+        let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         assert_eq!(
             state_hash(&w),
             recompute_with_cursors(&w),
@@ -421,14 +421,14 @@ mod tests {
         // tick 0). Pins HASH_FIELD_ORDER + HASH_FORMAT_VERSION. If this changes,
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
-        let (w, _) = World::reset(cfg_with_craft_x(2.0));
+        let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         assert_eq!(state_hash(&w), 0x532d_07bf_95a2_abc5u64);
     }
 
     #[test]
     #[ignore = "prints the golden constant for state_hash_golden_zero_world"]
     fn print_golden() {
-        let (w, _) = World::reset(cfg_with_craft_x(2.0));
+        let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         println!("GOLDEN=0x{:016x}", state_hash(&w));
     }
 
