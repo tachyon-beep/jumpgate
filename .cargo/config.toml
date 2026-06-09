@@ -1,0 +1,11 @@
+# PYO3_PYTHON: pyo3-build-config needs a real interpreter when building
+# NON-extension-module targets (the `cargo test -p jumpgate-py` harness, which
+# must LINK libpython). Without this pin it trusts $VIRTUAL_ENV, which in some
+# shells points at a .venv that does not exist and the build script dies with
+# "failed to run the Python interpreter at .../.venv/bin/python".
+# "python3" is resolved on PATH at build time, so a real project venv (if one
+# is created later) still wins over the system interpreter.
+# The maturin/cdylib path is unaffected: abi3 + extension-module needs no
+# interpreter at build time.
+[env]
+PYO3_PYTHON = "python3"
