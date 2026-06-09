@@ -104,7 +104,7 @@ mod run {
     use crate::dp::{best_response_value_closed_loop_checked, planner_value};
     use crate::gate::{fraction_of_ceiling, verdict};
     use crate::mc::mc_best_response;
-    use crate::policies::{fit_closed_form, rollout, Constant};
+    use crate::policies::{fit_closed_form, rollout, Constant, Policy};
     use crate::rng_bridge::build_scenario;
 
     /// Bounded lookahead depth for the MC best-response (the honest calibration knob,
@@ -127,66 +127,95 @@ mod run {
         assert!(summary.negative_control_nogo, "negative control must NO-GO or the apparatus is rigged");
     }
 
-    /// The experiment body, separated so it is unit-testable on tiny inputs.
-    pub fn execute(train: &[u64], eval: &[u64], regen: u32, corr: u32) -> CutSummary {
-        // N=3 exact rung (M=3).
-        let cf = fit_closed_form(3, 3, regen, corr, train);
-        let others = crate::policies::ClosedForm {
-            tau: cf.tau,
-            move_prob_milli: cf.move_prob_milli,
-            seed: cf.seed,
-        };
-        let (mut ceil_sum, mut bar_sum, mut floor_sum) = (0f64, 0f64, 0f64);
-        for &s in eval {
-            let cfg = build_scenario(s, 3, 3, regen, corr);
-            let starts = [0u8, 1, 2];
-            let (c, _) = best_response_value_closed_loop_checked(&cfg, &starts, 0, &others);
-            // Single-deviator ceiling: ONE ship's best-response take (LAW 2 — leave undivided).
-            ceil_sum += c as f64;
-            // Population rungs are TOTALS — divide to a per-ship mean to match the single-ship ceiling.
-            bar_sum += rollout(&cfg, &starts, &cf).iter().sum::<u64>() as f64 / 3.0;
-            floor_sum += rollout(&cfg, &starts, &Constant).iter().sum::<u64>() as f64 / 3.0;
+    /// Slot-0's total when ship 0 plays `slot0` and ships 1..N play the closed-form FIELD
+    /// `others`, over the horizon. This fixed-field, same-slot baseline is what makes
+    /// ceiling/bar/floor COMPARABLE: all three are slot-0's take against the SAME field
+    /// (others = closed-form), so ceiling >= bar >= floor holds by the mimic argument
+    /// (the deviator can always copy the closed-form / constant). Using a population
+    /// per-ship MEAN instead (the original bug) mixes different games + a mean-vs-slot
+    /// offset and clamps frac to 0 spuriously.
+    fn slot0_value<P: crate::policies::Policy>(
+        cfg: &crate::ArenaConfig, starts: &[u8], slot0: &P,
+        others: &crate::policies::ClosedForm,
+    ) -> u64 {
+        use crate::policies::Observation;
+        let mut st = crate::ArenaState::from_config(cfg, starts);
+        for _ in 0..cfg.horizon {
+            let acts: Vec<crate::Action> = (0..st.ships.len())
+                .map(|i| {
+                    let obs = Observation { state: &st, ship_idx: i };
+                    if i == 0 { slot0.decide(&obs) } else { others.decide(&obs) }
+                })
+                .collect();
+            crate::dynamics::step(&mut st, &acts, cfg);
         }
-        let n = eval.len() as f64;
-        let frac3 = fraction_of_ceiling(ceil_sum / n, bar_sum / n, floor_sum / n);
-        // (CI at N=3 is exact -> degenerate interval = the point.)
-        let mut curve = vec![(3u32, frac3, frac3, frac3)];
+        st.ships[0].total_yield
+    }
 
-        // MC-carried rungs (N=6,12,24 at fixed M=3): estimate the single-deviator ceiling via MC.
-        for &nn in &[6u32, 12, 24] {
-            let (mut cl, mut ch, mut bar, mut flo) = (0f64, 0f64, 0f64, 0f64);
+
+
+    /// The experiment body, separated so it is unit-testable on tiny inputs.
+    /// Regime: M=2 ("binary here-vs-there", the purest anti-coordination + cheap exact DP);
+    /// ships crowd by the `(i % M)` start pattern so the commons tension EXISTS even at the
+    /// exact rung (the one-ship-per-region [0,1,2] regime had no crowding at all). The
+    /// N-ladder raises density at fixed M=2; room must be flat-or-rising in N or it is the
+    /// LLN self-averaging NO-GO.
+    pub fn execute(train: &[u64], eval: &[u64], regen: u32, corr: u32) -> CutSummary {
+        const M: u8 = 2;
+        let starts_for = |nn: u32| -> Vec<u8> { (0..nn).map(|i| (i % M as u32) as u8).collect() };
+
+        // Fit the deployable closed-form ON the crowded N=3/M=2 deployment regime (not a
+        // no-crowd one-per-region regime — that would be a strawman bar overstating room).
+        let cf = fit_closed_form(M, M, regen, corr, 3, train);
+        let others =
+            crate::policies::ClosedForm { tau: cf.tau, move_prob_milli: cf.move_prob_milli, seed: cf.seed };
+        let n = eval.len() as f64;
+
+        // N-ladder: exact closed-loop BR ceiling at N=3; MC-estimated ceiling at N=6,12,24.
+        // floor/bar/ceiling are ALL slot-0 against the SAME closed-form field (comparable).
+        let mut curve: Vec<(u32, f64, f64, f64)> = Vec::new();
+        for &nn in &[3u32, 6, 12, 24] {
+            let starts = starts_for(nn);
+            let (mut ceil_lo, mut ceil_hi, mut bar_sum, mut floor_sum) = (0f64, 0f64, 0f64, 0f64);
             for &s in eval {
-                let cfg = build_scenario(s, 3, 3, regen, corr); // M=3 fixed; N scales via starts
-                let starts: Vec<u8> = (0..nn).map(|i| (i % 3) as u8).collect();
-                let est = mc_best_response(&cfg, &starts, 0, &others, MC_SAMPLES, s, MC_DEPTH);
-                cl += est.lo;
-                ch += est.hi;
-                // Population rollouts are TOTALS — divide by the ship count (LAW 2).
-                bar += rollout(&cfg, &starts, &cf).iter().sum::<u64>() as f64 / nn as f64;
-                flo += rollout(&cfg, &starts, &Constant).iter().sum::<u64>() as f64 / nn as f64;
+                let cfg = build_scenario(s, M, M, regen, corr);
+                floor_sum += slot0_value(&cfg, &starts, &Constant, &others) as f64;
+                bar_sum += slot0_value(&cfg, &starts, &cf, &others) as f64;
+                if nn == 3 {
+                    let (c, _) = best_response_value_closed_loop_checked(&cfg, &starts, 0, &others);
+                    ceil_lo += c as f64;
+                    ceil_hi += c as f64;
+                } else {
+                    let est = mc_best_response(&cfg, &starts, 0, &others, MC_SAMPLES, s, MC_DEPTH);
+                    ceil_lo += est.lo;
+                    ceil_hi += est.hi;
+                }
             }
-            let mean_ceiling = (cl + ch) / (2.0 * n);
-            let frac_mean = fraction_of_ceiling(mean_ceiling, bar / n, flo / n);
-            let frac_lo = fraction_of_ceiling(cl / n, bar / n, flo / n);
-            let frac_hi = fraction_of_ceiling(ch / n, bar / n, flo / n);
+            let (bar, floor) = (bar_sum / n, floor_sum / n);
+            let frac_lo = fraction_of_ceiling(ceil_lo / n, bar, floor);
+            let frac_hi = fraction_of_ceiling(ceil_hi / n, bar, floor);
+            let frac_mean = fraction_of_ceiling((ceil_lo + ceil_hi) / (2.0 * n), bar, floor);
             curve.push((nn, frac_mean, frac_lo.min(frac_hi), frac_lo.max(frac_hi)));
         }
 
-        // Negative control: identical regions (corr=1000) must NO-GO.
+        // Negative control: identical regions (corr=1000) -> no siting advantage -> must NO-GO.
         let neg = {
-            let cfgn = build_scenario(eval[0], 3, 3, regen, 1000);
-            let starts = [0u8, 1, 2];
+            let starts = starts_for(3);
+            let cfgn = build_scenario(eval[0], M, M, regen, 1000);
             let (c, _) = best_response_value_closed_loop_checked(&cfgn, &starts, 0, &others);
-            let bar = rollout(&cfgn, &starts, &cf).iter().sum::<u64>() as f64 / 3.0;
-            let flo = rollout(&cfgn, &starts, &Constant).iter().sum::<u64>() as f64 / 3.0;
+            let bar = slot0_value(&cfgn, &starts, &cf, &others) as f64;
+            let flo = slot0_value(&cfgn, &starts, &Constant, &others) as f64;
             fraction_of_ceiling(c as f64, bar, flo) < crate::gate::GAP_FRAC_MIN
         };
 
+        // Planner upper bound (LABELLED coordination headroom, reported-only, NOT gated):
+        // joint-optimal total vs the all-constant floor total on the N=3 instance.
         let planner = {
-            let cfg = build_scenario(eval[0], 3, 3, regen, corr);
-            let p = planner_value(&cfg, &[0, 1, 2]) as f64;
-            let flo = rollout(&cfg, &[0, 1, 2], &Constant).iter().sum::<u64>() as f64;
-            fraction_of_ceiling(p, flo, 0.0) // headroom of the planner total over the floor total
+            let starts = starts_for(3);
+            let cfg = build_scenario(eval[0], M, M, regen, corr);
+            let p = planner_value(&cfg, &starts) as f64;
+            let flo = rollout(&cfg, &starts, &Constant).iter().sum::<u64>() as f64;
+            fraction_of_ceiling(p, flo, 0.0)
         };
 
         CutSummary {
@@ -212,7 +241,7 @@ mod run {
         let (regen, corr) = (0u32, 0u32); // one-shot exhaustion, independent diverse fields
 
         let train: Vec<u64> = (1000..1008).collect();
-        let cf = fit_closed_form(M, M, regen, corr, &train);
+        let cf = fit_closed_form(M, M, regen, corr, M, &train);
 
         let cfg = build_scenario(4242, M, M, regen, corr);
         let starts: Vec<u8> = (0..N).map(|i| (i % M as u32) as u8).collect();

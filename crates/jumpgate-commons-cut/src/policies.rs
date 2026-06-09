@@ -119,6 +119,7 @@ pub fn fit_closed_form(
     travel: u8,
     regen: u32,
     field_corr: u32,
+    n_ships: u8,
     train_seeds: &[u64],
 ) -> ClosedForm {
     let taus = [
@@ -136,7 +137,10 @@ pub fn fit_closed_form(
             let mut sum = 0u64;
             for &s in train_seeds {
                 let cfg = crate::rng_bridge::build_scenario(s, n_regions, travel, regen, field_corr);
-                let starts: Vec<u8> = (0..n_regions).collect();
+                // Fit on the ACTUAL deployment regime (n_ships, crowded by the same
+                // (i % n_regions) pattern eval uses) — fitting on a no-crowd one-per-region
+                // regime would yield a strawman bar and overstate room.
+                let starts: Vec<u8> = (0..n_ships).map(|i| i % n_regions).collect();
                 sum += rollout(&cfg, &starts, &pol).iter().sum::<u64>();
             }
             let mean = sum / train_seeds.len().max(1) as u64;
@@ -244,9 +248,9 @@ mod tests {
     fn closed_form_fit_returns_best_on_train_and_is_reused_on_eval() {
         let train: Vec<u64> = (100..104).collect();
         let eval: Vec<u64> = (200..204).collect();
-        let fitted = fit_closed_form(3, 3, 0, 0, &train);
+        let fitted = fit_closed_form(3, 3, 0, 0, 3, &train);
         // Determinism: fitting twice on the same train seeds gives the same params.
-        let again = fit_closed_form(3, 3, 0, 0, &train);
+        let again = fit_closed_form(3, 3, 0, 0, 3, &train);
         assert_eq!((fitted.tau, fitted.move_prob_milli), (again.tau, again.move_prob_milli));
         // The fitted policy is then evaluated on disjoint eval seeds (smoke: it runs).
         let cfg = build_scenario(eval[0], 3, 3, 0, 0);
