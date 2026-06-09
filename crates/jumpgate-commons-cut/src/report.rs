@@ -118,7 +118,10 @@ mod run {
     fn run_the_cut() {
         let train: Vec<u64> = (1000..1008).collect();
         let eval: Vec<u64> = (2000..2008).collect();
-        let summary = execute(&train, &eval, 0 /*one-shot regen*/, 0 /*independent corr*/);
+        // Pre-committed regime (chosen on principle, NOT tuned to an outcome): slow regen
+        // (sustained commons — relocation/timing genuinely matter, the floor sits below the
+        // ceiling) × independent diverse regions (the cell most likely to host room).
+        let summary = execute(&train, &eval, 2 /*slow regen*/, 0 /*independent corr*/);
         println!("CUT VERDICT: {:?}", summary.verdict);
         println!("  curve (N, frac, lo, hi): {:?}", summary.curve);
         println!("  negative_control_nogo: {}", summary.negative_control_nogo);
@@ -154,6 +157,8 @@ mod run {
 
 
 
+
+
     /// The experiment body, separated so it is unit-testable on tiny inputs.
     /// Regime: M=2 ("binary here-vs-there", the purest anti-coordination + cheap exact DP);
     /// ships crowd by the `(i % M)` start pattern so the commons tension EXISTS even at the
@@ -176,10 +181,12 @@ mod run {
         let mut curve: Vec<(u32, f64, f64, f64)> = Vec::new();
         for &nn in &[3u32, 6, 12, 24] {
             let starts = starts_for(nn);
-            let (mut ceil_lo, mut ceil_hi, mut bar_sum, mut floor_sum) = (0f64, 0f64, 0f64, 0f64);
+            // bar/ceiling are slot-0 against the SAME closed-form field (comparable; the
+            // pre-registered metric is (ceiling - bar)/ceiling, so the constant floor is
+            // not needed in the fraction — it survives only as the planner's reference).
+            let (mut ceil_lo, mut ceil_hi, mut bar_sum) = (0f64, 0f64, 0f64);
             for &s in eval {
                 let cfg = build_scenario(s, M, M, regen, corr);
-                floor_sum += slot0_value(&cfg, &starts, &Constant, &others) as f64;
                 bar_sum += slot0_value(&cfg, &starts, &cf, &others) as f64;
                 if nn == 3 {
                     let (c, _) = best_response_value_closed_loop_checked(&cfg, &starts, 0, &others);
@@ -191,10 +198,10 @@ mod run {
                     ceil_hi += est.hi;
                 }
             }
-            let (bar, floor) = (bar_sum / n, floor_sum / n);
-            let frac_lo = fraction_of_ceiling(ceil_lo / n, bar, floor);
-            let frac_hi = fraction_of_ceiling(ceil_hi / n, bar, floor);
-            let frac_mean = fraction_of_ceiling((ceil_lo + ceil_hi) / (2.0 * n), bar, floor);
+            let bar = bar_sum / n;
+            let frac_lo = fraction_of_ceiling(ceil_lo / n, bar);
+            let frac_hi = fraction_of_ceiling(ceil_hi / n, bar);
+            let frac_mean = fraction_of_ceiling((ceil_lo + ceil_hi) / (2.0 * n), bar);
             curve.push((nn, frac_mean, frac_lo.min(frac_hi), frac_lo.max(frac_hi)));
         }
 
@@ -204,8 +211,7 @@ mod run {
             let cfgn = build_scenario(eval[0], M, M, regen, 1000);
             let (c, _) = best_response_value_closed_loop_checked(&cfgn, &starts, 0, &others);
             let bar = slot0_value(&cfgn, &starts, &cf, &others) as f64;
-            let flo = slot0_value(&cfgn, &starts, &Constant, &others) as f64;
-            fraction_of_ceiling(c as f64, bar, flo) < crate::gate::GAP_FRAC_MIN
+            fraction_of_ceiling(c as f64, bar) < crate::gate::GAP_FRAC_MIN
         };
 
         // Planner upper bound (LABELLED coordination headroom, reported-only, NOT gated):
@@ -215,7 +221,8 @@ mod run {
             let cfg = build_scenario(eval[0], M, M, regen, corr);
             let p = planner_value(&cfg, &starts) as f64;
             let flo = rollout(&cfg, &starts, &Constant).iter().sum::<u64>() as f64;
-            fraction_of_ceiling(p, flo, 0.0)
+            // Coordination headroom = (planner_total - floor_total) / planner_total.
+            fraction_of_ceiling(p, flo)
         };
 
         CutSummary {

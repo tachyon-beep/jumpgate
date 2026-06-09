@@ -122,13 +122,13 @@ pub fn fit_closed_form(
     n_ships: u8,
     train_seeds: &[u64],
 ) -> ClosedForm {
-    let taus = [
-        1u64,
-        crate::STOCK_MAX as u64 / 4,
-        crate::STOCK_MAX as u64 / 2,
-        crate::STOCK_MAX as u64,
-    ];
-    let probs = [200u32, 500, 800, 1000];
+    // DENSE grid: every tau in 0..=STOCK_MAX, move-prob in 50-per-mille steps. A coarse
+    // grid (4x4) under-fits the deployable script -> a strawman bar that manufactures
+    // apparent room (confirmed: coarse N=3 frac 0.118 collapsed to ~0.005 under this grid).
+    // A stronger bar can only LOWER apparent room, so a dense fit strictly guards against
+    // a false-GO; it is not outcome-tuning.
+    let taus: Vec<u64> = (0..=crate::STOCK_MAX as u64).collect();
+    let probs: Vec<u32> = (0..=1000).step_by(50).collect();
     let mut best = ClosedForm { tau: taus[0], move_prob_milli: probs[0], seed: 0xC0FFEE };
     let mut best_mean = 0u64;
     for &tau in &taus {
