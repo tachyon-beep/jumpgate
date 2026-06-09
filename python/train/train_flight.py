@@ -10,6 +10,7 @@ import gymnasium as gym
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.running_mean_std import RunningMeanStd
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
 from jumpgate.gym_env import JumpgateGymEnv
@@ -44,6 +45,8 @@ def make_env(stage, idx: int):
             target_dist_min=stage.target_dist_min, target_dist_max=stage.target_dist_max,
             star_mass=stage.star_mass, exhaust_velocity=stage.exhaust_velocity,
             time_limit=stage.time_limit, gamma=GAMMA,
+            arrival_radius=stage.arrival_radius, arrival_speed=stage.arrival_speed,
+            time_penalty=stage.time_penalty,
         )
         return FreshSeedOnReset(env, base_seed=10_000 + idx)
     return _f
@@ -65,8 +68,7 @@ class CurriculumCallback(BaseCallback):
                 continue
             arrived = bool(info.get("is_success", info.get("terminated", False)))
             promoted = self.cur.record(arrived)
-            recent = self.cur.results[-50:]
-            rate = (sum(recent) / len(recent)) if recent else 0.0
+            rate = self.cur.rolling_rate()
             self.rows.append([self.num_timesteps, self.cur.stage.name, f"{rate:.3f}", f"{ep['r']:.3f}"])
             if promoted:
                 print(f"PROMOTED -> {self.cur.stage.name} at {self.num_timesteps} steps")
@@ -80,7 +82,19 @@ class CurriculumCallback(BaseCallback):
                     target_dist_max=self.cur.stage.target_dist_max,
                     star_mass=self.cur.stage.star_mass,
                     exhaust_velocity=self.cur.stage.exhaust_velocity,
-                    time_limit=self.cur.stage.time_limit, gamma=GAMMA)
+                    time_limit=self.cur.stage.time_limit, gamma=GAMMA,
+                    arrival_radius=self.cur.stage.arrival_radius,
+                    arrival_speed=self.cur.stage.arrival_speed,
+                    time_penalty=self.cur.stage.time_penalty)
+                # Reset VecNormalize running statistics: obs/return scaling fit
+                # to the OLD stage poisons the value function on the new one
+                # (measured as the run-1 sprint decay). One transient
+                # value-loss spike, self-corrects within a rollout.
+                vn = self.model.get_vec_normalize_env()
+                if vn is not None:
+                    vn.obs_rms = RunningMeanStd(shape=vn.observation_space.shape)
+                    vn.ret_rms = RunningMeanStd(shape=())
+                    vn.returns[:] = 0.0
         return True
 
     def _on_training_end(self):
@@ -100,8 +114,13 @@ def main():
     venv = VecNormalize(
         VecMonitor(DummyVecEnv([make_env(cur.stage, i) for i in range(args.n_envs)])),
         norm_obs=True, norm_reward=True, gamma=GAMMA)
+    # LR anneals 3e-4 -> 3e-5 (progress_remaining walks 1 -> 0); ent_coef
+    # lowered 0.01 -> 0.003: the rendezvous endgame needs precision, and at
+    # 0.01 the entropy bonus dominated once the task reward compressed
+    # (run-1 sprint: policy std GREW 0.96 -> 1.64 while arrivals decayed).
     model = PPO("MlpPolicy", venv, gamma=GAMMA, n_steps=2048, batch_size=256,
-                learning_rate=3e-4, ent_coef=0.01, seed=args.seed, verbose=1)
+                learning_rate=lambda pr: 3e-5 + pr * (3e-4 - 3e-5),
+                ent_coef=0.003, seed=args.seed, verbose=1)
     model.learn(total_timesteps=args.steps, callback=CurriculumCallback(cur, "runs/flight_log.csv"))
     model.save("runs/flight_final")
     venv.save("runs/flight_vecnorm.pkl")

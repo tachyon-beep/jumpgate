@@ -58,6 +58,11 @@ pub struct FlightCfg {
     pub fuel_weight: f64,      // reward cost per unit fuel
     pub time_penalty: f64,     // per-tick cost
     pub arrival_bonus: f64,
+    /// Fixed potential-shaping scale (AU). Deliberately DECOUPLED from
+    /// target_dist_max: tying Φ to the per-stage obs scale re-based the reward
+    /// at every curriculum promotion (a value-function shock measured as the
+    /// sprint-stage decay). One constant across all stages.
+    pub phi_scale: f64,
 }
 
 impl Default for FlightCfg {
@@ -75,6 +80,7 @@ impl Default for FlightCfg {
             fuel_weight: 1.0e9,
             time_penalty: 0.001,
             arrival_bonus: 10.0,
+            phi_scale: 0.05,
         }
     }
 }
@@ -90,7 +96,7 @@ pub fn flight_reward(
     arrived: bool,
     _dt: f64,
 ) -> f64 {
-    let scale = cfg.target_dist_max.max(1e-12);
+    let scale = cfg.phi_scale.max(1e-12);
     let phi_prev = -(prev_dist / scale);
     let phi_cur = -(cur_dist / scale);
     let shaping = cfg.gamma * phi_cur - phi_prev;
@@ -301,6 +307,7 @@ impl JumpgateEnv {
         exhaust_velocity = None, fuel_capacity = None, time_limit = None,
         arrival_radius = None, arrival_speed = None, gamma = None,
         fuel_weight = None, time_penalty = None, arrival_bonus = None,
+        phi_scale = None,
     ))]
     fn configure(
         &mut self,
@@ -317,6 +324,7 @@ impl JumpgateEnv {
         fuel_weight: Option<f64>,
         time_penalty: Option<f64>,
         arrival_bonus: Option<f64>,
+        phi_scale: Option<f64>,
     ) -> PyResult<(usize, usize)> {
         if mode > 1 {
             return Err(pyo3::exceptions::PyValueError::new_err(
@@ -356,6 +364,9 @@ impl JumpgateEnv {
         }
         if let Some(v) = time_penalty {
             f.time_penalty = v;
+        }
+        if let Some(v) = phi_scale {
+            f.phi_scale = v;
         }
         if let Some(v) = arrival_bonus {
             f.arrival_bonus = v;
@@ -723,7 +734,7 @@ mod tests {
         // circular-orbit speed for its spawn radius.
         let mut env = JumpgateEnv::new(1, 1);
         env.configure(
-            1, None, None, Some(0.0), None, None, None, None, None, None, None, None, None,
+            1, None, None, Some(0.0), None, None, None, None, None, None, None, None, None, None,
         )
         .unwrap();
         assert_eq!(
@@ -732,7 +743,7 @@ mod tests {
             "gravity off -> craft starts at rest"
         );
         env.configure(
-            1, None, None, Some(1.0), None, None, None, None, None, None, None, None, None,
+            1, None, None, Some(1.0), None, None, None, None, None, None, None, None, None, None,
         )
         .unwrap();
         let r = env.template.craft[0].pos.length();
