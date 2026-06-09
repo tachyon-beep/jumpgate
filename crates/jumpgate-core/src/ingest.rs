@@ -8,7 +8,8 @@ use crate::contract::{Command, Event, EventKind, command_sort_key};
 use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
 use crate::math::Vec3;
-use crate::stores::{CraftStore, NavState};
+use crate::economy::ContractStatus;
+use crate::stores::{CraftRole, CraftStore, NavState};
 use crate::time::Tick;
 use crate::types::{CommandKind, EntityRef, NavDest, Target};
 
@@ -106,9 +107,8 @@ pub fn ingest_into(
         // Log every command in canonical order (resolved values; §4.4 rule 2).
         log.record(tick, *cmd);
 
-        match cmd.target {
-            Target::Entity(EntityRef::Craft(cid)) => {
-                let CommandKind::Destination { dest, burn_budget } = cmd.kind;
+        match (cmd.target, cmd.kind) {
+            (Target::Entity(EntityRef::Craft(cid)), CommandKind::Destination { dest, burn_budget }) => {
                 if let Some(idx) = ship.index_of(cid) {
                     // dv budget: explicit cap, else Tsiolkovsky fuel-derived.
                     let dv = burn_budget.unwrap_or_else(|| dv_from_fuel(ship, idx));
@@ -124,9 +124,10 @@ pub fn ingest_into(
                     }
                 }
             }
-            // World / Sim / Body targets: no v1 CommandKind acts on them yet,
-            // but they are logged above so replay identity is preserved, and
-            // the ingestion event is still emitted for the legibility stream.
+            // World / Sim / Body targets, plus the economy CommandKinds (which this
+            // CraftStore-only path cannot resolve — it has no ContractStore): no nav
+            // effect, but the command is logged above so replay identity is preserved
+            // and the ingestion event still fires for the legibility stream.
             _ => {
                 events.emit(action_ingested(tick, cmd.target));
             }
@@ -144,14 +145,42 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
     cmds.sort_by_key(command_sort_key);
     for &cmd in cmds.iter() {
         world.log_mut().record(tick, cmd);
-        // Only craft targets carry a v1 nav effect; World/Sim/Body targets are
+        // Only craft targets carry a v1 command effect; World/Sim/Body targets are
         // logged + ActionIngested-emitted (the seam) but otherwise inert.
         if let Target::Entity(EntityRef::Craft(id)) = cmd.target {
-            let CommandKind::Destination { dest, burn_budget } = cmd.kind;
-            // dv budget: explicit cap, else Tsiolkovsky fuel-derived (D9/M5) — path-
-            // independent with the slice path, and never INFINITY into dv_remaining.
-            let dv = burn_budget.unwrap_or_else(|| world.dv_from_fuel_for(id));
-            world.set_nav(id, NavState::Seeking { dest, dv_remaining: dv });
+            match cmd.kind {
+                CommandKind::Destination { dest, burn_budget } => {
+                    // dv budget: explicit cap, else Tsiolkovsky fuel-derived (D9/M5) — path-
+                    // independent with the slice path, and never INFINITY into dv_remaining.
+                    let dv = burn_budget.unwrap_or_else(|| world.dv_from_fuel_for(id));
+                    world.set_nav(id, NavState::Seeking { dest, dv_remaining: dv });
+                }
+                CommandKind::AcceptContract { contract } => {
+                    // Record INTENT only: set the craft's contract column + role Hauler
+                    // iff the contract is Offered and unassigned. The actual contract
+                    // state transition (status/escrow) is DEFERRED to the resolve_contracts
+                    // stage. A stale craft/contract or a non-Offered/already-taken contract
+                    // is a deterministic skip (no column write); the command is still logged
+                    // above and ActionIngested still fires below (the seam).
+                    let craft_row = world.ships.index_of(id);
+                    let contract_row = world
+                        .contracts
+                        .ids
+                        .dense_index(contract.slot, contract.generation);
+                    if let (Some(i), Some(ci)) = (craft_row, contract_row)
+                        && world.contracts.status[ci] == ContractStatus::Offered
+                        && world.contracts.hauler[ci].is_none()
+                    {
+                        world.ships.contract[i] = Some(contract);
+                        world.ships.role[i] = CraftRole::Hauler;
+                    }
+                }
+                CommandKind::SetRole { role } => {
+                    if let Some(i) = world.ships.index_of(id) {
+                        world.ships.role[i] = role;
+                    }
+                }
+            }
         }
         world.events_mut().emit(Event {
             tick,
@@ -172,9 +201,14 @@ fn dv_from_fuel(ship: &CraftStore, idx: usize) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BaseSpec, BodyInit};
-    use crate::ids::CraftId;
+    use crate::config::{
+        BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, RunConfig, SubstepCfg,
+    };
+    use crate::economy::Resource;
+    use crate::ids::{CorporationId, CraftId, StationId};
+    use crate::stores::CraftRole;
     use crate::time::Dt;
+    use crate::world::World;
 
     fn cfg_hash() -> ConfigHash {
         // A stand-in provenance stamp; only its round-trip identity matters here.
@@ -300,5 +334,104 @@ mod tests {
             }
             other => panic!("expected ActionIngested, got {other:?}"),
         }
+    }
+
+    /// Minimal inert-physics config with one body + one craft (no economy seeded
+    /// from config — contracts are pushed onto the live store directly by the test).
+    fn one_body_one_craft_cfg() -> RunConfig {
+        RunConfig {
+            master_seed: 7,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 256,
+            bodies: vec![BodyInit {
+                mass: 1.0,
+                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            }],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                },
+                pos: Vec3::new(5.0, 0.0, 0.0),
+                vel: Vec3::ZERO,
+                fuel_mass: 1e-9,
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![],
+            producers: vec![],
+            corporations: vec![],
+            contracts: vec![],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
+        }
+    }
+
+    #[test]
+    fn accept_contract_sets_columns_logs_and_emits_action_ingested() {
+        let (mut world, _h) = World::reset(one_body_one_craft_cfg()).expect("resolvable cfg");
+        let id0 = world.ships.ids_at(0);
+
+        // Seed one Offered, unassigned contract directly on the live store (test
+        // precondition; config minting is a later task).
+        let corp = CorporationId { slot: 0, generation: 0 };
+        let from = StationId { slot: 0, generation: 0 };
+        let to = StationId { slot: 1, generation: 0 };
+        let cid = world.contracts.push(corp, Resource::Ore, 5, from, to, 1_000);
+
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id0)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        ingest_commands(&mut world, Tick(2), &mut cmds);
+
+        // Intent recorded on the craft columns (the contract state transition is
+        // deferred to resolve_contracts; here we only set contract + role).
+        assert_eq!(world.ships.contract[0], Some(cid), "contract column set");
+        assert_eq!(world.ships.role[0], CraftRole::Hauler, "role set to Hauler");
+
+        // The command was logged at its tick on the single ingestion path.
+        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+
+        // An ActionIngested event was emitted for the craft target (the seam).
+        let emitted = world.events_mut().since(Tick(0));
+        assert_eq!(emitted.len(), 1);
+        match emitted[0].kind {
+            EventKind::ActionIngested { target } => {
+                assert_eq!(target, Target::Entity(EntityRef::Craft(id0)));
+            }
+            other => panic!("expected ActionIngested, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accept_contract_deterministic_skip_leaves_columns_but_still_logs() {
+        let (mut world, _h) = World::reset(one_body_one_craft_cfg()).expect("resolvable cfg");
+        let id0 = world.ships.ids_at(0);
+
+        // Seed a contract that is already assigned to ANOTHER craft -> not acceptable.
+        let corp = CorporationId { slot: 0, generation: 0 };
+        let from = StationId { slot: 0, generation: 0 };
+        let to = StationId { slot: 1, generation: 0 };
+        let cid = world.contracts.push(corp, Resource::Ore, 5, from, to, 1_000);
+        let other = CraftId { slot: 99, generation: 0 };
+        let cidx = world.contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        world.contracts.hauler[cidx] = Some(other);
+
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id0)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        ingest_commands(&mut world, Tick(2), &mut cmds);
+
+        // Deterministic skip: craft columns untouched, but command still logged +
+        // ActionIngested still emitted (the seam fires for every command).
+        assert_eq!(world.ships.contract[0], None, "skipped: contract column stays None");
+        assert_eq!(world.ships.role[0], CraftRole::Idle, "skipped: role stays Idle");
+        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command still logged");
+        assert_eq!(world.events_mut().since(Tick(0)).len(), 1, "ActionIngested still emitted");
     }
 }

@@ -39,12 +39,24 @@ pub enum NavDest {
     Entity(EntityRef),
 }
 
-/// v1's ONLY command kind. `burn_budget`: optional scalar Δv cap.
+/// Command kinds (spec §4.4). `Destination` carries an optional scalar Δv cap.
+/// The economy kinds (`AcceptContract`/`SetRole`) are resolved on the single
+/// ingestion path against the live World. `CommandKind` is NOT hashed (commands
+/// resolve into already-hashed state), so adding variants is hash-neutral.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum CommandKind {
     Destination {
         dest: NavDest,
         burn_budget: Option<f64>,
+    },
+    /// Intent to take a contract: ingestion sets the target craft's `contract`
+    /// column + `role = Hauler` (deferred state transition lives in resolve_contracts).
+    AcceptContract {
+        contract: crate::ids::ContractId,
+    },
+    /// Set the target craft's economic role.
+    SetRole {
+        role: crate::stores::CraftRole,
     },
 }
 
@@ -105,6 +117,7 @@ mod tests {
                 assert_eq!(dest, NavDest::Position(Vec3::ZERO));
                 assert_eq!(burn_budget, Some(0.5));
             }
+            other => panic!("expected Destination, got {other:?}"),
         }
     }
 }
