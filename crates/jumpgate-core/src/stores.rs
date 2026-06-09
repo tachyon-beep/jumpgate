@@ -13,6 +13,8 @@ use crate::types::{Lod, NavDest};
 pub enum NavState {
     Idle,
     Seeking { dest: NavDest, dv_remaining: f64 },
+    /// Direct thrust (no destination, no Δv budget — fuel is the budget).
+    DirectThrust { throttle_vec: Vec3 },
 }
 
 /// Effective ship parameters = base × component-mods × wear. In v1 the mod and
@@ -272,6 +274,21 @@ mod tests {
         assert_eq!(eff.max_thrust, 2.0);
         assert_eq!(eff.exhaust_velocity, 3.0);
         assert_eq!(eff.fuel_capacity, 4.0);
+    }
+
+    #[test]
+    fn navstate_direct_thrust_is_constructible_and_copy() {
+        // Tactical Rung 1: the held-stick variant (no destination, no Δv budget —
+        // fuel is the budget). Constructible + Copy like the other variants.
+        let dt = NavState::DirectThrust {
+            throttle_vec: Vec3::new(0.5, -0.25, 0.0),
+        };
+        let copy = dt;
+        if let NavState::DirectThrust { throttle_vec } = copy {
+            assert_eq!(throttle_vec, Vec3::new(0.5, -0.25, 0.0));
+        } else {
+            panic!("expected DirectThrust");
+        }
     }
 
     #[test]

@@ -35,6 +35,8 @@
 //! 10. vel.x,vel.y,vel.z to_bits()             (Task 13)
 //! 11. fuel_mass.to_bits()                     (Task 13)
 //! 12. nav discriminant as u64 (+ resolved dest/dv_remaining bits)  (Task 13)
+//!     APPEND-ONLY tags: Idle=0, Seeking=1, DirectThrust=2 (+ throttle_vec bits;
+//!     tactical Rung 1 — new tag only, existing encodings untouched)
 //! 13. lod discriminant as u64                 (Task 13)
 //!
 //! APPEND BELOW THIS LINE (bump HASH_FORMAT_VERSION + golden test on change):
@@ -214,6 +216,15 @@ pub fn state_hash(world: &World) -> u64 {
                     }
                 }
                 h.write_u64(dv_remaining.to_bits());
+            }
+            // NEW tag 2 (APPEND-ONLY): DirectThrust. Existing Idle(0)/Seeking(1)
+            // encodings are untouched, so all pre-existing goldens are stable.
+            NavState::DirectThrust { throttle_vec } => {
+                h.write_u64(2);
+                let [tx, ty, tz] = throttle_vec.to_bits();
+                h.write_u64(tx);
+                h.write_u64(ty);
+                h.write_u64(tz);
             }
         }
         // HASH_FIELD_ORDER word 13: Lod discriminant (lod() is on StateView).
@@ -574,6 +585,14 @@ mod tests {
                         }
                     }
                     h.write_u64(dv_remaining.to_bits());
+                }
+                // NEW tag 2 (APPEND-ONLY): DirectThrust — mirrors state_hash exactly.
+                NavState::DirectThrust { throttle_vec } => {
+                    h.write_u64(2);
+                    let [tx, ty, tz] = throttle_vec.to_bits();
+                    h.write_u64(tx);
+                    h.write_u64(ty);
+                    h.write_u64(tz);
                 }
             }
             // HASH_FIELD_ORDER word 13: Lod discriminant (lod() is on StateView).

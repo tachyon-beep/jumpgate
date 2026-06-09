@@ -45,6 +45,15 @@ pub fn autopilot_command(
 ) -> (Vec3, f64) {
     match nav {
         NavState::Idle => (Vec3::ZERO, 0.0),
+        // Tactical Rung 1 pass-through: the held stick. Direction = the vector's
+        // unit; throttle = |v| clamped to 1 (over-length never over-thrusts).
+        NavState::DirectThrust { throttle_vec } => {
+            let mag = throttle_vec.length();
+            if mag <= 0.0 {
+                return (Vec3::ZERO, 0.0);
+            }
+            (throttle_vec.normalize_or_zero(), mag.min(1.0))
+        }
         NavState::Seeking { dv_remaining, .. } => {
             let rel_pos = dest_pos.sub(pos);
             let d = rel_pos.length();
@@ -328,6 +337,41 @@ mod tests {
             nav, pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
         );
         assert_eq!(dir, Vec3::ZERO);
+        assert_eq!(throttle, 0.0);
+    }
+
+    #[test]
+    fn direct_thrust_passes_vector_through() {
+        let nav = NavState::DirectThrust {
+            throttle_vec: Vec3::new(0.6, 0.0, 0.0),
+        };
+        let (dir, throttle) = autopilot_command(
+            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
+        assert_eq!(dir, Vec3::new(1.0, 0.0, 0.0));
+        assert!((throttle - 0.6).abs() < 1e-12);
+    }
+
+    #[test]
+    fn direct_thrust_overlong_vector_clamps_to_full_throttle() {
+        let nav = NavState::DirectThrust {
+            throttle_vec: Vec3::new(3.0, 4.0, 0.0), // |v| = 5
+        };
+        let (dir, throttle) = autopilot_command(
+            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
+        assert!((dir.length() - 1.0).abs() < 1e-12);
+        assert_eq!(throttle, 1.0);
+    }
+
+    #[test]
+    fn direct_thrust_zero_vector_coasts() {
+        let nav = NavState::DirectThrust {
+            throttle_vec: Vec3::ZERO,
+        };
+        let (_dir, throttle) = autopilot_command(
+            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+        );
         assert_eq!(throttle, 0.0);
     }
 

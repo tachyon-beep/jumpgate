@@ -64,6 +64,10 @@ pub enum CommandKind {
     SetRole {
         role: crate::stores::CraftRole,
     },
+    /// Direct thrust intent (tactical Rung 1): world-frame throttle vector,
+    /// |v| in [0,1] = throttle fraction (over-length clamps to 1 at the
+    /// autopilot pass-through). Persists as NavState::DirectThrust until replaced.
+    Thrust { throttle_vec: crate::math::Vec3 },
 }
 
 #[cfg(test)]

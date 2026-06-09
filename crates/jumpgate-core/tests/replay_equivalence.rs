@@ -127,6 +127,32 @@ fn record_then_replay_is_bit_identical() {
 }
 
 #[test]
+fn thrust_mode_record_then_replay_is_bit_identical() {
+    // Same harness as record_then_replay_is_bit_identical, but the recorded run
+    // feeds a VARYING CommandKind::Thrust each tick (the held stick is re-aimed
+    // every tick), exercising the DirectThrust nav fold + replay re-feed. Some
+    // ticks exceed |v|=1 ((6/7)^2+(2/3)^2 > 1) so the autopilot's throttle clamp
+    // is exercised under replay too; tick 0 is the zero vector (coast).
+    let craft = discover_craft_id();
+    let driver = move |tick: Tick| {
+        let t = tick.0;
+        vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::Thrust {
+                throttle_vec: Vec3::new(((t % 7) as f64) / 7.0, ((t % 3) as f64) / 3.0, 0.0),
+            },
+        }]
+    };
+    let rec = record_run(base_config(), 50, driver);
+    assert_eq!(rec.hashes.len(), 50, "one hash per stepped tick");
+    assert_eq!(
+        replay_run(&rec),
+        Ok(()),
+        "faithful re-feed of a thrust-mode run must reproduce every tick hash"
+    );
+}
+
+#[test]
 fn corrupting_one_logged_command_reports_first_differing_tick() {
     let craft = discover_craft_id();
     let mut rec = record_run(base_config(), 200, transfer_driver(craft));

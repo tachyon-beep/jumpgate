@@ -124,6 +124,13 @@ pub fn ingest_into(
                     }
                 }
             }
+            // Direct thrust (tactical Rung 1): resolves immediately — no dest lookup.
+            (Target::Entity(EntityRef::Craft(cid)), CommandKind::Thrust { throttle_vec }) => {
+                if let Some(idx) = ship.index_of(cid) {
+                    ship.nav[idx] = NavState::DirectThrust { throttle_vec };
+                    events.emit(action_ingested(tick, cmd.target));
+                }
+            }
             // World / Sim / Body targets, plus the economy CommandKinds (which this
             // CraftStore-only path cannot resolve — it has no ContractStore): no nav
             // effect, but the command is logged above so replay identity is preserved
@@ -179,6 +186,9 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
                     if let Some(i) = world.ships.index_of(id) {
                         world.ships.role[i] = role;
                     }
+                }
+                CommandKind::Thrust { throttle_vec } => {
+                    world.set_nav(id, NavState::DirectThrust { throttle_vec });
                 }
             }
         }

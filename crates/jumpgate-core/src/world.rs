@@ -419,6 +419,7 @@ impl World {
                     (self.resolve_dest_pos(dest, cur), self.resolve_dest_vel(dest, cur))
                 }
                 NavState::Idle => (pos, Vec3::ZERO), // unused (throttle will be 0)
+                NavState::DirectThrust { .. } => (pos, Vec3::ZERO), // unused (autopilot ignores dest)
             };
             let (thrust_dir, throttle) = autopilot_command(
                 self.ships.nav[ci], pos, vel, dest_pos, dest_vel, fuel, &eff,
@@ -558,6 +559,9 @@ impl World {
                     self.ships.pos[ci].sub(dp).length() <= crate::autopilot::ARRIVAL_RADIUS
                 }
                 NavState::Idle => false,
+                // No destination to be "inside of": direct thrust never arms the
+                // arrival edge-detector.
+                NavState::DirectThrust { .. } => false,
             };
         }
 
@@ -896,6 +900,106 @@ mod tests {
             }
             other => panic!("expected Seeking, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn thrust_command_accelerates_craft_and_burns_fuel() {
+        use crate::types::{EntityRef, Target};
+        // Economy-free resolvable fixture (same regime reset_accepts_resolvable_
+        // thrusting_craft proves): dry=1e-9, thrust=1e-12, fuel=1e-9 at dt=0.25 ->
+        // a_max(full) = 5e-4 AU/day^2, local gravity at 5 AU ~ 1.2e-5 (negligible).
+        let (mut world, _h) = World::reset(one_body_one_thrusting_craft()).expect("resolvable");
+        let id = world.ships.ids_at(0);
+        let dt = 0.25_f64;
+        let a_max_full = 1e-12 / (1e-9 + 1e-9); // max_thrust / (dry + full tank)
+        let fuel0 = world.ships.fuel_mass[0];
+        let vel0_x = world.ships.vel[0].x;
+        assert_eq!(vel0_x, 0.0, "fixture starts at rest");
+
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Thrust {
+                throttle_vec: Vec3::new(1.0, 0.0, 0.0),
+            },
+        }];
+        world.step(&mut cmds);
+        let vel1_x = world.ships.vel[0].x;
+        let fuel1 = world.ships.fuel_mass[0];
+        let mut empty: Vec<Command> = Vec::new();
+        world.step(&mut empty);
+        let vel2_x = world.ships.vel[0].x;
+        let fuel2 = world.ships.fuel_mass[0];
+
+        // vel.x increased by ~ a_max*dt per tick (gravity pulls -x at ~1.2e-5,
+        // ~2.4% of thrust accel; allow a generous integrator/gravity band).
+        let per_tick = a_max_full * dt;
+        assert!(
+            vel1_x > 0.8 * per_tick && vel1_x < 1.2 * per_tick,
+            "tick 1 dv ~ a_max*dt: vel1_x={vel1_x}, expected ~{per_tick}"
+        );
+        let dv2 = vel2_x - vel1_x;
+        assert!(
+            dv2 > 0.8 * per_tick && dv2 < 1.2 * per_tick,
+            "tick 2 dv ~ a_max*dt (held stick): dv2={dv2}, expected ~{per_tick}"
+        );
+
+        // Fuel strictly decreased on both ticks.
+        assert!(fuel1 < fuel0, "tick 1 burned fuel: {fuel1} < {fuel0}");
+        assert!(fuel2 < fuel1, "tick 2 burned fuel: {fuel2} < {fuel1}");
+
+        // A ThrustApplied event was emitted for the craft.
+        assert!(
+            world
+                .events_mut()
+                .since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ThrustApplied { craft, dv } if craft == id && dv > 0.0)),
+            "ThrustApplied must be emitted for a thrusting craft"
+        );
+    }
+
+    #[test]
+    fn thrust_command_persists_until_replaced() {
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(one_body_one_thrusting_craft()).expect("resolvable");
+        let id = world.ships.ids_at(0);
+
+        // Ingest ONE Thrust command, then step 3 ticks with an empty cmd vec:
+        // the stick is held (NavState persists), so fuel burns on ALL three ticks.
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Thrust {
+                throttle_vec: Vec3::new(0.5, 0.5, 0.0),
+            },
+        }];
+        let mut fuel_prev = world.ships.fuel_mass[0];
+        world.step(&mut cmds);
+        for tick in 0..3 {
+            let fuel_now = world.ships.fuel_mass[0];
+            assert!(
+                fuel_now < fuel_prev,
+                "held stick must burn fuel on tick {tick}: {fuel_now} !< {fuel_prev}"
+            );
+            fuel_prev = fuel_now;
+            let mut empty: Vec<Command> = Vec::new();
+            world.step(&mut empty);
+        }
+
+        // Replace with Thrust{ZERO}: the next tick burns no fuel.
+        let mut zero = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Thrust {
+                throttle_vec: Vec3::ZERO,
+            },
+        }];
+        world.step(&mut zero);
+        let fuel_after_zero = world.ships.fuel_mass[0];
+        let mut empty: Vec<Command> = Vec::new();
+        world.step(&mut empty);
+        assert_eq!(
+            world.ships.fuel_mass[0], fuel_after_zero,
+            "Thrust{{ZERO}} coasts: fuel constant once the stick is zeroed"
+        );
     }
 
     #[test]
