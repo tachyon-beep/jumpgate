@@ -281,6 +281,7 @@ mod tests {
                 }
                 assert_eq!(burn_budget, Some(5.0));
             }
+            other => panic!("expected Destination, got {other:?}"),
         }
     }
 
@@ -292,6 +293,7 @@ mod tests {
         let cmd = decode_action(&a, ego, craft);
         match cmd.kind {
             CommandKind::Destination { burn_budget, .. } => assert_eq!(burn_budget, None),
+            other => panic!("expected Destination, got {other:?}"),
         }
     }
 
