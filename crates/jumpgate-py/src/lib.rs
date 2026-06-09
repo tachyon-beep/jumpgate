@@ -6,7 +6,10 @@
 //! frame-relative obs path arrive in the gym-binding task.
 use pyo3::prelude::*;
 
+mod env;
 mod obs;
+
+pub use env::JumpgateEnv;
 
 /// Scaffold smoke function: returns the core's scaffold value across the FFI
 /// boundary, proving the cdylib links jumpgate-core and the abi3 module loads.
@@ -19,5 +22,6 @@ fn scaffold_ok() -> u64 {
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scaffold_ok, m)?)?;
+    m.add_class::<JumpgateEnv>()?;
     Ok(())
 }
