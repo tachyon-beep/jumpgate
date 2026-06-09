@@ -1547,4 +1547,96 @@ mod tests {
             + world.contracts.escrow_micros.iter().sum::<i64>();
         assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
     }
+
+    // ---- Task 18: the PHASE-1 gate -----------------------------------------
+    //
+    // Two verification tests over the FULL Stage-1 fixture (`full_stage1_self_running_fixture`,
+    // T17): (1) the per-resource accounting identity holds every tick, and (2) replay is
+    // deterministic (two instances from the same config produce bit-identical state_hash
+    // sequences). Neither moves any golden — the identity is an internal invariant and the
+    // determinism test is a cross-INSTANCE equality, not a pinned constant (per the
+    // digest-tests-are-determinism-not-golden principle).
+
+    /// PER RESOURCE r: Σ over stations of stock[*][r] + Σ over ALL craft of (cargo qty
+    /// where cargo == Some((r, q))) == initial[r] + econ.mined[r] − econ.consumed[r].
+    /// `initial[r]` is the Σ-station-stock-per-resource snapshot captured right after
+    /// `World::reset` (tick 0, when mined == consumed == 0). Mirrors the inline check the
+    /// T17 self-run test runs through completion.
+    fn assert_resource_identity(world: &World, initial: &[i64; crate::economy::N_RESOURCES]) {
+        for r in 0..crate::economy::N_RESOURCES {
+            let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
+            let in_transit: i64 = world
+                .ships
+                .cargo
+                .iter()
+                .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
+                .sum();
+            let lhs = stock + in_transit;
+            let rhs = initial[r] + world.econ.mined[r] - world.econ.consumed[r];
+            assert_eq!(
+                lhs, rhs,
+                "resource identity for r={r}: {lhs} != {rhs} (stock+in_transit vs initial+mined-consumed)"
+            );
+        }
+    }
+
+    #[test]
+    fn phase1_gate_resource_accounting_identity_holds_every_tick() {
+        use crate::economy::{N_RESOURCES, Resource};
+        let (mut world, _h) =
+            World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
+
+        // initial[r] = Σ station stock per resource at tick 0 (mined == consumed == 0).
+        let mut initial = [0i64; N_RESOURCES];
+        for (r, slot) in initial.iter_mut().enumerate() {
+            *slot = world.stations.stock.iter().map(|s| s[r]).sum();
+        }
+
+        // Identity holds at reset, and EVERY tick of the self-running fixture.
+        assert_resource_identity(&world, &initial);
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..200 {
+            world.step(&mut empty);
+            assert_resource_identity(&world, &initial);
+        }
+
+        // Non-vacuity guard: a stalled world also satisfies the identity trivially.
+        // After 200 ticks the producer chain must be live (flows moving on both sides
+        // of the identity). NOTE: the 200-tick window covers mine/refine/load but does
+        // NOT reach deliver/sink-consume (first consumed[Fuel] > 0 lands ~tick 696, as
+        // the destination sits at 0.3 AU); those legs are exercised under this same
+        // identity invariant by T17's per-tick sweep through completion — exactly as the
+        // Failed→consumed leg is covered by T16, not this sweep.
+        assert!(world.econ.mined[Resource::Ore.index()] > 0, "miner is live (mined Ore > 0)");
+    }
+
+    #[test]
+    fn phase1_gate_replay_is_deterministic_state_hash_tick_by_tick() {
+        // Build TWO worlds from the SAME config and the SAME (empty) command inputs.
+        // step() takes the command vec mutably, so give each world its OWN vec to rule
+        // out any cross-contamination.
+        let (mut world_a, _ha) =
+            World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
+        let (mut world_b, _hb) =
+            World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
+
+        let h0 = crate::hash::state_hash(&world_a);
+        assert_eq!(h0, crate::hash::state_hash(&world_b), "tick 0 hashes agree");
+
+        let mut empty_a: Vec<Command> = Vec::new();
+        let mut empty_b: Vec<Command> = Vec::new();
+        let mut last = h0;
+        for t in 1..=200 {
+            world_a.step(&mut empty_a);
+            world_b.step(&mut empty_b);
+            let ha = crate::hash::state_hash(&world_a);
+            let hb = crate::hash::state_hash(&world_b);
+            assert_eq!(ha, hb, "replay determinism: state_hash diverged at tick {t}");
+            last = ha;
+        }
+
+        // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
+        // constant sequences would compare equal trivially.
+        assert_ne!(last, h0, "state_hash evolved over the 200-tick run (not a constant)");
+    }
 }
