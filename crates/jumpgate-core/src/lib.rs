@@ -18,6 +18,7 @@
 pub mod autopilot;
 pub mod config;
 pub mod contract;
+pub mod economy;
 pub mod ephemeris;
 pub mod events;
 pub mod hash;
