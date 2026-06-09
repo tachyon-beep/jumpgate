@@ -1795,7 +1795,13 @@ mod tests {
         });
         // FOUR Idle haulers, all co-located at origin body 0 (so staggered dispatch is
         // meaningful: >1 hauler can claim the burst).
-        let proto = cfg.craft[0].clone();
+        let mut proto = cfg.craft[0].clone();
+        // Foragers need propellant for MANY round trips, not one delivery. Raise ONLY
+        // the exhaust velocity (Δv = v_e·ln(wet/dry)): it feeds the Δv budget + fuel-burn
+        // rate but NOT the integrator's thrust/mass acceleration, so trips stay fast and
+        // the §6 anti-tunnel guard is untouched — while the tank lasts ~dozens of legs.
+        // (Adding fuel MASS instead would balloon wet mass and slow every trip ~50x.)
+        proto.spec.base_exhaust_velocity = 1.0;
         cfg.craft = vec![proto.clone(), proto.clone(), proto.clone(), proto];
         for c in cfg.craft.iter_mut() {
             c.pos = Vec3::ZERO;
@@ -1833,110 +1839,166 @@ mod tests {
         cfg
     }
 
-    /// Drive the A/B fixture 1000 ticks with NO external commands. Returns
-    /// `(peak_b_fuel, last200_band, first_wave_accept_ticks)`:
-    ///   * `peak_b_fuel` = max station-B Fuel stock over the whole run (the clumped-vs-
-    ///     spread overshoot signal),
-    ///   * `last200_band` = max - min of B Fuel over the last 200 ticks,
-    ///   * `first_wave_accept_ticks` = the DISTINCT ticks on which the first 4
-    ///     `ContractAccepted` events fired (how spread the initial dispatch wave is).
-    fn drive_stage2_loop(cfg: RunConfig) -> (i64, i64, std::collections::BTreeSet<u64>) {
+    /// One 1000-tick Stage-2 run with NO external commands, reduced to the metrics the
+    /// stability A/B/C compares.
+    struct Stage2Run {
+        /// max station-B Fuel stock over the whole run (the clumped-vs-spread overshoot).
+        peak: i64,
+        /// max - min of station-B Fuel over the last 200 ticks (steady-state jitter band).
+        band: i64,
+        /// DISTINCT ticks on which the first 4 `ContractAccepted` events fired (how spread
+        /// the opening dispatch wave is).
+        accept_ticks: std::collections::BTreeSet<u64>,
+        /// max simultaneous NON-terminal (Offered/Accepted/CargoLoaded/InTransit) contracts
+        /// for the route — the depth of the order-up-to in-flight buffer.
+        max_in_flight: usize,
+        /// total `ContractFulfilled` events — proves the forage loop sustained (vs jammed).
+        completions: usize,
+    }
+
+    /// Drive the A/B fixture 1000 ticks and reduce it to a [`Stage2Run`].
+    fn drive_stage2_loop(cfg: RunConfig) -> Stage2Run {
+        use crate::economy::ContractStatus;
         let fuel = crate::economy::Resource::Fuel.index();
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         let mut empty: Vec<Command> = Vec::new();
         let mut series = Vec::with_capacity(1000);
         let mut accept_ticks = std::collections::BTreeSet::new();
         let mut accepts_seen = 0usize;
+        let mut max_in_flight = 0usize;
+        let mut completions = 0usize;
         for t in 1..=1000u64 {
             world.step(&mut empty);
             series.push(world.stations.stock[1][fuel]);
-            // Record the ticks of the FIRST FOUR ContractAccepted events (the opening
-            // dispatch wave). `since(Tick(t))` is exactly this just-stepped tick's tail.
-            if accepts_seen < 4 {
-                for e in world.events_mut().since(Tick(t)) {
-                    if matches!(e.kind, EventKind::ContractAccepted { .. }) {
-                        accept_ticks.insert(t);
-                        accepts_seen += 1;
-                    }
+            for e in world.events_mut().since(Tick(t)) {
+                // Opening-wave spread: the ticks of the FIRST FOUR accepts.
+                if accepts_seen < 4 && matches!(e.kind, EventKind::ContractAccepted { .. }) {
+                    accept_ticks.insert(t);
+                    accepts_seen += 1;
+                }
+                if matches!(e.kind, EventKind::ContractFulfilled { .. }) {
+                    completions += 1;
                 }
             }
+            let in_flight = (0..world.contracts.ids.len())
+                .filter(|&k| {
+                    !matches!(
+                        world.contracts.status[k],
+                        ContractStatus::Completed | ContractStatus::Failed
+                    )
+                })
+                .count();
+            max_in_flight = max_in_flight.max(in_flight);
         }
         let peak = *series.iter().max().unwrap();
         let last200 = &series[800..];
         let band = last200.iter().max().unwrap() - last200.iter().min().unwrap();
-        (peak, band, accept_ticks)
+        Stage2Run { peak, band, accept_ticks, max_in_flight, completions }
     }
 
     #[test]
-    fn stage2_staggered_dispatch_flattens_overshoot_ab() {
-        // UNDAMPED baseline: deadband collapsed (demand_high == demand_low == 20) AND
-        // no stagger (stagger_period == 1) -> the cold-start burst's 4 contracts are
-        // all accepted the SAME tick, all 4 haulers deliver the SAME tick -> a single
-        // clumped spike of 4 x qty == 20 at station B.
-        let (undamped_peak, undamped_band, undamped_accepts) =
-            drive_stage2_loop(stage2_ab_loop_fixture(20, 1));
+    fn stage2_hysteresis_and_stagger_each_have_a_measured_stabilising_effect() {
+        // With return-to-origin routing the closed loop SUSTAINS (haulers deliver, walk
+        // back, reload, repeat), so both Stage-2 damping knobs now bite measurably. This
+        // is an A/B/C over three configs differing ONLY in the deadband (demand_high) and
+        // the stagger (stagger_period), each effect guarded by a discriminating assertion.
+        //
+        // UNDAMPED   (demand_high == demand_low == 20, stagger 1): deadband collapsed, no
+        //            stagger -> the opening burst's 4 accepts clump onto ONE tick, the 4
+        //            haulers deliver together -> peak == 4 x qty == 20; shallow in-flight
+        //            buffer (4 == one contract per hauler).
+        // DEADBAND   (demand_high 30 > demand_low 20, stagger 1): the order-up-to ceiling
+        //            keeps a DEEPER in-flight buffer (6 > 4) so foragers are never starved
+        //            of an Offered contract — but WITHOUT stagger the deeper buffer arrives
+        //            in bigger clumps, so the steady-state band WIDENS (15 > 5).
+        // DAMPED     (demand_high 30, stagger 4): same deep buffer, but staggering spreads
+        //            the arrivals -> overshoot peak flattens (20 -> 5) AND the band the
+        //            deadband alone would widen is tamed back (15 -> 5).
+        let undamped = drive_stage2_loop(stage2_ab_loop_fixture(20, 1));
+        let deadband = drive_stage2_loop(stage2_ab_loop_fixture(30, 1));
+        let damped = drive_stage2_loop(stage2_ab_loop_fixture(30, 4));
 
-        // DAMPED: a real deadband (demand_high 30 > demand_low 20) AND a real stagger
-        // (period 4 across 4 haulers) -> the burst's accepts spread across 4 ticks, so
-        // arrivals spread across 4 ticks and the qty-5/tick sink drains each before the
-        // next lands -> the peak flattens to ~qty == 5.
-        let (damped_peak, damped_band, damped_accepts) =
-            drive_stage2_loop(stage2_ab_loop_fixture(30, 4));
+        // (0) THE LOOP SUSTAINS in every config (return-routing): far past the 4-delivery
+        // single-wave jam ceiling, with a BOUNDED steady-state band (no growing cycle).
+        for (label, r) in [("undamped", &undamped), ("deadband", &deadband), ("damped", &damped)] {
+            assert!(r.completions > 4, "{label}: forage loop sustains (completions={})", r.completions);
+            assert!(r.band <= r.peak, "{label}: steady-state band bounded by the overshoot, not growing");
+        }
 
-        // FINDING (honest, tested): this closed loop does NOT sustain a limit cycle.
-        // The contract system has no return-to-origin routing, so each hauler makes
-        // exactly ONE delivery then strands at B; by the last 200 ticks B's stock has
-        // settled to 0 in BOTH configs. So the "last-200 band" the spec proposes is
-        // VACUOUS here (== 0 for both) and CANNOT host the comparison. We assert that
-        // vacuity as a fact, then put the real (i)/(ii) comparison on the TRANSIENT
-        // overshoot peak — the quantity staggering actually moves.
-        assert_eq!(undamped_band, 0, "undamped loop settles (no sustained limit cycle)");
-        assert_eq!(damped_band, 0, "damped loop settles (no sustained limit cycle)");
-
-        // (i) NON-VACUITY FLOOR: the undamped loop genuinely overshoots — the clumped
-        // wave spikes B to the full 4 x qty == 20. A real, non-trivial margin.
+        // (1) THE DEADBAND has a real, discriminating effect: the order-up-to ceiling
+        // keeps a STRICTLY deeper in-flight buffer than the collapsed-deadband baseline.
+        // (RED if the demand_high ceiling is neutralised to demand_low.)
         assert!(
-            undamped_peak >= 20,
-            "undamped overshoot peak is real (clumped 4-hauler wave): {undamped_peak}"
-        );
-
-        // (ii) DAMPING WORKS: staggering more than HALVES the overshoot peak. Measured:
-        // undamped 20 (one clumped spike) vs damped 5 (spread + drained) — a 4x cut, so
-        // the 2x relationship holds with margin. (The deadband alone does nothing here;
-        // a control with demand_high>low + stagger==1 still peaks at 20 — staggered
-        // dispatch carries the entire effect; see the finding below.)
-        assert!(
-            damped_peak * 2 <= undamped_peak,
-            "staggered dispatch at least halves the overshoot: damped={damped_peak} undamped={undamped_peak}"
-        );
-
-        // (iii) STAGGER SPREADS THE WAVE: the undamped opening wave's 4 accepts all fire
-        // on ONE tick; the damped wave spreads them across MORE than one tick.
-        assert_eq!(
-            undamped_accepts.len(),
-            1,
-            "undamped: all opening-wave accepts on a single tick: {undamped_accepts:?}"
-        );
-        assert!(
-            damped_accepts.len() > 1,
-            "staggered: opening-wave accepts spread across >1 tick: {damped_accepts:?}"
-        );
-
-        // CONTROL (records the finding as a TESTED fact): with the deadband widened but
-        // stagger DISABLED, the peak is identical to undamped -> the hysteresis deadband
-        // is implemented (STEP 3a) but its anti-chatter effect is NOT dynamically
-        // exercised by this non-sustaining loop; the measured stabilization is staggered
-        // dispatch alone.
-        let (deadband_only_peak, _, deadband_only_accepts) =
-            drive_stage2_loop(stage2_ab_loop_fixture(30, 1));
-        assert_eq!(
-            deadband_only_peak, undamped_peak,
-            "deadband alone (no stagger) does not flatten the peak: {deadband_only_peak}"
+            deadband.max_in_flight > undamped.max_in_flight,
+            "deadband deepens the in-flight buffer: deadband={} undamped={}",
+            deadband.max_in_flight, undamped.max_in_flight
         );
         assert_eq!(
-            deadband_only_accepts.len(),
-            1,
-            "deadband alone still clumps the opening wave onto one tick"
+            damped.max_in_flight, deadband.max_in_flight,
+            "stagger does not change buffer depth (only WHEN accepts fire)"
+        );
+
+        // (2) STAGGER flattens the overshoot peak (clumped 4-hauler spike -> spread +
+        // drained). Non-vacuity floor on the undamped peak, then a >=2x cut.
+        assert!(undamped.peak >= 20, "undamped overshoot is real: {}", undamped.peak);
+        assert!(
+            damped.peak * 2 <= undamped.peak,
+            "stagger at least halves the overshoot peak: damped={} undamped={}",
+            damped.peak, undamped.peak
+        );
+
+        // (3) STAGGER also TAMES the steady-state band the deadband alone would widen:
+        // deadband-without-stagger jitters MORE than the collapsed baseline, and adding
+        // stagger brings it back down. (RED if stagger is disabled.)
+        assert!(
+            deadband.band > undamped.band,
+            "deadband alone widens the steady-state band: deadband={} undamped={}",
+            deadband.band, undamped.band
+        );
+        assert!(
+            damped.band < deadband.band,
+            "stagger tames the band the deadband widens: damped={} deadband={}",
+            damped.band, deadband.band
+        );
+
+        // (4) STAGGER spreads the opening wave across ticks; undamped clumps it onto one.
+        assert_eq!(undamped.accept_ticks.len(), 1, "undamped clumps opening accepts: {:?}", undamped.accept_ticks);
+        assert!(damped.accept_ticks.len() > 1, "stagger spreads opening accepts: {:?}", damped.accept_ticks);
+    }
+
+    #[test]
+    fn return_routing_sustains_the_forage_loop_past_one_wave() {
+        // A hauler is a forager: it WALKS to the food (navigates to a contract's pickup
+        // station), EATS (loads + delivers), then forages again. Without return-routing
+        // a hauler delivers A->B once and strands at B — Idle but not co-located with the
+        // A pickup, so it can never load its next A->B contract. The economy then runs a
+        // single opening wave (4 haulers x qty 5 == 20 Fuel eaten by the B sink) and jams.
+        // With return-routing the hauler walks back to A, reloads, and delivers again, so
+        // the loop sustains for many waves.
+        use crate::economy::Resource;
+        let fuel = Resource::Fuel.index();
+        let (mut world, _h) =
+            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+        let mut empty: Vec<Command> = Vec::new();
+        let mut completions = 0usize;
+        for t in 1..=1000u64 {
+            world.step(&mut empty);
+            for e in world.events_mut().since(Tick(t)) {
+                if matches!(e.kind, EventKind::ContractFulfilled { .. }) {
+                    completions += 1;
+                }
+            }
+        }
+        // The single-wave jam ceiling is exactly 4 deliveries (one per hauler) == 20 Fuel
+        // consumed by the sink. A sustained forage loop blows well past both.
+        assert!(
+            completions > 4,
+            "forage loop sustains past the opening wave (completions={completions}, one-wave jam == 4)"
+        );
+        assert!(
+            world.econ.consumed[fuel] > 20,
+            "B sink keeps eating across multiple waves (consumed Fuel={}, one-wave == 20)",
+            world.econ.consumed[fuel]
         );
     }
 

@@ -624,6 +624,23 @@ fn try_load(
     // Co-location: the hauler must be within ARRIVAL_RADIUS of the origin body.
     let body_pos = eph.body_pos(bodies.eph_index[from_body_row], tick);
     if ships.pos[crow].sub(body_pos).length() > crate::autopilot::ARRIVAL_RADIUS {
+        // Not at the pickup yet: WALK TO THE FOOD. Dispatch the hauler to Seek the
+        // origin body so a hauler that just delivered elsewhere (now Idle but bound to
+        // this contract) returns to load it — this deadhead leg is what CLOSES the
+        // forage loop (deliver -> return -> reload -> deliver ...). Set the nav ONCE
+        // (idempotent): if the craft is already Seeking this origin, leave dv_remaining
+        // alone so the budget depletes over the trip instead of resetting every tick.
+        let from_dest = NavDest::Entity(EntityRef::Body(from_body));
+        let already_seeking_origin = matches!(
+            ships.nav[crow],
+            NavState::Seeking { dest, .. } if dest == from_dest
+        );
+        if !already_seeking_origin {
+            let eff = effective_params(&ships.spec[crow], &ships.mods[crow]);
+            let dv =
+                crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ships.fuel_mass[crow]);
+            ships.nav[crow] = NavState::Seeking { dest: from_dest, dv_remaining: dv };
+        }
         return;
     }
     // Stock gate: the origin station must hold the cargo.
