@@ -609,6 +609,29 @@ mod tests {
     }
 
     #[test]
+    fn economy_free_world_replays_bit_identically_after_version_bump() {
+        // PHASE-0 GATE: the HASH_FORMAT_VERSION 1->2 bump must NOT introduce
+        // nondeterminism for the legacy (no-economy) path. Two worlds from the same
+        // economy-free config (cfg_with_craft_x has empty economy stores), stepped
+        // identically with empty commands, must produce the same state_hash each tick.
+        use crate::contract::Command;
+        let (mut a, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        let (mut b, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        for t in 0..20 {
+            let mut ca: Vec<Command> = Vec::new();
+            let mut cb: Vec<Command> = Vec::new();
+            a.step(&mut ca);
+            b.step(&mut cb);
+            assert_eq!(
+                state_hash(&a),
+                state_hash(&b),
+                "economy-free replay diverged at tick {}",
+                t + 1
+            );
+        }
+    }
+
+    #[test]
     fn populated_world_hashes_deterministically() {
         assert_eq!(state_hash(&populated_world()), state_hash(&populated_world()));
     }
