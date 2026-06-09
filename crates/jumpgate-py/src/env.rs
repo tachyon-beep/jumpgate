@@ -94,6 +94,12 @@ fn config_template(num_craft: usize) -> RunConfig {
         // grew a `guidance: GuidanceParams` field. Use the canonical default
         // policy (cruise_burn_fraction / k_brake / v_err_eps).
         guidance: GuidanceParams::default(),
+        stations: vec![],
+        producers: vec![],
+        corporations: vec![],
+        contracts: vec![],
+        price_cfg: jumpgate_core::config::PriceCfg::default(),
+        dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
     }
 }
 

@@ -78,6 +78,106 @@ impl Default for GuidanceParams {
     }
 }
 
+// --- Economy initial conditions (the first demand-driven loop, deterministic
+// harness). All money is i64 microcredits. These are folded at the TAIL of
+// config_hash, append-only, after `guidance`. References resolve at `World::reset`
+// (an out-of-range *_index is a `ResetError`, validated before tick 0). ---
+
+/// A station's initial market: which Body it rides, and its per-resource opening
+/// integer stock + micro-price.
+#[derive(Clone, Debug)]
+pub struct StationInit {
+    pub body_index: usize,
+    pub initial_stock: [i64; crate::economy::N_RESOURCES],
+    pub initial_price_micros: [i64; crate::economy::N_RESOURCES],
+}
+
+/// A producer attached to a station, running `recipe` every `recipe.interval` ticks.
+#[derive(Clone, Debug)]
+pub struct ProducerInit {
+    pub station_index: usize,
+    pub recipe: crate::economy::Recipe,
+}
+
+/// A funded corporation (the contract originator). Non-spatial; `home_station_index`
+/// is where it operates from.
+#[derive(Clone, Debug)]
+pub struct CorporationInit {
+    pub treasury_micros: i64,
+    pub home_station_index: usize,
+}
+
+/// A delivery contract seeded at config (status `Offered` at reset): move `qty` of
+/// `resource` from `from_station_index` to `to_station_index` for `reward_micros`.
+#[derive(Clone, Debug)]
+pub struct ContractInit {
+    pub corp_index: usize,
+    pub resource: crate::economy::Resource,
+    pub qty: u32,
+    pub from_station_index: usize,
+    pub to_station_index: usize,
+    pub reward_micros: i64,
+}
+
+/// Stage-2 linear demand-deflation price curve + its reprice clock (config-hashed).
+/// `price_micros(r) = base_micros[r] * (2000 - min(stock, cap[r]) * slope_milli / cap[r]) / 1000`,
+/// clamped `>= 0`: at stock 0 → `base*2`; at stock `cap` → `base*(2 - slope)`. The
+/// reprice cadence is part of the recorded schedule (invoked from `World::step`, NOT
+/// lazily on read). Consumed by `update_prices` (Stage 2 — Tasks 19/20).
+#[derive(Clone, Copy, Debug)]
+pub struct PriceCfg {
+    pub base_micros: [i64; crate::economy::N_RESOURCES],
+    pub cap: [i64; crate::economy::N_RESOURCES],
+    /// `k * 1000`, e.g. `1800 == 1.8`.
+    pub slope_milli: i64,
+    /// `update_prices` runs when `tick % reprice_interval == 0`. `1` == every tick.
+    pub reprice_interval: u32,
+}
+
+impl Default for PriceCfg {
+    fn default() -> Self {
+        PriceCfg {
+            base_micros: [0; crate::economy::N_RESOURCES],
+            cap: [1; crate::economy::N_RESOURCES],
+            slope_milli: 1800,
+            reprice_interval: 1,
+        }
+    }
+}
+
+/// Scripted dispatch + hysteresis tunables (config-hashed). Drives the
+/// repost/dispatch stage (Stage-1 — Task 17) and its Stage-2 stability refinements
+/// (hysteresis deadband + staggered dispatch — Task 21). Inert defaults (no
+/// auto-posting) so a fixture that does not configure dispatch is unaffected.
+#[derive(Clone, Copy, Debug)]
+pub struct DispatchCfg {
+    /// Post a delivery contract for a route when the destination station's stock of
+    /// the traded resource is at/below this (units). The demand trigger.
+    pub demand_low: i64,
+    /// Stop posting for that route once destination stock recovers to/above this.
+    /// Hysteresis upper edge; set `> demand_low` to avoid chatter.
+    pub demand_high: i64,
+    /// Staggered dispatch period: an Idle hauler in dense row `s` may accept only on
+    /// ticks where `tick % stagger_period == s % stagger_period`. `1` == no stagger.
+    pub stagger_period: u32,
+    /// Microcredits the corp escrows per posted contract (Stage-1 fixed reward).
+    pub contract_reward_micros: i64,
+    /// Units of the traded resource moved per posted contract.
+    pub contract_qty: u32,
+}
+
+impl Default for DispatchCfg {
+    fn default() -> Self {
+        DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -92,6 +192,14 @@ pub struct RunConfig {
     pub craft: Vec<CraftInit>,
     /// Class-2 guidance policy (D4). Folded at the TAIL of config_hash.
     pub guidance: GuidanceParams,
+    // Economy initial conditions (folded AFTER guidance, append-only). Empty vecs +
+    // default cfgs leave the world an inert physics sim (no stations/producers/etc.).
+    pub stations: Vec<StationInit>,
+    pub producers: Vec<ProducerInit>,
+    pub corporations: Vec<CorporationInit>,
+    pub contracts: Vec<ContractInit>,
+    pub price_cfg: PriceCfg,
+    pub dispatch_cfg: DispatchCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -143,6 +251,13 @@ impl RunConfig {
     ///   5. substep_cfg.max_substeps          13. guidance.v_err_eps              (D4)
     ///   6. ephemeris_window
     ///   7. bodies.len()   8. craft.len()
+    ///  14. economy counts: stations.len(), producers.len(), corporations.len(), contracts.len()
+    ///  15. per-station: body_index, then per-resource (initial_stock, initial_price_micros)
+    ///  16. per-producer: station_index, then recipe (input disc+payload, output disc+payload, interval)
+    ///  17. per-corporation: treasury_micros, home_station_index
+    ///  18. per-contract: corp_index, resource.index(), qty, from_station_index, to_station_index, reward_micros
+    ///  19. price_cfg: slope_milli, reprice_interval, per-resource (base_micros, cap)
+    ///  20. dispatch_cfg: demand_low, demand_high, stagger_period, contract_reward_micros, contract_qty
     pub fn config_hash(&self) -> ConfigHash {
         // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
         // until it is explicitly folded below (D10/M6 — closes the silent-omission
@@ -156,6 +271,12 @@ impl RunConfig {
             bodies,
             craft,
             guidance, // NEW (D4): destructure forces folding below
+            stations,     // NEW (economy): destructure forces folding below
+            producers,
+            corporations,
+            contracts,
+            price_cfg,
+            dispatch_cfg,
         } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
@@ -201,15 +322,80 @@ impl RunConfig {
         h.write_u64(guidance.cruise_burn_fraction.to_bits());
         h.write_u64(guidance.k_brake.to_bits());
         h.write_u64(guidance.v_err_eps.to_bits());
+        // ECONOMY (TAIL, append-only — CONFIG_FIELD_ORDER 14..=20). The byte stream
+        // above stays byte-identical; this only EXTENDS it. Counts FIRST so a
+        // cardinality change always moves the hash even when new elements are zero.
+        // Integers fold directly; Resource/Recipe fold via discriminant + payload.
+        h.write_u64(stations.len() as u64);
+        h.write_u64(producers.len() as u64);
+        h.write_u64(corporations.len() as u64);
+        h.write_u64(contracts.len() as u64);
+        for s in stations {
+            h.write_u64(s.body_index as u64);
+            for r in 0..crate::economy::N_RESOURCES {
+                h.write_u64(s.initial_stock[r] as u64);
+                h.write_u64(s.initial_price_micros[r] as u64);
+            }
+        }
+        for p in producers {
+            h.write_u64(p.station_index as u64);
+            write_recipe(&mut h, &p.recipe);
+        }
+        for c in corporations {
+            h.write_u64(c.treasury_micros as u64);
+            h.write_u64(c.home_station_index as u64);
+        }
+        for k in contracts {
+            h.write_u64(k.corp_index as u64);
+            h.write_u64(k.resource.index() as u64);
+            h.write_u64(k.qty as u64);
+            h.write_u64(k.from_station_index as u64);
+            h.write_u64(k.to_station_index as u64);
+            h.write_u64(k.reward_micros as u64);
+        }
+        h.write_u64(price_cfg.slope_milli as u64);
+        h.write_u64(price_cfg.reprice_interval as u64);
+        for r in 0..crate::economy::N_RESOURCES {
+            h.write_u64(price_cfg.base_micros[r] as u64);
+            h.write_u64(price_cfg.cap[r] as u64);
+        }
+        h.write_u64(dispatch_cfg.demand_low as u64);
+        h.write_u64(dispatch_cfg.demand_high as u64);
+        h.write_u64(dispatch_cfg.stagger_period as u64);
+        h.write_u64(dispatch_cfg.contract_reward_micros as u64);
+        h.write_u64(dispatch_cfg.contract_qty as u64);
         ConfigHash(h.finish())
     }
+}
+
+/// Fold a `Recipe` into the config hash: input (0/1 discriminant, then
+/// `(resource.index(), qty)` if present), output (same), then `interval`.
+/// Self-delimiting so a `None` input cannot alias a present one.
+fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
+    match r.input {
+        None => h.write_u64(0),
+        Some((res, qty)) => {
+            h.write_u64(1);
+            h.write_u64(res.index() as u64);
+            h.write_u64(qty as u64);
+        }
+    }
+    match r.output {
+        None => h.write_u64(0),
+        Some((res, qty)) => {
+            h.write_u64(1);
+            h.write_u64(res.index() as u64);
+            h.write_u64(qty as u64);
+        }
+    }
+    h.write_u64(r.interval as u64);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0x278c_5d91_b75a_9e5a; // RE-PINNED: +guidance fold (D4). Was 0x9767_52c4_8d05_053c.
+    const GOLDEN_CONFIG_HASH: u64 = 0xf4bc_85c3_7cb6_8a6b; // RE-PINNED: +economy fold (stations/producers/corps/contracts/price_cfg/dispatch_cfg). Was 0x278c_5d91_b75a_9e5a.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -244,6 +430,12 @@ mod tests {
                 fuel_mass: 0.5,
             }],
             guidance: GuidanceParams::default(),
+            stations: vec![],
+            producers: vec![],
+            corporations: vec![],
+            contracts: vec![],
+            price_cfg: PriceCfg::default(),
+            dispatch_cfg: DispatchCfg::default(),
         }
     }
 
@@ -341,6 +533,58 @@ mod tests {
         let mut c = sample();
         c.ephemeris_window = 20_000;
         assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_an_economy_field_changes_config_hash() {
+        // Adding a station moves the hash (cardinality folded first).
+        let mut c = sample();
+        c.stations.push(StationInit {
+            body_index: 0,
+            initial_stock: [10, 0],
+            initial_price_micros: [0, 0],
+        });
+        assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_a_producer_recipe_changes_config_hash() {
+        // A producer + its recipe both participate (recipe folded discriminant-first).
+        let mut c = sample();
+        c.producers.push(ProducerInit {
+            station_index: 0,
+            recipe: crate::economy::Recipe {
+                input: None,
+                output: Some((crate::economy::Resource::Ore, 5)),
+                interval: 1,
+            },
+        });
+        let h_mine = c.config_hash();
+        // Flip output Ore->Fuel: recipe payload must move the hash.
+        c.producers[0].recipe.output = Some((crate::economy::Resource::Fuel, 5));
+        assert_ne!(h_mine, c.config_hash());
+        // ...and differs from the no-producer baseline.
+        assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn changing_price_cfg_changes_config_hash() {
+        let mut c = sample();
+        c.price_cfg.slope_milli = 1700;
+        assert_ne!(sample().config_hash(), c.config_hash());
+        let mut d = sample();
+        d.price_cfg.reprice_interval = 4;
+        assert_ne!(sample().config_hash(), d.config_hash());
+    }
+
+    #[test]
+    fn changing_dispatch_cfg_changes_config_hash() {
+        let mut c = sample();
+        c.dispatch_cfg.demand_low = 3;
+        assert_ne!(sample().config_hash(), c.config_hash());
+        let mut d = sample();
+        d.dispatch_cfg.stagger_period = 2;
+        assert_ne!(sample().config_hash(), d.config_hash());
     }
 
     #[test]

@@ -40,6 +40,12 @@ fn base_config() -> RunConfig {
             fuel_mass: 5.0e-10,
         }],
         guidance: GuidanceParams::default(),
+        stations: vec![],
+        producers: vec![],
+        corporations: vec![],
+        contracts: vec![],
+        price_cfg: jumpgate_core::config::PriceCfg::default(),
+        dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
     }
 }
 

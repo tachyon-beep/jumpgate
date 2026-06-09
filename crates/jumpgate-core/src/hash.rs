@@ -250,6 +250,12 @@ mod tests {
                 fuel_mass: 0.5,
             }],
             guidance: GuidanceParams::default(),
+            stations: vec![],
+            producers: vec![],
+            corporations: vec![],
+            contracts: vec![],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
         }
     }
 

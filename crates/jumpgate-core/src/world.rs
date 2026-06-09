@@ -533,6 +533,12 @@ mod tests {
                 fuel_mass: 1e-12,
             }],
             guidance: GuidanceParams::default(),
+            stations: vec![],
+            producers: vec![],
+            corporations: vec![],
+            contracts: vec![],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
         }
     }
 
@@ -579,6 +585,12 @@ mod tests {
                 fuel_mass: 1e-9,
             }],
             guidance: GuidanceParams::default(),
+            stations: vec![],
+            producers: vec![],
+            corporations: vec![],
+            contracts: vec![],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
         }
     }
 

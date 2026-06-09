@@ -75,6 +75,12 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
         }],
         craft,
         guidance: GuidanceParams::default(),
+        stations: vec![],
+        producers: vec![],
+        corporations: vec![],
+        contracts: vec![],
+        price_cfg: jumpgate_core::config::PriceCfg::default(),
+        dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
     }
 }
 
@@ -333,6 +339,12 @@ fn transfer_to_moving_body_rendezvous() {
         ],
         craft,
         guidance: GuidanceParams::default(),
+        stations: vec![],
+        producers: vec![],
+        corporations: vec![],
+        contracts: vec![],
+        price_cfg: jumpgate_core::config::PriceCfg::default(),
+        dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");
@@ -455,6 +467,12 @@ fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
         ],
         craft,
         guidance: GuidanceParams::default(),
+        stations: vec![],
+        producers: vec![],
+        corporations: vec![],
+        contracts: vec![],
+        price_cfg: jumpgate_core::config::PriceCfg::default(),
+        dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");

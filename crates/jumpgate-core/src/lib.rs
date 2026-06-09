@@ -43,7 +43,8 @@ pub mod world;
 // View/ActionLog/EventStream/state_hash/replay symbols).
 pub use autopilot::{ARRIVAL_RADIUS, autopilot_command};
 pub use config::{
-    BaseSpec, BodyInit, ConfigHash, CraftInit, GuidanceParams, OrbitalElements, RunConfig, SubstepCfg,
+    BaseSpec, BodyInit, ConfigHash, ContractInit, CorporationInit, CraftInit, DispatchCfg,
+    GuidanceParams, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit, SubstepCfg,
 };
 pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
 pub use ephemeris::Ephemeris;
