@@ -23,7 +23,7 @@ impl Resource {
     }
 }
 
-use crate::ids::{BodyId, ProducerId, SlotMap, StationId};
+use crate::ids::{BodyId, ContractId, CorporationId, CraftId, ProducerId, SlotMap, StationId};
 use crate::time::Tick;
 
 /// A producer's recipe: optional input consumed, optional output produced, every
@@ -96,6 +96,114 @@ impl ProducerStore {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContractStatus {
+    Offered,
+    Accepted,
+    CargoLoaded,
+    InTransit,
+    Delivered,
+    Completed,
+    Failed,
+}
+
+impl ContractStatus {
+    /// Stable discriminant for self-delimiting state-hash folding. APPEND-ONLY.
+    pub fn rank(self) -> u8 {
+        match self {
+            ContractStatus::Offered => 0,
+            ContractStatus::Accepted => 1,
+            ContractStatus::CargoLoaded => 2,
+            ContractStatus::InTransit => 3,
+            ContractStatus::Delivered => 4,
+            ContractStatus::Completed => 5,
+            ContractStatus::Failed => 6,
+        }
+    }
+}
+
+pub struct CorporationStore {
+    pub ids: SlotMap<()>,
+    pub treasury_micros: Vec<i64>,
+    pub home_station: Vec<StationId>,
+}
+
+impl CorporationStore {
+    pub fn empty() -> Self {
+        CorporationStore {
+            ids: SlotMap::new(),
+            treasury_micros: Vec::new(),
+            home_station: Vec::new(),
+        }
+    }
+    pub fn push(&mut self, treasury_micros: i64, home_station: StationId) -> CorporationId {
+        let (slot, generation) = self.ids.insert(());
+        debug_assert_eq!(
+            slot as usize,
+            self.treasury_micros.len(),
+            "corp slot == row"
+        );
+        self.treasury_micros.push(treasury_micros);
+        self.home_station.push(home_station);
+        CorporationId { slot, generation }
+    }
+}
+
+/// Delivery contracts: move `qty` of `resource` from `from_station` to `to_station`
+/// for `reward_micros` (escrowed at accept). status enum + escrow are the hashed
+/// lifecycle. `hauler` is set on accept.
+pub struct ContractStore {
+    pub ids: SlotMap<()>,
+    pub status: Vec<ContractStatus>,
+    pub corp: Vec<CorporationId>,
+    pub resource: Vec<Resource>,
+    pub qty: Vec<u32>,
+    pub from_station: Vec<StationId>,
+    pub to_station: Vec<StationId>,
+    pub reward_micros: Vec<i64>,
+    pub escrow_micros: Vec<i64>,
+    pub hauler: Vec<Option<CraftId>>,
+}
+
+impl ContractStore {
+    pub fn empty() -> Self {
+        ContractStore {
+            ids: SlotMap::new(),
+            status: Vec::new(),
+            corp: Vec::new(),
+            resource: Vec::new(),
+            qty: Vec::new(),
+            from_station: Vec::new(),
+            to_station: Vec::new(),
+            reward_micros: Vec::new(),
+            escrow_micros: Vec::new(),
+            hauler: Vec::new(),
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn push(
+        &mut self,
+        corp: CorporationId,
+        resource: Resource,
+        qty: u32,
+        from_station: StationId,
+        to_station: StationId,
+        reward_micros: i64,
+    ) -> ContractId {
+        let (slot, generation) = self.ids.insert(());
+        self.status.push(ContractStatus::Offered);
+        self.corp.push(corp);
+        self.resource.push(resource);
+        self.qty.push(qty);
+        self.from_station.push(from_station);
+        self.to_station.push(to_station);
+        self.reward_micros.push(reward_micros);
+        self.escrow_micros.push(0);
+        self.hauler.push(None);
+        ContractId { slot, generation }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +216,20 @@ mod tests {
         for (i, r) in Resource::ALL.iter().enumerate() {
             assert_eq!(r.index(), i);
         }
+    }
+
+    #[test]
+    fn corp_and_contract_stores_start_empty() {
+        let c = CorporationStore::empty();
+        assert_eq!(c.ids.len(), 0);
+        assert_eq!(c.treasury_micros.len(), 0);
+
+        let k = ContractStore::empty();
+        assert_eq!(k.ids.len(), 0);
+        assert_eq!(k.status.len(), 0);
+        // status rank is total + distinct (used by the state hash).
+        assert_eq!(ContractStatus::Offered.rank(), 0);
+        assert_ne!(ContractStatus::Failed.rank(), ContractStatus::Completed.rank());
     }
 
     #[test]
