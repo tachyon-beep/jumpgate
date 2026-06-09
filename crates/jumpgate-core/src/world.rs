@@ -153,6 +153,10 @@ impl World {
             prev_inside_dest: Vec::new(),
             prev_pos: Vec::new(),
             mods: Vec::new(),
+            role: Vec::new(),
+            cargo: Vec::new(),
+            credits_micros: Vec::new(),
+            contract: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -170,6 +174,13 @@ impl World {
             // chord), so no spurious Arrival clip on the first step.
             ships.prev_pos.push(c.pos);
             ships.mods.push(crate::stores::EffectiveMods::IDENTITY);
+            // Hauler economy columns: every craft starts Idle, empty-handed, broke,
+            // uncontracted (the loop builds the SoA manually; keep all columns
+            // length-parallel or the state hash's dense-row unwrap panics).
+            ships.role.push(crate::stores::CraftRole::Idle);
+            ships.cargo.push(None);
+            ships.credits_micros.push(0);
+            ships.contract.push(None);
         }
 
         let rng = RngStreams::from_master(cfg.master_seed);

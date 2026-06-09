@@ -65,6 +65,23 @@ impl EffectiveMods {
     pub const IDENTITY: EffectiveMods = EffectiveMods { thrust_factor: 1.0 };
 }
 
+/// Economic role of a craft. v1: `Idle` or `Hauler`. Hashed economy state
+/// (HASH_FIELD_ORDER, folded discriminant-first via `rank()`). APPEND-ONLY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CraftRole {
+    Idle,
+    Hauler,
+}
+impl CraftRole {
+    /// Stable discriminant for self-delimiting state-hash folding.
+    pub fn rank(self) -> u8 {
+        match self {
+            CraftRole::Idle => 0,
+            CraftRole::Hauler => 1,
+        }
+    }
+}
+
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
 /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
 /// length-parallel. `prev_fuel` / `prev_inside_dest` / `prev_pos` snapshot the
@@ -94,6 +111,16 @@ pub struct CraftStore {
     /// either constant (v1) or folded into HASH_FIELD_ORDER (Plan B); it must NEVER
     /// depend on an unhashed runtime-mutable input.
     pub mods: Vec<EffectiveMods>,
+    // --- Hauler economy columns (length-parallel, HASHED economy state) ---
+    /// Economic role. `Idle` until a contract is accepted (`Hauler`).
+    pub role: Vec<CraftRole>,
+    /// Loaded cargo: `Some((resource, qty))` while carrying a delivery, else `None`.
+    /// Distinct from `fuel_mass` (propellant) — traded Fuel is cargo in v1.
+    pub cargo: Vec<Option<(crate::economy::Resource, u32)>>,
+    /// Earned credits (i64 microcredits). Paid from contract escrow on delivery.
+    pub credits_micros: Vec<i64>,
+    /// The contract this craft is fulfilling, or `None`.
+    pub contract: Vec<Option<crate::ids::ContractId>>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -121,6 +148,10 @@ impl CraftStore {
             prev_inside_dest: Vec::new(),
             prev_pos: Vec::new(),
             mods: Vec::new(),
+            role: Vec::new(),
+            cargo: Vec::new(),
+            credits_micros: Vec::new(),
+            contract: Vec::new(),
         }
     }
 
@@ -146,6 +177,10 @@ impl CraftStore {
         self.prev_inside_dest.push(false);
         self.prev_pos.push(pos);
         self.mods.push(EffectiveMods::IDENTITY);
+        self.role.push(CraftRole::Idle);
+        self.cargo.push(None);
+        self.credits_micros.push(0);
+        self.contract.push(None);
         CraftId { slot, generation }
     }
 
@@ -291,6 +326,27 @@ mod tests {
         assert_eq!(bid.slot, bslot);
         assert_eq!(body.mass.len(), body.ids.len());
         assert_eq!(body.eph_index.len(), body.ids.len());
+    }
+
+    #[test]
+    fn push_initializes_hauler_columns_idle_empty() {
+        let mut ship = CraftStore::empty();
+        let spec = BaseSpec {
+            base_dry_mass: 10.0,
+            base_max_thrust: 250.0,
+            base_exhaust_velocity: 30.0,
+            base_fuel_capacity: 40.0,
+        };
+        ship.push(spec, Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 40.0);
+        assert_eq!(ship.role[0], CraftRole::Idle);
+        assert_eq!(ship.cargo[0], None);
+        assert_eq!(ship.credits_micros[0], 0);
+        assert_eq!(ship.contract[0], None);
+        // length-parallel with the id authority.
+        assert_eq!(ship.role.len(), ship.ids.len());
+        assert_eq!(ship.cargo.len(), ship.ids.len());
+        assert_eq!(ship.credits_micros.len(), ship.ids.len());
+        assert_eq!(ship.contract.len(), ship.ids.len());
     }
 
     #[test]
