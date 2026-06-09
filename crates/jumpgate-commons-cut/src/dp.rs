@@ -1,4 +1,5 @@
 use crate::dynamics::step;
+use crate::policies::{ClosedForm, Observation, Policy};
 use crate::{Action, ArenaConfig, ArenaState, Ship};
 use std::collections::HashMap;
 
@@ -113,6 +114,118 @@ fn br_value(
     best
 }
 
+/// Closed-loop BR: `me` best-responds while the OTHERS run `others` (reactive `ClosedForm`)
+/// against the live state each tick — they re-crowd in response to the deviator rather than
+/// staying frozen (spec §4.1). Returns `(computed V0, realized rollout total)`; the two MUST
+/// be equal — the phantom-ceiling cross-check (LAW 3). A mismatch is a DP/realize bug.
+pub fn best_response_value_closed_loop_checked(
+    cfg: &ArenaConfig,
+    starts: &[u8],
+    me: usize,
+    others: &ClosedForm,
+) -> (u64, u64) {
+    let st0 = ArenaState::from_config(cfg, starts);
+    let mut memo: HashMap<(u64, u32), u64> = HashMap::new();
+    let v0 = br_value_cl(&st0, cfg, me, others, &mut memo);
+    // Realized rollout: replay me's optimal choice forward through the reactive field.
+    let realized = realize_cl(&st0, cfg, me, others, &mut memo);
+    (v0, realized)
+}
+
+/// Build the simultaneous action vector for one tick: `me` stays (caller overwrites), every
+/// other ship runs the reactive `others` rule against the SAME tick-start state.
+fn others_actions(st: &ArenaState, me: usize, others: &ClosedForm) -> Vec<Action> {
+    (0..st.ships.len())
+        .map(|i| {
+            if i == me {
+                Action::Stay
+            } else {
+                others.decide(&Observation { state: st, ship_idx: i })
+            }
+        })
+        .collect()
+}
+
+/// Candidate actions for `me` from this state: Stay, then MoveTo each other region (lowest
+/// index first — the pinned tie-break, spec §7). Only generates moves when in-region.
+fn me_candidates(st: &ArenaState, me: usize) -> Vec<Action> {
+    let mut candidates = vec![Action::Stay];
+    if let Some(here) = st.ships[me].region {
+        for r in 0..st.regions.len() {
+            if r != here as usize {
+                candidates.push(Action::MoveTo(r as u8));
+            }
+        }
+    }
+    candidates
+}
+
+fn br_value_cl(
+    st: &ArenaState,
+    cfg: &ArenaConfig,
+    me: usize,
+    others: &ClosedForm,
+    memo: &mut HashMap<(u64, u32), u64>,
+) -> u64 {
+    if st.tick >= cfg.horizon {
+        return 0;
+    }
+    let key = (encode(st, cfg), st.tick);
+    if let Some(&v) = memo.get(&key) {
+        return v;
+    }
+    let mut best = 0u64;
+    for a in me_candidates(st, me) {
+        let mut next = st.clone();
+        let mut acts = others_actions(st, me, others);
+        acts[me] = a;
+        let before = next.ships[me].total_yield;
+        step(&mut next, &acts, cfg);
+        let reward = next.ships[me].total_yield - before;
+        let v = reward + br_value_cl(&next, cfg, me, others, memo);
+        if v > best {
+            best = v;
+        }
+    }
+    memo.insert(key, best);
+    best
+}
+
+/// Roll `me`'s optimal policy forward through the reactive field, returning realized total.
+/// At each tick picks the first candidate (Stay-first, lowest MoveTo index) whose
+/// `reward + br_value_cl(next)` equals the memoized optimum — the DP telescopes so the
+/// realized sum equals V0 exactly regardless of which optimum a tie picks.
+fn realize_cl(
+    st0: &ArenaState,
+    cfg: &ArenaConfig,
+    me: usize,
+    others: &ClosedForm,
+    memo: &mut HashMap<(u64, u32), u64>,
+) -> u64 {
+    let mut st = st0.clone();
+    while st.tick < cfg.horizon {
+        let target = br_value_cl(&st, cfg, me, others, memo);
+        let mut chosen = Action::Stay;
+        for a in me_candidates(&st, me) {
+            let mut next = st.clone();
+            let mut acts = others_actions(&st, me, others);
+            acts[me] = a;
+            let before = next.ships[me].total_yield;
+            step(&mut next, &acts, cfg);
+            let reward = next.ships[me].total_yield - before;
+            let v = reward + br_value_cl(&next, cfg, me, others, memo);
+            if v == target {
+                chosen = a;
+                break;
+            }
+        }
+        let mut acts = others_actions(&st, me, others);
+        acts[me] = chosen;
+        step(&mut st, &acts, cfg);
+    }
+    st.ships[me].total_yield
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +292,71 @@ mod tests {
         };
         let v = best_response_value_open_loop(&cfg, &[0u8], 0);
         assert_eq!(v, 20, "DP must move to the rich region (future-blind bug returns 4)");
+    }
+
+    #[test]
+    fn closed_loop_br_value_equals_realized_rollout_phantom_check() {
+        let cfg = ArenaConfig {
+            regions: vec![
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+            ],
+            travel: vec![vec![0, 2], vec![2, 0]],
+            horizon: 8,
+        };
+        let others = crate::policies::ClosedForm { tau: 5, move_prob_milli: 1000, seed: 1 };
+        let (v0, realized) = best_response_value_closed_loop_checked(&cfg, &[0u8, 1u8], 0, &others);
+        assert_eq!(v0, realized, "phantom-ceiling: computed V0 must equal realized rollout");
+    }
+
+    /// Phantom-ceiling on a fixture whose OPTIMAL BR path requires a MOVE (not the trivial
+    /// Stay-everywhere optimum). `me` starts on a near-empty region; a rich region pays only
+    /// after a transit tick, so the realized rollout must telescope through depart(0)+arrive
+    /// rewards. This makes the cross-check exercise `realize_cl`'s move branch — a realize
+    /// bug that mis-follows the move path produces realized != V0 and is caught here (LAW 3).
+    #[test]
+    fn closed_loop_phantom_check_holds_when_optimal_path_moves() {
+        // Both ships START crowded on the poor region 0; the rich region 1 is unoccupied and
+        // reachable. `me` (ship 0) wins by abandoning the crowd for the rich, empty region.
+        let cfg = ArenaConfig {
+            regions: vec![
+                crate::Region { stock: 2, richness_cap: 20, regen_per_tick: 0 },
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+            ],
+            travel: vec![vec![0, 1], vec![1, 0]],
+            horizon: 6,
+        };
+        // tau high so the reactive other ALSO wants to leave the poor region — a live,
+        // re-crowding field (its move target uses (occ+1), and `me`'s departure changes occ).
+        let others = crate::policies::ClosedForm {
+            tau: crate::STOCK_MAX as u64,
+            move_prob_milli: 1000,
+            seed: 1,
+        };
+        let (v0, realized) = best_response_value_closed_loop_checked(&cfg, &[0u8, 0u8], 0, &others);
+        assert_eq!(v0, realized, "phantom-ceiling (move path): computed V0 must equal realized rollout");
+        // Guard the guard: the optimal BR really must beat the Stay-only floor, i.e. moving
+        // pays — otherwise this fixture would degenerate to the trivial Stay optimum above.
+        // The reactive other has tau=STOCK_MAX, so at tick 0 it ABANDONS the poor region 0
+        // for the rich region, leaving `me` alone on region 0 to take the full stock 2 then
+        // 0 -> Stay-only floor is 2. Require v0 > 2 so a degenerate Stay-optimum can't slip
+        // through (the real optimum here is 11: contest the rich region for 10 then 1).
+        assert!(v0 > 2, "fixture must require a move to be optimal (Stay-only floor is 2); v0={v0}");
+    }
+
+    #[test]
+    fn closed_loop_le_open_loop_recrowding_reduces_inherited_residual() {
+        let cfg = ArenaConfig {
+            regions: vec![
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+            ],
+            travel: vec![vec![0, 1], vec![1, 0]],
+            horizon: 8,
+        };
+        let others = crate::policies::ClosedForm { tau: 5, move_prob_milli: 1000, seed: 1 };
+        let open = best_response_value_open_loop(&cfg, &[0u8, 1u8], 0);
+        let (closed, _) = best_response_value_closed_loop_checked(&cfg, &[0u8, 1u8], 0, &others);
+        assert!(closed <= open, "closed-loop {closed} <= open-loop {open} (reacting field contests residuals)");
     }
 }
