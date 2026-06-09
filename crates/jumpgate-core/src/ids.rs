@@ -16,6 +16,30 @@ pub struct BodyId {
     pub generation: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StationId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ProducerId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CorporationId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ContractId {
+    pub slot: u32,
+    pub generation: u32,
+}
+
 /// Generational slot-map: dense values + per-slot generation + free list + a
 /// monotone `cursor` high-water. `cursor()` is included in the per-tick hash.
 pub struct SlotMap<T> {
@@ -332,5 +356,23 @@ mod tests {
         assert_eq!(first, second, "same op sequence -> same (cursor, len)");
         assert_eq!(first.0, 2, "two slots ever allocated -> cursor == 2");
         assert_eq!(first.1, 2, "two live entries");
+    }
+
+    #[test]
+    fn economy_ids_are_distinct_generational() {
+        let mut sm: SlotMap<()> = SlotMap::new();
+        let (slot, generation) = sm.insert(());
+        let s = StationId { slot, generation };
+        let c = ContractId { slot, generation };
+        assert_eq!(s.slot, c.slot); // same numeric slot...
+        // ...but they are different *types*: this test compiles only if both exist.
+        let _p = ProducerId {
+            slot: 0,
+            generation: 0,
+        };
+        let _co = CorporationId {
+            slot: 1,
+            generation: 0,
+        };
     }
 }
