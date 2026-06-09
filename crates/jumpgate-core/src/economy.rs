@@ -285,6 +285,52 @@ pub fn run_producers(
     }
 }
 
+/// Linear demand-deflation pricing stage (Task 19 — PURE-INTEGER micro-price; no
+/// float, no `to_micros`). For each station row (`0..len`, sorted by the dense
+/// `slot == row` invariant) and each resource `r` with `cap[r] > 0`:
+///
+///   s = clamp(stock[row][r], 0, cap[r])
+///   p = max(0, base_micros[r] * (2000 - s * slope_milli / cap[r]) / 1000)
+///
+/// At `s == 0` → `base*2`; at `s == cap` → `base*(2 - slope_milli/1000)`. The price
+/// is monotone NON-INCREASING in stock. Resources with `cap[r] == 0` are SKIPPED
+/// (div-by-zero guard; their price is left unchanged). On a CHANGE (`p !=` the
+/// stored price) the new price is written AND a `PriceUpdate` event is emitted.
+/// Deterministic, sorted-id, integer-only. Not yet wired into `World::step` (T20).
+pub fn update_prices(
+    stations: &mut StationStore,
+    price_cfg: &crate::config::PriceCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    for row in 0..stations.ids.len() {
+        for r in 0..N_RESOURCES {
+            if price_cfg.cap[r] == 0 {
+                continue;
+            }
+            let s = stations.stock[row][r].max(0).min(price_cfg.cap[r]);
+            let p = (price_cfg.base_micros[r] * (2000 - s * price_cfg.slope_milli / price_cfg.cap[r])
+                / 1000)
+                .max(0);
+            if p != stations.price_micros[row][r] {
+                stations.price_micros[row][r] = p;
+                if let Some(station) =
+                    stations.ids.id_at(row).map(|(slot, generation)| StationId { slot, generation })
+                {
+                    events.emit(Event {
+                        tick,
+                        kind: EventKind::PriceUpdate {
+                            station,
+                            resource: Resource::ALL[r],
+                            price_micros: p,
+                        },
+                    });
+                }
+            }
+        }
+    }
+}
+
 use crate::ephemeris::Ephemeris;
 use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, effective_params};
 use crate::types::{EntityRef, NavDest};
@@ -805,6 +851,74 @@ mod tests {
         run_producers(&mut stations, &mut producers, &mut counters, Tick(3), &mut events);
         assert_eq!(stations.stock[0][Resource::Ore.index()], 1, "fires at tick 3");
         assert_eq!(producers.last_fired[0], Tick(3));
+    }
+
+    #[test]
+    fn update_prices_linear_deflation_exact_integer() {
+        use crate::config::PriceCfg;
+        // base_micros[Fuel]=100_000, cap[Fuel]=10, slope_milli=1800.
+        // Ore has cap==0 -> SKIPPED (div-by-zero guard, price left unchanged).
+        let price_cfg = PriceCfg {
+            slope_milli: 1800,
+            base_micros: [0, 100_000],
+            cap: [0, 10],
+            ..PriceCfg::default()
+        };
+
+        // Five station rows with increasing Fuel stock: 0, 3, 5, 8, 10.
+        // Ore gets a non-zero initial price (777) we expect to be LEFT UNCHANGED.
+        let fuel_stocks = [0i64, 3, 5, 8, 10];
+        let mut stations = StationStore::empty();
+        for (i, &fstock) in fuel_stocks.iter().enumerate() {
+            stations.push(
+                BodyId { slot: i as u32, generation: 0 },
+                [0, fstock],
+                [777, 0],
+            );
+        }
+        let mut events = EventStream::new();
+
+        update_prices(&mut stations, &price_cfg, Tick(1), &mut events);
+
+        let fi = Resource::Fuel.index();
+        let oi = Resource::Ore.index();
+        // EXACT integer prices: p = 100_000*(2000 - s*1800/10)/1000.
+        //   s=0  -> 100_000*2000/1000        = 200_000  (= base*2)
+        //   s=3  -> 100_000*(2000-540)/1000  = 146_000
+        //   s=5  -> 100_000*(2000-900)/1000  = 110_000
+        //   s=8  -> 100_000*(2000-1440)/1000 =  56_000
+        //   s=10 -> 100_000*(2000-1800)/1000 =  20_000  (= base*(2-1.8))
+        assert_eq!(stations.price_micros[0][fi], 200_000, "stock 0 -> base*2");
+        assert_eq!(stations.price_micros[4][fi], 20_000, "stock cap -> base*0.2");
+        assert_eq!(stations.price_micros[1][fi], 146_000);
+        assert_eq!(stations.price_micros[2][fi], 110_000);
+        assert_eq!(stations.price_micros[3][fi], 56_000);
+
+        // Monotone NON-INCREASING across rows (sorted dense-id iteration).
+        for row in 1..stations.ids.len() {
+            assert!(
+                stations.price_micros[row][fi] <= stations.price_micros[row - 1][fi],
+                "fuel price non-increasing across rows"
+            );
+        }
+
+        // cap==0 resource (Ore) is SKIPPED: its pushed price is untouched.
+        for row in 0..stations.ids.len() {
+            assert_eq!(stations.price_micros[row][oi], 777, "Ore (cap==0) price unchanged");
+        }
+
+        // Exactly one PriceUpdate per row (Fuel changed 0 -> p on every row),
+        // and NONE for the skipped Ore resource.
+        let updates: Vec<_> = events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::PriceUpdate { .. }))
+            .collect();
+        assert_eq!(updates.len(), fuel_stocks.len(), "one PriceUpdate per row (Fuel)");
+        assert!(updates.iter().all(|e| matches!(
+            e.kind,
+            EventKind::PriceUpdate { resource: Resource::Fuel, .. }
+        )));
     }
 
     #[test]
