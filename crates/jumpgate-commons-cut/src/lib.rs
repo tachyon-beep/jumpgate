@@ -7,6 +7,7 @@
 pub const STOCK_MAX: u32 = 20;
 
 pub mod dynamics;
+pub mod policies;
 pub mod rng_bridge;
 
 /// A mining region. All integer (determinism).
