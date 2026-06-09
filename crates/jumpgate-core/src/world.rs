@@ -516,6 +516,24 @@ impl World {
             &failed_craft,
         );
 
+        // (3d) economy reprice stage (Stage-2 — Task 20): on a tick-gated clock,
+        //      recompute station micro-prices against this tick's FULLY-SETTLED stock
+        //      (production + deliveries + sink-consume all applied). NOT lazy-on-read —
+        //      repricing happens here in the step path so the cadence is part of the
+        //      recorded schedule. The `reprice_interval > 0` guard avoids a
+        //      modulo-by-zero if a fixture sets the interval to 0 (clock disabled).
+        //      Disjoint &mut field borrows (`stations`, `events`) + read-only price_cfg.
+        if self.config.price_cfg.reprice_interval > 0
+            && next.0.is_multiple_of(self.config.price_cfg.reprice_interval as u64)
+        {
+            crate::economy::update_prices(
+                &mut self.stations,
+                &self.config.price_cfg,
+                next,
+                &mut self.events,
+            );
+        }
+
         // (4) copy-forward the boundary-edge arrays so next tick's detection has a
         //     prior. These arrays are folded into state_hash at the position fixed by
         //     HASH_FIELD_ORDER (a later hash task pins their contribution).
@@ -1650,5 +1668,100 @@ mod tests {
         // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
         // constant sequences would compare equal trivially.
         assert_ne!(last, h0, "state_hash evolved over the 200-tick run (not a constant)");
+    }
+
+    /// Reprice-clock fixture (Task 20): one station (Fuel price live, Ore inert) with a
+    /// ∅->Fuel(5) miner at interval 1, so the station's Fuel stock GROWS every tick
+    /// while the reprice clock only recomputes the price on ticks that are multiples of
+    /// `reprice_interval`. `base_micros[Fuel]=100_000`, `cap[Fuel]=100`,
+    /// `slope_milli=1000`, so `p(s) = 100_000*(2000 - s*1000/100)/1000 = 100_000*(2000 -
+    /// 10*s)/1000`; with `reprice_interval=4`, stock at reprice tick `t` is `5*t`, so
+    /// price lands at `t=4 -> s=20 -> 180_000`, `t=8 -> s=40 -> 160_000`, `t=12 -> s=60
+    /// -> 140_000` (all exact integers, all stocks < cap). `base_micros[Ore]=0` and
+    /// `initial_price_micros=[0,0]` keep Ore inert (its computed price is also 0, so no
+    /// spurious change there).
+    fn one_station_growing_fuel_reprice_4() -> RunConfig {
+        use crate::config::{PriceCfg, ProducerInit, StationInit};
+        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        let mut cfg = one_body_one_craft();
+        cfg.stations = vec![StationInit {
+            body_index: 0,
+            initial_stock: [0; N_RESOURCES],
+            initial_price_micros: [0; N_RESOURCES],
+        }];
+        cfg.producers = vec![ProducerInit {
+            station_index: 0,
+            recipe: Recipe { input: None, output: Some((Resource::Fuel, 5)), interval: 1 },
+        }];
+        cfg.price_cfg = PriceCfg {
+            base_micros: [0, 100_000],
+            cap: [0, 100],
+            slope_milli: 1000,
+            reprice_interval: 4,
+        };
+        cfg
+    }
+
+    #[test]
+    fn step_reprice_clock_is_tick_gated_and_deterministic() {
+        use crate::economy::Resource;
+        let fi = Resource::Fuel.index();
+
+        let (mut world, _) =
+            World::reset(one_station_growing_fuel_reprice_4()).expect("resolvable config");
+        let mut empty: Vec<Command> = Vec::new();
+
+        // Capture the Fuel price AFTER each of 12 steps (i.e. priced[t-1] is the price
+        // observed after stepping to tick t). The miner adds 5 Fuel/tick, so stock keeps
+        // climbing every tick — but the price must only CHANGE on reprice ticks (t%4==0).
+        let mut priced = [0i64; 12];
+        for (i, slot) in priced.iter_mut().enumerate() {
+            world.step(&mut empty);
+            *slot = world.stations.price_micros[0][fi];
+            // Stock truly moves every tick (5 per firing), proving constancy below is the
+            // clock gating the price, not a frozen stock.
+            assert_eq!(
+                world.stations.stock[0][fi],
+                5 * (i as i64 + 1),
+                "Fuel stock grows 5/tick (clock-gated price is not just frozen stock)"
+            );
+        }
+
+        // Price stays at its opening value (0) through ticks 1..3, then RECOMPUTES at t=4.
+        assert_eq!(priced[0], 0, "t=1 (not a reprice tick): price unchanged from open (0)");
+        assert_eq!(priced[1], 0, "t=2 (not a reprice tick): price unchanged");
+        assert_eq!(priced[2], 0, "t=3 (not a reprice tick): price unchanged");
+        assert_eq!(priced[3], 180_000, "t=4 reprice: s=20 -> 100_000*(2000-200)/1000");
+        // Constant between reprice ticks even as stock moves (20 -> 35 over t=4..7).
+        assert_eq!(priced[4], 180_000, "t=5: held constant despite stock 25");
+        assert_eq!(priced[5], 180_000, "t=6: held constant despite stock 30");
+        assert_eq!(priced[6], 180_000, "t=7: held constant despite stock 35");
+        assert_eq!(priced[7], 160_000, "t=8 reprice: s=40 -> 100_000*(2000-400)/1000");
+        assert_eq!(priced[8], 160_000, "t=9: held constant");
+        assert_eq!(priced[9], 160_000, "t=10: held constant");
+        assert_eq!(priced[10], 160_000, "t=11: held constant");
+        assert_eq!(priced[11], 140_000, "t=12 reprice: s=60 -> 100_000*(2000-600)/1000");
+
+        // The constancy-despite-moving-stock claim, asserted on both edges:
+        assert_ne!(priced[3], priced[2], "price CHANGES at the reprice tick (t=4 vs t=3)");
+        assert_eq!(priced[4], priced[3], "price HELD between reprice ticks (t=5 == t=4)");
+
+        // Determinism leg: two worlds, same config, identical empty inputs -> identical
+        // price sequence.
+        let (mut wa, _) =
+            World::reset(one_station_growing_fuel_reprice_4()).expect("resolvable config");
+        let (mut wb, _) =
+            World::reset(one_station_growing_fuel_reprice_4()).expect("resolvable config");
+        let mut ea: Vec<Command> = Vec::new();
+        let mut eb: Vec<Command> = Vec::new();
+        for t in 1..=12 {
+            wa.step(&mut ea);
+            wb.step(&mut eb);
+            assert_eq!(
+                wa.stations.price_micros[0][fi],
+                wb.stations.price_micros[0][fi],
+                "reprice sequence diverged at tick {t}"
+            );
+        }
     }
 }
