@@ -223,9 +223,201 @@ impl EconCounters {
     }
 }
 
+use crate::contract::{Event, EventKind};
+use crate::events::EventStream;
+
+/// Producer firing stage (deterministic, sorted-`ProducerId` order — the dense
+/// `slot == row` invariant makes `0..len` iteration already sorted). Fires a
+/// producer when `tick - last_fired >= interval`, all-or-nothing on the input
+/// leg. PER-LEG counter discipline (the T18 resource identity depends on it):
+///
+///   * input  (r_in,  q): `stock[r_in]  -= q`  AND  `consumed[r_in]  += q`
+///   * output (r_out, q): `stock[r_out] += q`  AND  `mined[r_out]    += q`
+///
+/// So a refiner (Ore->Fuel) bumps BOTH `consumed[Ore]` AND `mined[Fuel]`. A
+/// `Production` event is emitted only when there is an output leg. A producer
+/// that skips for insufficient input does NOT advance `last_fired` (it retries
+/// the next eligible tick).
+pub fn run_producers(
+    stations: &mut StationStore,
+    producers: &mut ProducerStore,
+    counters: &mut EconCounters,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    for idx in 0..producers.ids.len() {
+        let recipe = producers.recipe[idx];
+        // Interval gate: u64 arithmetic on the raw tick counters.
+        if tick.0 - producers.last_fired[idx].0 < recipe.interval as u64 {
+            continue;
+        }
+        // Resolve the producer's station to its dense row (slot == row in v1).
+        let st = producers.station[idx];
+        let srow = match stations.ids.dense_index(st.slot, st.generation) {
+            Some(r) => r,
+            None => continue,
+        };
+        // All-or-nothing: if there is an input leg and the station can't cover it,
+        // skip WITHOUT advancing last_fired.
+        if let Some((r_in, q)) = recipe.input
+            && stations.stock[srow][r_in.index()] < q as i64
+        {
+            continue;
+        }
+        // Apply the input leg: debit stock, bump consumed.
+        if let Some((r_in, q)) = recipe.input {
+            stations.stock[srow][r_in.index()] -= q as i64;
+            counters.consumed[r_in.index()] += q as i64;
+        }
+        // Apply the output leg: credit stock, bump mined, emit Production.
+        if let Some((r_out, q)) = recipe.output {
+            stations.stock[srow][r_out.index()] += q as i64;
+            counters.mined[r_out.index()] += q as i64;
+            let producer = producers.ids.id_at(idx).map(|(slot, generation)| ProducerId { slot, generation });
+            if let Some(producer) = producer {
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::Production { producer, resource: r_out, qty: q },
+                });
+            }
+        }
+        producers.last_fired[idx] = tick;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::EventKind;
+    use crate::events::EventStream;
+    use crate::ids::BodyId;
+
+    /// A station whose Body is a throwaway (BodyId not resolved here; producers
+    /// read by StationId row, not body).
+    fn one_station(stock: [i64; N_RESOURCES]) -> StationStore {
+        let mut s = StationStore::empty();
+        s.push(BodyId { slot: 0, generation: 0 }, stock, [0; N_RESOURCES]);
+        s
+    }
+
+    #[test]
+    fn run_producers_miner_mines_ore_and_counts() {
+        // Miner: ∅ -> Ore(5), interval 1. Source leg only: mined[Ore]+=5.
+        let mut stations = one_station([0, 0]);
+        let st = StationId { slot: 0, generation: 0 };
+        let mut producers = ProducerStore::empty();
+        producers.push(
+            st,
+            Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+        );
+        let mut counters = EconCounters::zero();
+        let mut events = EventStream::new();
+
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+
+        assert_eq!(stations.stock[0][Resource::Ore.index()], 5, "ore stock rose by 5");
+        assert_eq!(counters.mined[Resource::Ore.index()], 5, "mined[Ore]==5");
+        assert_eq!(counters.consumed[Resource::Ore.index()], 0);
+        assert_eq!(producers.last_fired[0], Tick(1), "last_fired advanced");
+        // exactly one Production event for the miner output leg.
+        let prod: Vec<_> = events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::Production { .. }))
+            .collect();
+        assert_eq!(prod.len(), 1);
+        assert!(matches!(
+            prod[0].kind,
+            EventKind::Production { resource: Resource::Ore, qty: 5, .. }
+        ));
+    }
+
+    #[test]
+    fn run_producers_refiner_bumps_both_legs() {
+        // Refiner: Ore(3) -> Fuel(2), interval 1. PER-LEG: consumed[Ore]+=3 AND
+        // mined[Fuel]+=2 (the dual-bump the T18 identity depends on).
+        let mut stations = one_station([10, 0]);
+        let st = StationId { slot: 0, generation: 0 };
+        let mut producers = ProducerStore::empty();
+        producers.push(
+            st,
+            Recipe {
+                input: Some((Resource::Ore, 3)),
+                output: Some((Resource::Fuel, 2)),
+                interval: 1,
+            },
+        );
+        let mut counters = EconCounters::zero();
+        let mut events = EventStream::new();
+
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+
+        assert_eq!(stations.stock[0][Resource::Ore.index()], 7, "ore -3");
+        assert_eq!(stations.stock[0][Resource::Fuel.index()], 2, "fuel +2");
+        assert_eq!(counters.consumed[Resource::Ore.index()], 3, "consumed[Ore]==3");
+        assert_eq!(counters.mined[Resource::Fuel.index()], 2, "mined[Fuel]==2");
+        assert_eq!(counters.mined[Resource::Ore.index()], 0);
+        assert_eq!(counters.consumed[Resource::Fuel.index()], 0);
+        // Production event names the OUTPUT leg.
+        let prod: Vec<_> = events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::Production { .. }))
+            .collect();
+        assert_eq!(prod.len(), 1);
+        assert!(matches!(
+            prod[0].kind,
+            EventKind::Production { resource: Resource::Fuel, qty: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn run_producers_all_or_nothing_skip_on_insufficient_input() {
+        // Refiner needs Ore(5) but station has 2 -> skip: no stock change, no
+        // counter change, no event, last_fired NOT advanced (retries next tick).
+        let mut stations = one_station([2, 0]);
+        let st = StationId { slot: 0, generation: 0 };
+        let mut producers = ProducerStore::empty();
+        producers.push(
+            st,
+            Recipe {
+                input: Some((Resource::Ore, 5)),
+                output: Some((Resource::Fuel, 2)),
+                interval: 1,
+            },
+        );
+        let mut counters = EconCounters::zero();
+        let mut events = EventStream::new();
+
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+
+        assert_eq!(stations.stock[0], [2, 0], "no stock change on skip");
+        assert_eq!(counters, EconCounters::zero(), "no counter change on skip");
+        assert_eq!(producers.last_fired[0], Tick(0), "last_fired NOT advanced on skip");
+        assert!(events.events.is_empty(), "no Production on skip");
+    }
+
+    #[test]
+    fn run_producers_respects_interval() {
+        // Miner interval 3: fires at tick 3 (3-0>=3), not at tick 1 or 2.
+        let mut stations = one_station([0, 0]);
+        let st = StationId { slot: 0, generation: 0 };
+        let mut producers = ProducerStore::empty();
+        producers.push(
+            st,
+            Recipe { input: None, output: Some((Resource::Ore, 1)), interval: 3 },
+        );
+        let mut counters = EconCounters::zero();
+        let mut events = EventStream::new();
+
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(2), &mut events);
+        assert_eq!(stations.stock[0][Resource::Ore.index()], 0, "not yet (interval gate)");
+
+        run_producers(&mut stations, &mut producers, &mut counters, Tick(3), &mut events);
+        assert_eq!(stations.stock[0][Resource::Ore.index()], 1, "fires at tick 3");
+        assert_eq!(producers.last_fired[0], Tick(3));
+    }
 
     #[test]
     fn resource_index_is_stable_and_dense() {
