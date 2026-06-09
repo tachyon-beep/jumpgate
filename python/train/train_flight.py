@@ -151,7 +151,13 @@ def main():
     cur = Curriculum()
     venv = VecNormalize(
         VecMonitor(DummyVecEnv([make_env(cur.stage, i) for i in range(args.n_envs)])),
-        norm_obs=True, norm_reward=True, gamma=GAMMA)
+        # norm_reward OFF (run-5): the running return-normalizer caused two
+        # measured failures — run-1's sprint decay (stats fit cross-stage) and
+        # run-4's sprint stall (stats fit the replay-mix BIMODAL return
+        # distribution, scaling the hard stage's signal into the noise floor).
+        # The reward is potential-shaped and bounded by design, and PPO
+        # normalizes advantages internally; obs normalization stays.
+        norm_obs=True, norm_reward=False, gamma=GAMMA)
     # LR anneals 3e-4 -> 3e-5 (progress_remaining walks 1 -> 0); ent_coef
     # lowered 0.01 -> 0.003: the rendezvous endgame needs precision, and at
     # 0.01 the entropy bonus dominated once the task reward compressed
