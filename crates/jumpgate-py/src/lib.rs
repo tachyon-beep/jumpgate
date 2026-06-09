@@ -6,6 +6,8 @@
 //! frame-relative obs path arrive in the gym-binding task.
 use pyo3::prelude::*;
 
+mod obs;
+
 /// Scaffold smoke function: returns the core's scaffold value across the FFI
 /// boundary, proving the cdylib links jumpgate-core and the abi3 module loads.
 #[pyfunction]
