@@ -1,4 +1,4 @@
-# Current State — jumpgate        Checkpoint: 2026-06-09 (first checkpoint) · commit 075ea23 · branch jumpgate-v1-design
+# Current State — jumpgate        Checkpoint: 2026-06-09 (first checkpoint) · commit 95f9209 · branch jumpgate-v1-design
 
 ## The bet right now
 
@@ -98,6 +98,5 @@ Two complementary layers, no overlap:
    a decomposed Layer-1 backlog. Recommended: superpowers brainstorming → design.
 2. In parallel, Plan A is ready (`jumpgate-d30fcebaac`); dispatch via the
    engineering loop (spec-review → quality-review → independent gate re-verify).
-3. Resolve the cutover gate with the owner.
-4. CHECKPOINT (`/product-checkpoint`) commits the workspace — nothing here is
-   committed yet.
+3. Resolve the cutover gate with the owner, and confirm the vision Positioning
+   (PDR-0004).
