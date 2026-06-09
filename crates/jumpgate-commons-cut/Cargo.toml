@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 jumpgate-core = { path = "../jumpgate-core" }
+rand_core = { workspace = true }
