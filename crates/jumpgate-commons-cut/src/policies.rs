@@ -149,6 +149,54 @@ pub fn fit_closed_form(
     best
 }
 
+/// Rung 3: greedy one-step optimal. Evaluate each action's immediate-tick yield
+/// against the current state (others frozen), pick the max. Pinned tie-break: Stay
+/// wins ties, then lowest MoveTo index.
+pub struct Myopic;
+impl Policy for Myopic {
+    fn decide(&self, obs: &Observation) -> Action {
+        let st = obs.state;
+        let i = obs.ship_idx;
+        let Some(here) = st.ships[i].region else {
+            return Action::Stay;
+        };
+        let occ = occupant_counts(st);
+        // Staying: my share of `here` this tick.
+        let stay_val = {
+            let region = &st.regions[here as usize];
+            let o = occ[here as usize].max(1) as u64;
+            (region.stock as u64 * region.richness_cap as u64) / (crate::STOCK_MAX as u64 * o)
+        };
+        // Moving: 0 this tick (in transit). So 1-step greedy only ever beats Stay if Stay==0.
+        if stay_val > 0 {
+            return Action::Stay;
+        }
+        // here is empty: move to the region with the best immediate post-arrival share
+        // (approximated as current stock-per-(occ+1); the move still costs transit, but a
+        // 1-step myopic that's stuck at 0 prefers heading somewhere with future value).
+        let mut best = here as usize;
+        let mut best_val = 0u64;
+        for (r, &occ_r) in occ.iter().enumerate() {
+            if r == here as usize {
+                continue;
+            }
+            let region = &st.regions[r];
+            let o = (occ_r + 1) as u64;
+            let v = (region.stock as u64 * region.richness_cap as u64)
+                / (crate::STOCK_MAX as u64 * o);
+            if v > best_val {
+                best_val = v;
+                best = r;
+            }
+        }
+        if best == here as usize {
+            Action::Stay
+        } else {
+            Action::MoveTo(best as u8)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,5 +252,40 @@ mod tests {
         let cfg = build_scenario(eval[0], 3, 3, 0, 0);
         let totals = rollout(&cfg, &[0, 1, 2], &fitted);
         assert_eq!(totals.len(), 3);
+    }
+
+    #[test]
+    fn myopic_picks_the_one_step_best_action() {
+        // One ship; region 0 nearly empty, region 1 full + adjacent (travel 0 -> arrives same... use travel 1).
+        let cfg = ArenaConfig {
+            regions: vec![
+                crate::Region { stock: 1, richness_cap: crate::STOCK_MAX, regen_per_tick: 0 },
+                crate::Region {
+                    stock: crate::STOCK_MAX,
+                    richness_cap: crate::STOCK_MAX,
+                    regen_per_tick: 0,
+                },
+            ],
+            travel: vec![vec![0, 1], vec![1, 0]],
+            horizon: 30,
+        };
+        let st = ArenaState::from_config(&cfg, &[0u8]);
+        // Staying yields ~1 this tick; moving yields 0 this tick (transit) but the myopic
+        // 1-step horizon values only THIS tick -> myopic stays (greedy is myopic by design).
+        let a = Myopic.decide(&Observation { state: &st, ship_idx: 0 });
+        assert_eq!(a, Action::Stay, "1-step greedy values only the immediate tick");
+    }
+
+    #[test]
+    fn ladder_is_monotone_on_a_fixture() {
+        let seeds: Vec<u64> = (300..304).collect();
+        let mean = |totals: Vec<u64>| totals.iter().sum::<u64>();
+        let cf = fit_closed_form(3, 3, 0, 0, &seeds);
+        let cfg = build_scenario(999, 3, 3, 0, 0);
+        let c = mean(rollout(&cfg, &[0, 1, 2], &Constant));
+        let f = mean(rollout(&cfg, &[0, 1, 2], &cf));
+        let m = mean(rollout(&cfg, &[0, 1, 2], &Myopic));
+        assert!(c <= f, "constant {c} <= closed-form {f}");
+        assert!(f <= m, "closed-form {f} <= myopic {m}");
     }
 }
