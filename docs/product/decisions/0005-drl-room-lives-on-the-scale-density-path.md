@@ -1,7 +1,9 @@
 # PDR-0005 — DRL room lives on the scale/density path, not inside a small tractable market
 
-Date: 2026-06-09   Status: accepted   Author: acting-PM (Claude)   Owner sign-off: yes (2026-06-09)
-Supersedes: —   Refines: PDR-0002 (thesis venue is strategic/operational)   Related: docs/superpowers/reviews/2026-06-09-vertical-slice-shaping-findings.md, RAID R5, metrics.md, charter.md
+> **⚠ SUPERSEDED BY PDR-0006 (2026-06-10) — DEAD DOCTRINE, kept only as history.** This PDR's entire premise — that v1's job is to *find/prove DRL room* and that building is *gated by a cheap analytic cut* ("honor a NO-GO if best-closed-form→omniscient < 10% of ceiling") — is **RETIRED**. That is *game SCIENCE* (using the game to prove settled complexity theory); v1 is *GAME science* (the science of what makes a good game). The presolvability gate is a catch-22 that defines games away and caused two hard resets. v1 is now **judged as a game by emergent play** (PDR-0006). Read nothing below as live policy. The `vsl-cannot-host-judgment-principle` survives as a true *map* of where rich dynamics live, never as a *build gate*.
+
+Date: 2026-06-09   Status: SUPERSEDED-IN-PART by PDR-0006 (gate-as-prerequisite retired; situational analysis kept as history)   Author: acting-PM (Claude)   Owner sign-off: yes (2026-06-09)
+Supersedes: —   Superseded-by: PDR-0006 (the gate-as-prerequisite)   Refines: PDR-0002 (thesis venue is strategic/operational)   Related: docs/superpowers/reviews/2026-06-09-vertical-slice-shaping-findings.md, RAID R5, metrics.md, charter.md
 
 ## Context
 

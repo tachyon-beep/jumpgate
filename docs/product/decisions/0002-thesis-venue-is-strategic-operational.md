@@ -1,7 +1,35 @@
 # PDR-0002 — The thesis venue is strategic/operational, not tactical
 
-Date: 2026-06-09   Status: accepted   Author: acting-PM (Claude)   Owner sign-off: yes (2026-06-09)
-Supersedes: —   Related: metrics.md (north-star), vision.md (purpose), roadmap.md, docs/superpowers/program/charter.md (done-definition)
+Date: 2026-06-09   Status: accepted (done-definition superseded by PDR-0006)   Author: acting-PM (Claude)   Owner sign-off: yes (2026-06-09)
+Supersedes: —   Superseded-in-part-by: PDR-0006 (done-definition only)   Related: metrics.md (north-star), vision.md (purpose), roadmap.md, docs/superpowers/program/charter.md (done-definition)
+
+> ## ⚠ DONE-DEFINITION SUPERSEDED BY PDR-0006 (game frame)
+>
+> **What survives:** the *venue* call. v1's fun is **strategic/operational** —
+> long-horizon contract/route/fuel decisions across a multi-agent ecosystem, not
+> tactical fly-by-stick. Owner-confirmed, and PDR-0006 keeps it ("the game lives
+> where this PDR said it does"). This is still right; read the body for it.
+>
+> **What is RETIRED:** this PDR's *done-definition* — judging v1 by a **measurable
+> strategic/operational DRL-vs-scripted differential**. PDR-0006 retires that as
+> the success criterion because the "can a learner beat the computed optimum by a
+> fraction-of-ceiling" frame is a catch-22 for games: anything measurable that way
+> is "presolvable → no room," anything with real room isn't measurable that way —
+> it can only ever return NO-GO or can't-measure, and so **defines the game away.**
+>
+> **What replaces it:** v1 is **judged as a game, by emergent play** — surprising,
+> watchable, alive, sustained — the way `ecosystem-oscillation` (heuristic agents,
+> zero RL, the project's one unambiguous success) was judged. The measurable
+> foundation is the **game's own dynamics**: predator-prey cycle amplitude/period,
+> pack formation/dispersal + autocorrelation, trophic balance, chronicle richness
+> of individual lives — **not** beating a lookup table. Determinism + chronicle +
+> diagnostics + sweeps are the **reproducible lab for studying** those dynamics
+> ("game science"), **not a gate** in front of building the game. **DRL is a
+> player** — added where it makes agents interesting opponents/allies, judged by
+> the quality of play it produces. The single-craft navigator rung stays as the
+> first trainable rung, not a thesis test.
+>
+> Below this banner is the original 2026-06-09 record, kept verbatim as history.
 
 ## Context
 
@@ -35,6 +63,13 @@ actual bet. This was raised to the owner as the success-criterion question.
 
 ## The call
 
+> **[RETIRED — PDR-0006]** The done-definition stated below (a *measurable
+> DRL-vs-scripted differential* as the north-star) is superseded by the game frame:
+> v1 is judged by emergent play and the game's own dynamics, not by a learner
+> beating a scripted/computed baseline. The **venue** choice (Option 2,
+> strategic/operational ecosystem) survives unchanged; only the *differential as
+> success metric* is retired. Original text preserved below.
+
 Option 2. The north-star is the **strategic/operational DRL-vs-scripted
 differential inside the demand-driven multi-agent ecosystem**, not tactical control.
 Owner confirmed directly (2026-06-09): "it's not a fly-by-stick game — almost all
@@ -53,6 +88,18 @@ that layer. Keeping the tactical metric would have set the scoreboard to reward 
 result the owner doesn't care about — the build trap in metric form.
 
 ## Reversal trigger
+
+> **[CLAUSE (c) RETIRED — PDR-0006]** The original trigger (c) — "revisit if a
+> defined ecosystem metric proves unfalsifiable / presolvable = computation not
+> judgment" — is the **named trap** PDR-0006 forbids reintroducing: it is the
+> presolvability gate, which can only return NO-GO or can't-measure. It is retired;
+> never re-cite the `vsl-cannot-host-judgment-principle` as a build gate. (That
+> principle stays a true *observation* about why small replayable markets are
+> boring.) Triggers (a) and (b) still stand. If a forward trigger is wanted, it is
+> the PDR-0006 kind: re-introduce lightweight **emergent-dynamics** metrics
+> (cycle amplitude/period, pack autocorrelation, trophic balance, chronicle
+> richness) — properties of the *game itself*, never a beat-the-optimum gate.
+> Original text preserved below.
 
 Revisit if (a) vertical-slice shaping shows the ecosystem cannot be made trainable
 at acceptable throughput (the env-steps/sec bottleneck), forcing a smaller venue;

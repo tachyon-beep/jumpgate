@@ -1,5 +1,8 @@
 # Commons-Miner Analytic Cut — Implementation Plan
 
+> **⚠ RETIRED FRAME (PDR-0006, 2026-06-10).** The DRL-room / presolvability-gate / fraction-of-ceiling / "prove a learner beats a script or the optimum" framing in this document is **RETIRED** — v1 is judged as a **GAME by emergent play** (GAME science: the science of what makes a good game), not by proving settled theory with a video game (game SCIENCE). Genuine engineering and history here stand; read any gate/room/thesis framing as dead doctrine. See `docs/product/decisions/0006-judge-v1-as-a-game-not-a-presolvability-gate.md`.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a standalone deterministic Rust probe that measures whether the full-information commons-miner game has learnable DRL room (≥10% of ceiling, flat-or-rising in N), and reports a pre-registered GO/NO-GO verdict.

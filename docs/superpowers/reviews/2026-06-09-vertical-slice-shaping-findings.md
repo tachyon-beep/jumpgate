@@ -1,5 +1,8 @@
 # Vertical-Slice Shaping Pass — findings (2026-06-09)
 
+> **⚠ RETIRED FRAME (PDR-0006, 2026-06-10).** The DRL-room / presolvability-gate / fraction-of-ceiling / "prove a learner beats a script or the optimum" framing in this document is **RETIRED** — v1 is judged as a **GAME by emergent play** (GAME science: the science of what makes a good game), not by proving settled theory with a video game (game SCIENCE). Genuine engineering and history here stand; read any gate/room/thesis framing as dead doctrine. See `docs/product/decisions/0006-judge-v1-as-a-game-not-a-presolvability-gate.md`.
+
+
 Issue `jumpgate-818a04bb6b`. Adversarial shaping pass run as a 28-agent workflow (`wf_9a8eecdb-ccd`; raw harvest + judged candidates at `/tmp/.../tasks/wzdoxueio.output`, ~141k chars). Built around RAID R5 (site DRL where it has no room → thesis quietly fails). Harvest schemaless after the v1 run's nested-schema harvest agents all returned null. PM: Claude. Owner: John.
 
 ## Headline — no DRL room *demonstrated* in the thin slice; 3 arenas provably dead, 3 unmeasured-and-doubtful

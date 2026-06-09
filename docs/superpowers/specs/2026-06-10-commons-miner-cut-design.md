@@ -1,5 +1,8 @@
 # Commons-Miner Analytic Cut — design spec
 
+> **⚠ RETIRED FRAME (PDR-0006, 2026-06-10).** The DRL-room / presolvability-gate / fraction-of-ceiling / "prove a learner beats a script or the optimum" framing in this document is **RETIRED** — v1 is judged as a **GAME by emergent play** (GAME science: the science of what makes a good game), not by proving settled theory with a video game (game SCIENCE). Genuine engineering and history here stand; read any gate/room/thesis framing as dead doctrine. See `docs/product/decisions/0006-judge-v1-as-a-game-not-a-presolvability-gate.md`.
+
+
 **Status:** draft for owner review (2026-06-10)
 **Issue:** `jumpgate-aec6e7bc14` (scale/density DRL arena — first increment)
 **Frame:** game science (`jumpgate-game-science-principle`) — the cut IS the measurement apparatus; pre-register the hypothesis + gate, then build.

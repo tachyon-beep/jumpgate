@@ -1,5 +1,8 @@
 # First Economic Loop — Deterministic Harness (design spec)
 
+> **⚠ RETIRED FRAME (PDR-0006, 2026-06-10).** The DRL-room / presolvability-gate / fraction-of-ceiling / "prove a learner beats a script or the optimum" framing in this document is **RETIRED** — v1 is judged as a **GAME by emergent play** (GAME science: the science of what makes a good game), not by proving settled theory with a video game (game SCIENCE). Genuine engineering and history here stand; read any gate/room/thesis framing as dead doctrine. See `docs/product/decisions/0006-judge-v1-as-a-game-not-a-presolvability-gate.md`.
+
+
 Date: 2026-06-09   Owner: John   Author: acting-PM (Claude)   Issue: `jumpgate-fe825a65f3`
 Status: approved (owner, 2026-06-09; all open questions resolved) — ready for writing-plans
 Related: PDR-0005 (DRL repositioned to scale/density), `docs/superpowers/reviews/2026-06-09-vertical-slice-shaping-findings.md`, charter land-order, RAID R2/R5.

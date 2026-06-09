@@ -4,6 +4,10 @@ Date: 2026-06-10   Status: accepted   Author: acting-PM (Claude)   Owner sign-of
 Supersedes: PDR-0005's *gate-as-prerequisite* (the analytic-cut/fraction-of-ceiling discipline as a precondition for building); the rest of PDR-0005's situational analysis stands as history.
 Refines: PDR-0002 (done-definition).   Related: charter.md, metrics.md, `vsl-cannot-host-judgment-principle`, `jumpgate-game-science-principle`, `jumpgate-hard-reset-3d-newtonian`, crates/jumpgate-commons-cut/RESULT.md
 
+## The one-line test (owner, 2026-06-10)
+
+**GAME science** (the science of *what makes a good game* — the game is the object of study, rigor serves shaping it) — **NOT** **game SCIENCE** (using a video game to *overturn number theory* — proving/validating settled DRL/complexity/presolvability theory). Self-administering: *is the object of study the game, or settled science I'm trying to move?* Proving something about DRL/optimality through the game = the trap. This decision exists because the project kept sliding into game SCIENCE.
+
 ## Context
 
 The DRL-room test as practiced — *"can a learner beat the exactly-computed optimum by ≥10% of ceiling?"* — is a **catch-22 for games**:
@@ -23,7 +27,9 @@ The error being corrected: treating a written ADR's gate as more authoritative t
 
 2. **KEEP** the deterministic substrate + chronicle / diagnostics / sweeps / watch-the-system as the **reproducible lab for studying emergent dynamics.** *This* is "game science": rigorous, replayable study of the game's behaviour — not a turnstile in front of it. Determinism stays because it lets us study and reproduce a game, not because it gates one.
 
-3. **REFRAME the done-definition (refines PDR-0002):** v1 is **judged as a game** — does it produce emergent, surprising, watchable, sustained play? — the way `ecosystem-oscillation` was judged. The measurable foundation is about the **game's own dynamics** (sustained cycles, pack formation/dispersal, predator-prey lag, the chronicle of individual lives), not about beating a lookup table.
+3. **REFRAME the done-definition (refines PDR-0002):** v1 is **judged as a game** — does it produce emergent, surprising, watchable, sustained play? — the way `ecosystem-oscillation` was judged.
+
+   **Stats are windows, not judges (owner, 2026-06-10).** The game's own dynamics (sustained cycles, pack formation/dispersal, predator-prey lag, chronicle of individual lives) are measured because they show **how alive the ecosystem is** — they are DESCRIPTIVE INSTRUMENTS for *seeing* the game, requested out of interest and used to inform the holistic "is this alive and fun" read. They are **NOT** targets to optimize toward, gates that block building, or proof of a thesis. Making any stat load-bearing — a number to hit — is the *same compulsion* that regenerated the presolvability gate; it must be resisted as firmly as the gate itself. A stat may legitimately reveal "this flatlined / a dumb script ties it," which informs the aliveness judgment — but the judgment stays holistic and human, never a threshold.
 
 4. **DRL is a *player*,** introduced where it makes agents interesting opponents/allies, and evaluated by **the quality of play it produces** — not by a fraction-of-ceiling differential against a presolvable optimum.
 

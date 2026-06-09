@@ -6,14 +6,22 @@
 
 ## Purpose
 
-jumpgate exists to **demonstrate that deep reinforcement learning produces more
-entertaining game AI than scripted / FSM agents** — DRL is the discriminator that
-sets it apart from every other space game. The artifact is a headless,
+jumpgate exists to **build a living, emergent space game — a world that is
+surprising, watchable, alive, and fun** — judged by the play it produces, the way
+`ecosystem-oscillation` (the project's one unambiguous success) was judged: by
+emergent play, with heuristic agents and zero RL. The artifact is a headless,
 authoritative, deterministic **3D Newtonian space-sim engine** (Rust) the size of
-a solar system, wired to PyTorch/Gymnasium via PyO3 + maturin, that serves as the
-substrate on which DRL-controlled agents are shown off. The ML/gym surface is a
-**first-class deliverable, not a deferred add-on** — closing the
-DRL-beats-scripted loop end-to-end is the whole point.
+a solar system, wired to PyTorch/Gymnasium via PyO3 + maturin. Determinism +
+chronicle + diagnostics + sweeps are the **reproducible lab for studying the
+game's emergent dynamics** ("game science") — how we observe and reproduce a
+living world rigorously, *not* a gate the game must pass before it is built.
+
+**DRL is a player**, introduced where it makes agents interesting opponents and
+allies — judged by the quality of play it produces, never by whether a learned
+policy beats a computed optimum. (This retires the old "prove DRL beats scripted /
+fraction-of-ceiling" framing per PDR-0006; the `vsl-cannot-host-judgment-principle`
+remains a true observation about *small replayable markets* but is no longer a
+build gate.)
 
 ## Positioning — the constraint is the feature (PDR-0004)
 
@@ -30,9 +38,10 @@ is the *why* behind the strategic/operational thesis venue (PDR-0002).
 
 ## Who it serves
 
-- **Primary:** the owner as researcher/builder — the immediate job is to *validate
-  the thesis* (a learned policy is measurably better and more interesting than a
-  hand-tuned baseline on a real control task).
+- **Primary:** the owner as researcher/builder — the immediate job is to *grow an
+  emergent game world and study its dynamics* (sustained predator-prey cycles,
+  pack formation/dispersal, trophic balance, the chronicle of individual lives),
+  watching whether the world produces surprising, alive play.
 - **Secondary _(inferred)_:** a future player who experiences DRL-driven emergent
   behavior in a rendered, player-interactive world (rendering + interactivity are
   Later bets, not v1).
@@ -52,8 +61,12 @@ is the *why* behind the strategic/operational thesis venue (PDR-0002).
   scenario DSL, lever registry, spatial hash, LOD scheduler, component/wear/heat
   subsystems) requires an ADR naming a concrete requirement before any item is
   built. See the core design spec §2.
-- **Not a scripted-AI game.** Hand-coded brains (autopilot, future trophic agents)
-  are explicitly *scaffolds* for what DRL will learn — never the destination.
+- **Not a static, lifeless game.** The destination is *emergent play* — a world
+  alive with opposing-goal agents. Heuristic brains (autopilot, trophic agents)
+  and learned (DRL) brains are **both players**, each judged by the play it
+  produces; `ecosystem-oscillation` showed emergent play is reachable with
+  heuristic agents and zero RL. Neither kind of agent is a mere scaffold for the
+  other.
 
 ## North stars (long-term fidelity ambition)
 
@@ -67,10 +80,12 @@ directions even though none are built in v1.
 
 ## Authority grant
 
-Granted by: John (owner)     Last reviewed: 2026-06-09
-Review cadence: on any vision/thesis/scope change, else monthly
+Granted by: John (owner)     Last reviewed: 2026-06-10
+Review cadence: on any vision/scope change, else monthly
 
-**Status: CONFIRMED by owner 2026-06-09 (PDR-0001) — accepted as drafted.**
+**Status: CONFIRMED by owner 2026-06-09 (PDR-0001); Purpose reframed
+2026-06-10 from a DRL-beats-scripted thesis to the emergent-game frame per
+PDR-0006 (owner-directed, sign-off in that PDR).**
 
 Autonomous within strategy — the agent (acting PM) MAY, without asking:
   prioritize/triage the filigree backlog, write PRDs with falsifiable acceptance
@@ -80,7 +95,7 @@ Autonomous within strategy — the agent (acting PM) MAY, without asking:
   review loop on a chosen bet.
 
 Escalate BEFORE acting — the agent MUST get owner sign-off for:
-  - changing this vision / the DRL thesis / the rung ladder / the north stars;
+  - changing this vision / the emergent-game frame / the rung ladder / the north stars;
   - **merging `jumpgate-v1-design` → `main`** (the integration commit is the
     closest thing here to a "release");
   - another hard-reset or scrapping a line of work (as happened 2026-06-08);
