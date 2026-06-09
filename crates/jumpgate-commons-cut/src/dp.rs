@@ -226,6 +226,71 @@ fn realize_cl(
     st.ships[me].total_yield
 }
 
+/// LABELLED UPPER BOUND ONLY (NOT the gate, spec §4.1): the coordinated social-planner
+/// optimum = max over JOINT action sequences of the SUMMED ship yield. Exact backward
+/// induction over the joint action space (Stay + MoveTo(other regions) per ship). Reported
+/// as "coordination headroom — not learnable"; it bounds the selfish closed-loop BR from
+/// above (yields are non-negative, so the planner's best total dominates the selfish
+/// trajectory's total, which itself dominates any single ship's share). The joint action
+/// space is exponential in N — keep this for N=3 only (reporting-only, so its absence never
+/// blocks the gate beyond N=3).
+pub fn planner_value(cfg: &ArenaConfig, starts: &[u8]) -> u64 {
+    let st0 = ArenaState::from_config(cfg, starts);
+    let mut memo: HashMap<(u64, u32), u64> = HashMap::new();
+    planner_rec(&st0, cfg, &mut memo)
+}
+
+fn planner_rec(st: &ArenaState, cfg: &ArenaConfig, memo: &mut HashMap<(u64, u32), u64>) -> u64 {
+    if st.tick >= cfg.horizon {
+        return 0;
+    }
+    let key = (encode(st, cfg), st.tick);
+    if let Some(&v) = memo.get(&key) {
+        return v;
+    }
+    // Joint action space = product over ships of {Stay, MoveTo(other regions)}.
+    let per_ship: Vec<Vec<Action>> = (0..st.ships.len())
+        .map(|i| {
+            let mut c = vec![Action::Stay];
+            if let Some(here) = st.ships[i].region {
+                for r in 0..st.regions.len() {
+                    if r != here as usize {
+                        c.push(Action::MoveTo(r as u8));
+                    }
+                }
+            }
+            c
+        })
+        .collect();
+    let mut best = 0u64;
+    let mut idx = vec![0usize; st.ships.len()];
+    loop {
+        let acts: Vec<Action> = (0..st.ships.len()).map(|i| per_ship[i][idx[i]]).collect();
+        let mut next = st.clone();
+        let before: u64 = next.ships.iter().map(|s| s.total_yield).sum();
+        step(&mut next, &acts, cfg);
+        let after: u64 = next.ships.iter().map(|s| s.total_yield).sum();
+        let v = (after - before) + planner_rec(&next, cfg, memo);
+        if v > best {
+            best = v;
+        }
+        // Odometer over the joint index; when it wraps fully, memoize and return.
+        let mut k = 0;
+        loop {
+            if k == idx.len() {
+                memo.insert(key, best);
+                return best;
+            }
+            idx[k] += 1;
+            if idx[k] < per_ship[k].len() {
+                break;
+            }
+            idx[k] = 0;
+            k += 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +423,22 @@ mod tests {
         let open = best_response_value_open_loop(&cfg, &[0u8, 1u8], 0);
         let (closed, _) = best_response_value_closed_loop_checked(&cfg, &[0u8, 1u8], 0, &others);
         assert!(closed <= open, "closed-loop {closed} <= open-loop {open} (reacting field contests residuals)");
+    }
+
+    #[test]
+    fn planner_is_an_upper_bound_on_selfish_br() {
+        let cfg = ArenaConfig {
+            regions: vec![
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+                crate::Region { stock: 20, richness_cap: 20, regen_per_tick: 0 },
+            ],
+            travel: vec![vec![0, 1], vec![1, 0]],
+            horizon: 6,
+        };
+        let planner = planner_value(&cfg, &[0u8, 1u8]);
+        let others = crate::policies::ClosedForm { tau: 5, move_prob_milli: 1000, seed: 1 };
+        let (selfish, _) = best_response_value_closed_loop_checked(&cfg, &[0u8, 1u8], 0, &others);
+        // Planner maximizes TOTAL across ships; selfish is one ship's take -> planner total >= any single share.
+        assert!(planner >= selfish, "planner total {planner} >= selfish single-ship {selfish}");
     }
 }
