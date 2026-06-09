@@ -1,5 +1,12 @@
 # Trophic Cut 1 — A demonstrable boom/bust cycle with decision-driven peer dispersion
 
+> **⚠ DEFERRED (2026-06-10, owner).** Superseded in sequence by the DRL pivot: agents must
+> LEARN risk (PPO+LSTM), not carry a hardcoded `risk_appetite` scalar — that scalar was the
+> computed-answer reflex again. Do NOT resume this build as written. The trophic world
+> returns AFTER the tactical-flight rung proves the training pipeline
+> (`2026-06-10-tactical-flight-rung1-design.md`). Phase-1 foundations are parked at WIP
+> commit `2e1e1ad` (pirate columns/events/RngStream::Piracy — salvageable later).
+
 > **FRAME (PDR-0006 — read first).** This is **GAME science**: we are building a game
 > layer and judging it by **emergent play**. Every measurement below is a **designer's
 > aliveness diagnostic** — an instrument for the observe→steer→re-observe loop — **NOT**

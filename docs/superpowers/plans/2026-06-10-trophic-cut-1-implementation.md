@@ -1,5 +1,12 @@
 # Trophic Cut 1 Implementation Plan
 
+> **⚠ DEFERRED (2026-06-10, owner).** Superseded in sequence by the DRL pivot: agents must
+> LEARN risk (PPO+LSTM), not carry a hardcoded `risk_appetite` scalar — that scalar was the
+> computed-answer reflex again. Do NOT resume this build as written. The trophic world
+> returns AFTER the tactical-flight rung proves the training pipeline
+> (`2026-06-10-tactical-flight-rung1-design.md`). Phase-1 foundations are parked at WIP
+> commit `2e1e1ad` (pirate columns/events/RngStream::Piracy — salvageable later).
+
 > **For agentic workers:** Execution is **subagent-driven / ultracode**. Each task is
 > speced as *interface + test-behaviours + acceptance + determinism notes* — the
 > implementing subagent writes the code TDD-style (failing test → minimal impl → green).
