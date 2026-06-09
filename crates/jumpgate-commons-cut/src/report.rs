@@ -21,6 +21,50 @@ pub struct CutSummary {
     pub planner_headroom_frac: f64,
 }
 
+/// Observe-large diagnostics (spec §6). Pure measurement (f64 ok). NOT a GO signal —
+/// per PDR-0005, the existence of packs/oscillation is reported as context, never gated on.
+#[derive(Clone, Debug)]
+pub struct PackDiagnostics {
+    pub peak_pack_count: u32,
+    pub mean_spatial_entropy: f64,
+    /// max-min of per-tick entropy (concentrate <-> disperse oscillation amplitude).
+    pub entropy_oscillation: f64,
+}
+
+/// `occupancy[t][r]` = ship count at region r at tick t. A "pack" = a region above a
+/// quarter-of-mean occupancy threshold. Pure measurement; no verdict.
+pub fn pack_diagnostics(occupancy: &[Vec<u32>]) -> PackDiagnostics {
+    let mut peak = 0u32;
+    let mut entropies = Vec::new();
+    for row in occupancy {
+        let total: u32 = row.iter().sum();
+        if total == 0 {
+            entropies.push(0.0);
+            continue;
+        }
+        let thresh = (total as f64 / row.len() as f64) / 4.0;
+        peak = peak.max(row.iter().filter(|&&o| o as f64 >= thresh).count() as u32);
+        // Shannon entropy of the occupancy distribution (nats).
+        let mut h = 0.0;
+        for &o in row {
+            if o == 0 {
+                continue;
+            }
+            let p = o as f64 / total as f64;
+            h -= p * p.ln();
+        }
+        entropies.push(h);
+    }
+    let mean = entropies.iter().sum::<f64>() / entropies.len().max(1) as f64;
+    let osc = entropies.iter().copied().fold(f64::MIN, f64::max)
+        - entropies.iter().copied().fold(f64::MAX, f64::min);
+    PackDiagnostics {
+        peak_pack_count: peak,
+        mean_spatial_entropy: mean,
+        entropy_oscillation: osc.max(0.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -36,6 +80,18 @@ mod tests {
         assert_eq!(s.verdict, crate::gate::Verdict::NoGo);
         assert!(s.negative_control_nogo, "apparatus fairness: identical regions must NO-GO");
         assert!(s.planner_headroom_frac > s.curve[0].1, "planner upper bound exceeds selfish frac");
+    }
+
+    #[test]
+    fn pack_diagnostics_compute_on_a_fixture() {
+        let series = vec![
+            vec![10u32, 0, 0], // all clumped on region 0
+            vec![5, 5, 0],
+            vec![0, 5, 5], // dispersed/moved
+        ];
+        let d = pack_diagnostics(&series);
+        assert!(d.mean_spatial_entropy >= 0.0);
+        assert!(d.peak_pack_count >= 1);
     }
 }
 
@@ -139,6 +195,42 @@ mod run {
             negative_control_nogo: neg,
             planner_headroom_frac: planner,
         }
+    }
+
+    /// OBSERVE-LARGE (spec §6). `#[ignore]` — context, NOT the gate. Builds N=120/M=12/H=5000
+    /// under the best closed-form, records per-tick occupancy, and prints `pack_diagnostics`.
+    /// Per PDR-0005, packs/oscillation existing is explicitly NOT a GO signal — no assertion.
+    #[test]
+    #[ignore = "observe-large diagnostics (context, not the gate): cargo test -p jumpgate-commons-cut --ignored observe_large"]
+    fn observe_large() {
+        use crate::policies::{decide_all, occupant_counts};
+        use crate::ArenaState;
+
+        const N: u32 = 120; // ships
+        const M: u8 = 12; // regions
+        const H: u32 = 5000; // horizon (ticks)
+        let (regen, corr) = (0u32, 0u32); // one-shot exhaustion, independent diverse fields
+
+        let train: Vec<u64> = (1000..1008).collect();
+        let cf = fit_closed_form(M, M, regen, corr, &train);
+
+        let cfg = build_scenario(4242, M, M, regen, corr);
+        let starts: Vec<u8> = (0..N).map(|i| (i % M as u32) as u8).collect();
+        let mut st = ArenaState::from_config(&cfg, &starts);
+
+        let mut occupancy: Vec<Vec<u32>> = Vec::with_capacity(H as usize);
+        for _ in 0..H {
+            let acts = decide_all(&cf, &st);
+            crate::dynamics::step(&mut st, &acts, &cfg);
+            occupancy.push(occupant_counts(&st));
+        }
+
+        let d = super::pack_diagnostics(&occupancy);
+        println!("OBSERVE-LARGE (N={N}, M={M}, H={H}) — context, NOT a GO signal (PDR-0005):");
+        println!("  peak_pack_count:      {}", d.peak_pack_count);
+        println!("  mean_spatial_entropy: {:.4}", d.mean_spatial_entropy);
+        println!("  entropy_oscillation:  {:.4}", d.entropy_oscillation);
+        // No assertion — packs existing is pre-registered as NOT a GO (LAW 3).
     }
 
     #[test]
