@@ -89,15 +89,17 @@ The whole point of the harness is replay. Rules:
 
 ## Invariants & error handling
 
-- **Mass conservation:** for every producer firing and every delivery, total resource units in = units out (the demand sink is the only true destruction, and it is explicit). A whole-system conservation test is the Stage-1 gate.
-- **Credit conservation:** `Δhauler + Δcorp + Δescrow == 0` at every settlement (integer-exact).
+- **Resource accounting identity (NOT naive conservation):** the loop has a *source* (mining ∅→Ore) and a *sink* (demand Fuel→∅), and refine recipes need not be 1:1, so "units-in == units-out" is false by design. The real no-leak invariant is, per resource `r`, with explicit audited `mined`/`consumed` counters:
+  `stock_total(r,t) + in_transit_cargo(r,t) == initial(r) + Σ mined(r,≤t) − Σ consumed(r,≤t)`.
+  This catches a hauler dropping cargo, a delivery double-crediting stock, or a recipe miscount — the things naive conservation would miss. It is the Stage-1 acceptance gate.
+- **Credit conservation (global, exact):** there is no money source or sink in the loop, so credits *are* globally conserved: `Σ corp_treasury + Σ hauler_credits + Σ escrow == initial` at all times, and `Δhauler + Δcorp + Δescrow == 0` at every settlement (integer-exact, microcredits).
 - **No negative stock / no overdraft:** validate-then-commit; a producer firing or a buy that would underflow does not fire (deterministic skip, not a panic).
 - **Contract lifecycle is a strict state machine:** illegal transitions are unrepresentable / rejected; a hauler that runs out of fuel mid-contract → `Failed`, escrow returns to corp.
 - `World::reset` keeps returning `Result<_, ResetError>` (world.rs:106); economy misconfig (e.g. a recipe referencing an unknown resource) is a new `ResetError` arm, validated before tick 0.
 
 ## Testing strategy
 
-- **Conservation tests** (the Stage-1 acceptance gate): mass-in==mass-out across a multi-tick run; credit `Δ==0` at each settlement.
+- **Accounting-identity tests** (the Stage-1 acceptance gate): the per-resource identity above holds at every tick across a multi-tick run (audited `mined`/`consumed` counters reconcile against `stock + in_transit`); and the global credit identity holds with `Δ==0` at each settlement.
 - **Determinism / replay** (per the `digest-tests-are-determinism-not-golden` lesson): a cross-run digest test — same config + same scripted inputs → bit-identical `state_hash` sequence over N ticks; and same-seed reset determinism.
 - **Golden discipline:** the `HASH_FORMAT_VERSION` bump re-pins both state goldens in one named commit; the economy-config fold re-pins `0x278c` in one named commit. Never batch a golden move with unrelated change.
 - **Stage-2 stability test:** drive the closed loop and assert price/stock reach a hysteresis band rather than a growing limit cycle (the oscillation hazard is real — make it a regression test, not a hope).
@@ -107,7 +109,7 @@ The whole point of the harness is replay. Rules:
 
 1. **Commodity names/chain depth:** Ore→Fuel→consume as the one chain — fine, or a different first chain?
 2. **Stage-2 deflation curve:** linear `price = base·(2 − stock/cap·1.8)` as the starting form, tuned in config — acceptable as a starting point (it is replaceable without reshaping the loop)?
-3. **Stations as Bodies:** stations sit on (orbit with) Bodies so haulers rendezvous with a moving target via the live arrival path — confirm stations are body-attached, not fixed inertial points (this is also the physically-correct model and what the dense arena will need).
+3. **Stations as Bodies (LOAD-BEARING — answer at review, not at planning):** the docking story rests on stations sitting on (orbiting with) Bodies, so haulers rendezvous with a *moving* target via the already-live arrival path (`NavDest::Entity(Body)`). If stations are instead fixed inertial points, nothing breaks (`NavDest::Position` is supported) but the station data model changes — so this shapes the plan and must be settled before writing-plans. (Body-attached is also the physically-correct model and what the dense arena will need.)
 4. **One spec or split plan:** this is one coherent loop but a sizeable build; the natural plan phases are: **prelude** (hash-bump scaffolding + stores) → **Stage 1** (producers + contracts + scripted haul, fixed price, conservation gate) → **Stage 2** (reprice clock + stability). OK to keep as one spec with phased plan, or split Stage 2 into its own?
 
 ## Reality-check note (standing memory: workflow agents fabricate in-code claims)
