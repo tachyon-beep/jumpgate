@@ -215,7 +215,7 @@ impl World {
     pub(crate) fn dv_from_fuel_for(&self, id: CraftId) -> f64 {
         match self.ship_index(id) {
             Some(i) => {
-                let eff = effective_params(&self.ships.spec[i]);
+                let eff = effective_params(&self.ships.spec[i], &self.ships.mods[i]);
                 crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, self.ships.fuel_mass[i])
             }
             None => 0.0,
@@ -270,7 +270,7 @@ impl World {
                 Lod::Player => {}
             }
 
-            let eff = effective_params(&self.ships.spec[ci]);
+            let eff = effective_params(&self.ships.spec[ci], &self.ships.mods[ci]);
             let pos = self.ships.pos[ci];
             let vel = self.ships.vel[ci];
             let fuel = self.ships.fuel_mass[ci];
@@ -397,7 +397,7 @@ impl World {
             if observer.visible(EntityRef::Craft(id)) {
                 let i = self.ship_index(id).expect("live id");
                 // effective fuel_capacity rides the accessor seam (effective==base in v1).
-                let cap = effective_params(&self.ships.spec[i]).fuel_capacity;
+                let cap = effective_params(&self.ships.spec[i], &self.ships.mods[i]).fuel_capacity;
                 craft.push((
                     id,
                     self.ships.pos[i],
@@ -459,7 +459,7 @@ impl StateView for World {
         // effective_params (use crate::stores::effective_params, in scope above)
         // applies the spec's modifiers; fuel_capacity is the effective field.
         self.ship_index(id)
-            .map(|i| effective_params(&self.ships.spec[i]).fuel_capacity)
+            .map(|i| effective_params(&self.ships.spec[i], &self.ships.mods[i]).fuel_capacity)
     }
     fn body_ids(&self) -> Vec<BodyId> {
         let mut v: Vec<BodyId> = self

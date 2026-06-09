@@ -25,11 +25,14 @@ pub struct Effective {
     pub fuel_capacity: f64,
 }
 
-/// The ONLY accessor the integrator/autopilot read for ship params. v1: identity.
-pub fn effective_params(spec: &BaseSpec) -> Effective {
+/// The ONLY accessor the integrator/autopilot read for craft params. v1 applies
+/// `mods.thrust_factor` to `max_thrust`; all other fields pass through. With
+/// `EffectiveMods::IDENTITY` the result is bit-identical to the base spec.
+/// Use a plain `*` (no FMA contraction) so the multiply is a single rounding.
+pub fn effective_params(spec: &BaseSpec, mods: &EffectiveMods) -> Effective {
     Effective {
         dry_mass: spec.base_dry_mass,
-        max_thrust: spec.base_max_thrust,
+        max_thrust: spec.base_max_thrust * mods.thrust_factor,
         exhaust_velocity: spec.base_exhaust_velocity,
         fuel_capacity: spec.base_fuel_capacity,
     }
@@ -171,7 +174,7 @@ impl CraftStore {
     /// for a stale id.
     pub fn craft_fuel_capacity(&self, id: CraftId) -> Option<f64> {
         self.index_of(id)
-            .map(|i| effective_params(&self.spec[i]).fuel_capacity)
+            .map(|i| effective_params(&self.spec[i], &self.mods[i]).fuel_capacity)
     }
 }
 
@@ -214,6 +217,30 @@ mod tests {
     }
 
     #[test]
+    fn effective_scales_with_thrust_factor() {
+        use crate::config::BaseSpec;
+        let spec = BaseSpec {
+            base_dry_mass: 10.0,
+            base_max_thrust: 250.0,
+            base_exhaust_velocity: 30.0,
+            base_fuel_capacity: 40.0,
+        };
+        // IDENTITY is bit-identical to the base numbers.
+        let id = effective_params(&spec, &EffectiveMods::IDENTITY);
+        assert_eq!(id.max_thrust, 250.0);
+        assert_eq!(id.dry_mass, spec.base_dry_mass);
+        assert_eq!(id.exhaust_velocity, spec.base_exhaust_velocity);
+        assert_eq!(id.fuel_capacity, spec.base_fuel_capacity);
+
+        // thrust_factor multiplies ONLY max_thrust (the one wired channel in v1).
+        let boosted = effective_params(&spec, &EffectiveMods { thrust_factor: 1.5 });
+        assert_eq!(boosted.max_thrust, 375.0);
+        assert_eq!(boosted.dry_mass, spec.base_dry_mass, "dry_mass unaffected");
+        assert_eq!(boosted.exhaust_velocity, spec.base_exhaust_velocity, "v_e unaffected");
+        assert_eq!(boosted.fuel_capacity, spec.base_fuel_capacity, "capacity unaffected");
+    }
+
+    #[test]
     fn effective_equals_base_in_v1() {
         use crate::config::BaseSpec;
         let spec = BaseSpec {
@@ -222,7 +249,7 @@ mod tests {
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
         };
-        let eff = effective_params(&spec);
+        let eff = effective_params(&spec, &EffectiveMods::IDENTITY);
         assert_eq!(eff.dry_mass, spec.base_dry_mass);
         assert_eq!(eff.max_thrust, spec.base_max_thrust);
         assert_eq!(eff.exhaust_velocity, spec.base_exhaust_velocity);

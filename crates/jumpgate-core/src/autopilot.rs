@@ -99,12 +99,15 @@ mod tests {
     /// at full tank, so the synthetic far/slow and braking checks see a meaningful
     /// `v_brake`.
     fn eff() -> Effective {
-        effective_params(&BaseSpec {
-            base_dry_mass: 1.0,
-            base_max_thrust: 1.0,
-            base_exhaust_velocity: 1.0,
-            base_fuel_capacity: 1.0,
-        })
+        effective_params(
+            &BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 1.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+            },
+            &crate::stores::EffectiveMods::IDENTITY,
+        )
     }
 
     fn seeking(dest: Vec3) -> NavState {

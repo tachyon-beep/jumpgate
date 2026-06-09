@@ -56,12 +56,15 @@ mod tests {
 
     fn eff_fixture() -> Effective {
         // dry_mass 1, max_thrust 1, exhaust_velocity 10, fuel_capacity 2
-        effective_params(&BaseSpec {
-            base_dry_mass: 1.0,
-            base_max_thrust: 1.0,
-            base_exhaust_velocity: 10.0,
-            base_fuel_capacity: 2.0,
-        })
+        effective_params(
+            &BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 1.0,
+                base_exhaust_velocity: 10.0,
+                base_fuel_capacity: 2.0,
+            },
+            &crate::stores::EffectiveMods::IDENTITY,
+        )
     }
 
     #[test]

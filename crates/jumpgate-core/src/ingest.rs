@@ -165,7 +165,7 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
 /// the shared `math::tsiolkovsky_dv` helper, using effective params (§5.5). Bit-for-bit
 /// identical to the prior inline form (same operands, same left-to-right grouping).
 fn dv_from_fuel(ship: &CraftStore, idx: usize) -> f64 {
-    let eff = crate::stores::effective_params(&ship.spec[idx]);
+    let eff = crate::stores::effective_params(&ship.spec[idx], &ship.mods[idx]);
     crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ship.fuel_mass[idx])
 }
 
