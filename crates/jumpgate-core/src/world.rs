@@ -455,6 +455,29 @@ impl World {
         crate::events::detect_boundary_events(&self.ships, &self.bodies, &self.eph, next, &mut ev);
         self.events = ev;
 
+        // (3b) economy delivery stage: settle any InTransit contract whose hauler
+        //      just arrived at its destination body. Lift this tick's Arrival
+        //      (craft, dest) pairs out of the event stream FIRST (drops the immutable
+        //      borrow), then settle. Unload + payout are TRANSFERS (no flow/credit
+        //      created); resolution is sorted-ContractId order for determinism.
+        let arrivals: Vec<(CraftId, NavDest)> = self
+            .events
+            .since(next)
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::Arrival { craft, dest } => Some((craft, dest)),
+                _ => None,
+            })
+            .collect();
+        crate::economy::resolve_deliveries(
+            &mut self.contracts,
+            &mut self.stations,
+            &mut self.ships,
+            &arrivals,
+            next,
+            &mut self.events,
+        );
+
         // (4) copy-forward the boundary-edge arrays so next tick's detection has a
         //     prior. These arrays are folded into state_hash at the position fixed by
         //     HASH_FIELD_ORDER (a later hash task pins their contribution).
@@ -1071,11 +1094,19 @@ mod tests {
         use crate::config::{ContractInit, CorporationInit, StationInit};
         use crate::economy::Resource;
         let mut cfg = one_body_one_thrusting_craft();
-        // Add a second body at a small, distinct orbit (station B's host).
+        // Drop the central body's mass so (a) the craft co-located at the origin is
+        // not gravity-trapped and (b) station B's body is near-stationary — a from-rest
+        // craft with a ~6.9e-3 Δv budget can only rendezvous with a slow frame. With
+        // mu = G_CANONICAL·(m_central + m_body) the destination's orbital speed
+        // collapses to ~1e-6 AU/day, a fixed point for the autopilot. (Fixture params
+        // are NOT hashed state; no golden moves.)
+        cfg.bodies[0].mass = 1e-9;
+        // Add a second body at a reachable 0.3 AU orbit (station B's host) — inside the
+        // proven free-space-transfer envelope (cf. physics_sanity transfer tests).
         cfg.bodies.push(BodyInit {
             mass: 1e-12, // negligible-mass marker body; only its position matters
             elements: OrbitalElements {
-                a: 0.001,
+                a: 0.3,
                 e: 0.0,
                 i: 0.0,
                 raan: 0.0,
@@ -1174,5 +1205,85 @@ mod tests {
             )),
             "ContractAccepted emitted"
         );
+    }
+
+    #[test]
+    fn deliver_on_arrival_settles_escrow_and_holds_credit_identity() {
+        use crate::economy::{ContractStatus, Resource};
+        use crate::stores::CraftRole;
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let cidx = 0usize; // sole contract, dense row 0
+        let fuel = Resource::Fuel.index();
+
+        // Credit identity baseline: Σtreasury + Σcredits + Σescrow is invariant
+        // (escrow is corp money held off-balance-sheet, paid to the craft on
+        // delivery). Capture it before any contract motion.
+        let initial_credit = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+
+        // Accept the sole Offered contract (escrow + load happen on step 1).
+        let contract = world
+            .contracts
+            .ids
+            .id_at(cidx)
+            .map(|(slot, generation)| crate::ids::ContractId { slot, generation })
+            .unwrap();
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(
+            world.contracts.status[cidx],
+            ContractStatus::CargoLoaded,
+            "loaded at origin on step 1"
+        );
+
+        // Step (no further commands) until the hauler rendezvous-arrives at station B
+        // and the delivery stage settles the contract. Bounded loop: the destination
+        // body 1 sits at a == 0.001 AU and the craft has ample Δv, so this converges
+        // well within the bound; break on Completed, fail if it never lands.
+        let mut empty: Vec<Command> = Vec::new();
+        let mut completed = false;
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            if world.contracts.status[cidx] == ContractStatus::Completed {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "contract reached Completed within the step bound");
+
+        // Cargo unloaded into station B (+5 Fuel); station B opened at 0.
+        let crow = world.ships.index_of(craft).unwrap();
+        assert_eq!(world.stations.stock[1][fuel], 5, "station B Fuel 0 -> 5");
+        // Escrow paid out to the craft; escrow zeroed.
+        assert_eq!(world.contracts.escrow_micros[cidx], 0, "escrow drained");
+        assert_eq!(
+            world.ships.credits_micros[crow], 1_000_000,
+            "escrow settled to craft credits"
+        );
+        // Craft cargo/contract handle cleared; role back to Idle.
+        assert_eq!(world.ships.cargo[crow], None, "cargo cleared");
+        assert_eq!(world.ships.contract[crow], None, "contract handle cleared");
+        assert_eq!(world.ships.role[crow], CraftRole::Idle, "role cleared");
+
+        // ContractFulfilled emitted for this craft/contract.
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::ContractFulfilled { contract: c, hauler } if c == contract && hauler == craft
+            )),
+            "ContractFulfilled emitted"
+        );
+
+        // Global credit identity holds: no money created or destroyed by delivery.
+        let final_credit = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+        assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
     }
 }

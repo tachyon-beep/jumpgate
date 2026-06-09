@@ -445,6 +445,74 @@ fn try_load(
     let _ = tick; // load itself emits no event in v1 (ContractAccepted already fired)
 }
 
+/// Delivery-on-arrival settlement stage (deterministic, sorted-`ContractId` order).
+/// Runs in `World::step` AFTER boundary-event detection: `arrivals` is the list of
+/// `(craft, dest)` pairs lifted from this tick's just-detected `Arrival` events. For
+/// each `InTransit` contract whose bound `hauler` arrived at its `to_station`'s body:
+///
+///   * unload the craft's cargo into `to_station` stock (a TRANSFER — touches NO
+///     `mined`/`consumed` counter; the resource identity already accounts in-transit
+///     cargo on the way out at load),
+///   * pay `escrow_micros` -> the craft's `credits_micros`, zero the escrow (a credit
+///     TRANSFER: Σtreasury+Σcredits+Σescrow is invariant — corp money escrowed at
+///     accept lands in the hauler's account),
+///   * clear the craft's `cargo`/`contract`/`role` (`Hauler->Idle`),
+///   * status `InTransit -> Completed` (the `Delivered` waypoint collapses into the
+///     same settlement), emit `ContractFulfilled`.
+///
+/// The destination match uses the `Arrival` event's `dest` (already the destination
+/// `BodyId`) against `stations.body[to_station]`, so this stage needs no ephemeris.
+pub fn resolve_deliveries(
+    contracts: &mut ContractStore,
+    stations: &mut StationStore,
+    ships: &mut CraftStore,
+    arrivals: &[(CraftId, NavDest)],
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    for kidx in 0..contracts.ids.len() {
+        if contracts.status[kidx] != ContractStatus::InTransit {
+            continue;
+        }
+        let Some(hauler) = contracts.hauler[kidx] else {
+            continue;
+        };
+        // Resolve the destination station's body; a stale row -> skip (deterministic).
+        let to = contracts.to_station[kidx];
+        let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
+            continue;
+        };
+        let to_body = stations.body[to_row];
+        let dest = NavDest::Entity(EntityRef::Body(to_body));
+        // Did this contract's hauler arrive at the destination body THIS tick?
+        if !arrivals.iter().any(|&(c, d)| c == hauler && d == dest) {
+            continue;
+        }
+        let Some(crow) = ships.index_of(hauler) else {
+            continue;
+        };
+        // Unload: craft cargo (in-transit) -> destination station stock. TRANSFER only.
+        if let Some((resource, qty)) = ships.cargo[crow] {
+            stations.stock[to_row][resource.index()] += qty as i64;
+        }
+        // Settle escrow -> craft credits (credit TRANSFER; identity invariant).
+        let payout = contracts.escrow_micros[kidx];
+        contracts.escrow_micros[kidx] = 0;
+        ships.credits_micros[crow] += payout;
+        // Release the hauler.
+        ships.cargo[crow] = None;
+        ships.contract[crow] = None;
+        ships.role[crow] = CraftRole::Idle;
+        // Terminal status + fulfilment event.
+        contracts.status[kidx] = ContractStatus::Completed;
+        let contract = contract_id(contracts, kidx);
+        events.emit(Event {
+            tick,
+            kind: EventKind::ContractFulfilled { contract, hauler },
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
