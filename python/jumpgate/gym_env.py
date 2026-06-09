@@ -29,6 +29,10 @@ class JumpgateGymEnv(gym.Env):
         self.num_craft = num_craft
         self.mode = mode
         self._native = JumpgateEnv(num_envs, num_craft)
+        # Unseeded-reset seed derivation (see reset()): base from the last
+        # explicit seed, golden-ratio stride per unseeded reset.
+        self._seed_base = 0
+        self._unseeded_resets = 0
 
         if mode == "thrust":
             obs_dim, action_dim = self._native.configure(self._MODES[mode])
@@ -73,10 +77,22 @@ class JumpgateGymEnv(gym.Env):
         options: Optional[dict[str, Any]] = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
-        # seed becomes RunConfig.master_seed per env; deterministic default.
-        # v1: master_seed seeds RngStreams but nothing draws from them, so the
-        # seed is inert (see test_reset_is_deterministic forward-debt note).
-        native_seed = 0 if seed is None else int(seed)
+        # seed becomes RunConfig.master_seed per env (drives the thrust-mode
+        # target draw). CRITICAL: SB3's VecEnvs call reset() with NO seed on
+        # every episode end, preempting the native auto-reset; the old
+        # `None -> 0` mapping therefore trained on ONE fixed scenario forever
+        # (measured: the policy only arrived on targets near the single
+        # trained direction). On unseeded resets, derive a fresh deterministic
+        # seed from the last explicit seed + an episode stride instead.
+        if seed is None:
+            self._unseeded_resets += 1
+            native_seed = (
+                self._seed_base + self._unseeded_resets * 0x9E3779B97F4A7C15
+            ) & 0xFFFFFFFFFFFFFFFF
+        else:
+            native_seed = int(seed)
+            self._seed_base = native_seed
+            self._unseeded_resets = 0
         self._native.reset(native_seed, self._obs_buf)
         info: dict[str, Any] = {}
         return self._obs_buf.copy(), info

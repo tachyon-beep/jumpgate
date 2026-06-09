@@ -46,3 +46,18 @@ def test_episode_truncates_and_autoresets():
         if term or trunc:
             break
     assert truncated, "time-limit must truncate"
+
+
+def test_unseeded_resets_vary_targets_but_explicit_seed_reproduces():
+    # SB3 VecEnvs reset() without a seed on every episode end; each such reset
+    # must present a FRESH target (the old None->0 mapping silently trained on
+    # one fixed scenario forever), while an explicit seed restores exact
+    # reproducibility.
+    env = _make()
+    a, _ = env.reset(seed=7)
+    b, _ = env.reset()  # unseeded: fresh derived scenario
+    c, _ = env.reset()  # unseeded again: fresh again
+    assert not np.allclose(a[4:7], b[4:7]), "unseeded reset must change the target"
+    assert not np.allclose(b[4:7], c[4:7]), "every unseeded reset must differ"
+    d, _ = env.reset(seed=7)  # explicit: back to the seed-7 scenario exactly
+    assert np.array_equal(a, d), "explicit seed must reproduce bit-identically"
