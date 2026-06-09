@@ -84,6 +84,13 @@ pub struct CraftStore {
     pub prev_fuel: Vec<f64>,
     pub prev_inside_dest: Vec<bool>,
     pub prev_pos: Vec<Vec3>,
+    /// Per-craft EFFECTIVE-modifier cache. DERIVED (written by the crew-mod / wear
+    /// tick-stages; IDENTITY until then), length-parallel, NOT hashed. Initialized
+    /// to `EffectiveMods::IDENTITY` so reads before the first `step` (projections)
+    /// are well-defined. INVARIANT: `mods` is a pure function of state that is
+    /// either constant (v1) or folded into HASH_FIELD_ORDER (Plan B); it must NEVER
+    /// depend on an unhashed runtime-mutable input.
+    pub mods: Vec<EffectiveMods>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -110,6 +117,7 @@ impl CraftStore {
             prev_fuel: Vec::new(),
             prev_inside_dest: Vec::new(),
             prev_pos: Vec::new(),
+            mods: Vec::new(),
         }
     }
 
@@ -134,6 +142,7 @@ impl CraftStore {
         self.prev_fuel.push(fuel);
         self.prev_inside_dest.push(false);
         self.prev_pos.push(pos);
+        self.mods.push(EffectiveMods::IDENTITY);
         CraftId { slot, generation }
     }
 
@@ -237,6 +246,8 @@ mod tests {
         assert_eq!(ship.prev_fuel.len(), n);
         assert_eq!(ship.prev_inside_dest.len(), n);
         assert_eq!(ship.prev_pos.len(), n);
+        // mods is a length-parallel DERIVED column, initialized to IDENTITY.
+        assert_eq!(ship.mods.len(), n);
 
         let mut body = BodyStore {
             ids: SlotMap::new(),
@@ -293,6 +304,9 @@ mod tests {
         assert_eq!(ship.prev_fuel.len(), n);
         assert_eq!(ship.prev_inside_dest.len(), n);
         assert_eq!(ship.prev_pos.len(), n);
+        assert_eq!(ship.mods.len(), n);
+        assert_eq!(ship.mods[0], EffectiveMods::IDENTITY, "push initializes mods to IDENTITY");
+        assert_eq!(ship.mods[1], EffectiveMods::IDENTITY);
 
         // ids_at wraps the dense row into a typed CraftId.
         assert_eq!(ship.ids_at(0), id0);

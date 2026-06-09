@@ -152,6 +152,7 @@ impl World {
             prev_fuel: Vec::new(),
             prev_inside_dest: Vec::new(),
             prev_pos: Vec::new(),
+            mods: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -168,6 +169,7 @@ impl World {
             // Swept-arrival chord start: prev_pos == pos at tick 0 (zero-length
             // chord), so no spurious Arrival clip on the first step.
             ships.prev_pos.push(c.pos);
+            ships.mods.push(crate::stores::EffectiveMods::IDENTITY);
         }
 
         let rng = RngStreams::from_master(cfg.master_seed);
