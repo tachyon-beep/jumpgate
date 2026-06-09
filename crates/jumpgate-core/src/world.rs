@@ -347,6 +347,20 @@ impl World {
             &mut self.events,
         );
 
+        // (1b2) scripted dispatch + repost (stage 7, Task 17): repost demanded routes
+        //       and assign Idle haulers so the Stage-1 loop SELF-RUNS with no external
+        //       commands. Placed AFTER run_producers (so demand reflects this tick's
+        //       production) and BEFORE resolve_contracts (so a same-tick accept is
+        //       escrowed/loaded). Identity-neutral: touches no counter/stock/cargo.
+        crate::economy::run_scripted_dispatch(
+            &mut self.contracts,
+            &self.stations,
+            &mut self.ships,
+            &self.config.dispatch_cfg,
+            next,
+            &mut self.events,
+        );
+
         // (1c) economy contract stage: drive the accept/escrow/load/dispatch
         //      lifecycle for haulers bound by this tick's ingest. Disjoint &mut
         //      field borrows + read-only bodies/eph (mirrors run_producers); `next`
@@ -1329,6 +1343,128 @@ mod tests {
                 EventKind::ContractAccepted { contract: c, hauler } if c == contract && hauler == craft
             )),
             "ContractAccepted emitted"
+        );
+    }
+
+    /// FULL Stage-1 self-running fixture (Task 17). Extends the two-body contract
+    /// world with a complete production chain so the loop is closed:
+    ///   * station A (body 0, origin): a ∅->Ore(5) MINER and an Ore(2)->Fuel(2)
+    ///     REFINER, so A continuously restocks Fuel for the route to load.
+    ///   * station B (body 1, destination): a Fuel(1)->∅ DEMAND SINK that consumes
+    ///     delivered Fuel each tick (its input leg bumps consumed[Fuel] for free).
+    ///   * one corp (treasury funds the escrowed reward), one Idle hauler co-located
+    ///     at A's body, and ONE seeded ContractInit (the route TEMPLATE: Fuel A->B).
+    ///
+    /// `demand_low` is set above the per-contract qty so the sink keeps B below the
+    /// trigger and a repost is warranted after the first delivery.
+    fn full_stage1_self_running_fixture() -> RunConfig {
+        use crate::config::{CorporationInit, ProducerInit};
+        use crate::economy::{Recipe, Resource};
+        let mut cfg = two_body_contract_fixture();
+        // Producers on station A (origin) + a demand sink on station B (destination).
+        cfg.producers = vec![
+            // Miner: ∅ -> Ore(5) every tick.
+            ProducerInit {
+                station_index: 0,
+                recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+            },
+            // Refiner: Ore(2) -> Fuel(2) every tick (keeps A restocked with Fuel).
+            ProducerInit {
+                station_index: 0,
+                recipe: Recipe {
+                    input: Some((Resource::Ore, 2)),
+                    output: Some((Resource::Fuel, 2)),
+                    interval: 1,
+                },
+            },
+            // Demand sink at B: Fuel(1) -> ∅ every tick (consumes delivered Fuel).
+            ProducerInit {
+                station_index: 1,
+                recipe: Recipe { input: Some((Resource::Fuel, 1)), output: None, interval: 1 },
+            },
+        ];
+        // Trigger repost while B's stock sits below demand_low (5-unit deliveries,
+        // demand_low 10 -> demand persists right after a delivery).
+        cfg.dispatch_cfg.demand_low = 10;
+        cfg.dispatch_cfg.demand_high = 20;
+        cfg.dispatch_cfg.contract_reward_micros = 1_000_000;
+        cfg.dispatch_cfg.contract_qty = 5;
+        // The seeded contract (from two_body_contract_fixture): Fuel 5, A->B, reward
+        // 1_000_000 — the route TEMPLATE every repost clones. Verify it is present.
+        assert_eq!(cfg.contracts.len(), 1, "exactly one seeded route template");
+        // Give the corp enough treasury to fund repeated reposts' escrows.
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 100_000_000,
+            home_station_index: 0,
+        }];
+        cfg
+    }
+
+    #[test]
+    fn scripted_dispatch_makes_stage1_loop_self_run() {
+        use crate::economy::{ContractStatus, N_RESOURCES, Resource};
+        let (mut world, _h) =
+            World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
+        let fuel = Resource::Fuel.index();
+
+        // Resource accounting identity baseline: initial[r] = Σ station stock at tick 0
+        // (mined == consumed == 0 at reset).
+        let mut initial = [0i64; N_RESOURCES];
+        for r in 0..N_RESOURCES {
+            initial[r] = world.stations.stock.iter().map(|s| s[r]).sum();
+        }
+
+        // Identity check helper: Σstock(r) + Σin_transit_cargo(r) == initial(r)
+        // + mined(r) - consumed(r), per resource, EVERY tick.
+        let check_identity = |w: &World, tag: &str| {
+            for r in 0..N_RESOURCES {
+                let stock: i64 = w.stations.stock.iter().map(|s| s[r]).sum();
+                let in_transit: i64 = w
+                    .ships
+                    .cargo
+                    .iter()
+                    .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
+                    .sum();
+                let lhs = stock + in_transit;
+                let rhs = initial[r] + w.econ.mined[r] - w.econ.consumed[r];
+                assert_eq!(
+                    lhs, rhs,
+                    "resource identity ({tag}) for r={r}: {lhs} != {rhs}"
+                );
+            }
+        };
+
+        check_identity(&world, "tick 0");
+
+        // Self-run: NO external commands. The scripted policy must assign the Idle
+        // hauler to the seeded Offered contract, load + dispatch it, deliver at B, and
+        // (because B stays below demand_low) repost a clone of the route.
+        let mut empty: Vec<Command> = Vec::new();
+        let mut completed = false;
+        let mut b_fuel_seen_positive = false;
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            check_identity(&world, "per-tick");
+            if world.stations.stock[1][fuel] > 0 {
+                b_fuel_seen_positive = true;
+            }
+            if world.contracts.status.contains(&ContractStatus::Completed) {
+                completed = true;
+                break;
+            }
+        }
+        assert!(completed, "at least one contract self-completed within the step bound");
+        assert!(b_fuel_seen_positive, "station B Fuel stock saw deliveries (>0 at some point)");
+
+        // Run a few ticks past the first completion so the REPOST branch fires (B's
+        // stock is below demand_low after the sink consumes the delivery).
+        for _ in 0..50 {
+            world.step(&mut empty);
+            check_identity(&world, "post-completion");
+        }
+        assert!(
+            world.contracts.ids.len() > 1,
+            "the scripted policy reposted at least one fresh contract (route clone)"
         );
     }
 

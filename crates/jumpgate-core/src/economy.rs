@@ -289,6 +289,104 @@ use crate::ephemeris::Ephemeris;
 use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, effective_params};
 use crate::types::{EntityRef, NavDest};
 
+/// Scripted dispatch + repost stage (Stage-1 — Task 17). Makes the loop SELF-RUN
+/// with no external commands. DETERMINISTIC, sorted dense-id order, no RNG, no map
+/// iteration. Runs in `World::step` as stage (7) — AFTER `run_producers`, BEFORE
+/// `resolve_contracts` — so a same-tick repost is visible to ASSIGN and the same-tick
+/// accept is escrowed/loaded by `resolve_contracts` next.
+///
+/// IDENTITY-NEUTRAL BY CONSTRUCTION: this stage touches NO flow counter, NO station
+/// stock, NO craft cargo. REPOST only `ContractStore::push`es an `Offered` row; ASSIGN
+/// only writes `craft.contract` + `role` (mirroring the single ingest ACCEPT path).
+/// All escrow/load/dispatch motion stays in `resolve_contracts`.
+///
+///   (a) REPOST: for each route (corp+from+to+resource), find its LATEST contract
+///       (highest dense row — the dedup is "skip a row if a later row shares its
+///       route"). If that latest contract is TERMINAL (Completed/Failed) AND the
+///       destination station's stock of the resource is below `DispatchCfg.demand_low`,
+///       push a NEW Offered contract CLONING the latest contract's route fields
+///       (corp/resource/qty/from/to/reward — never inferred from producer topology),
+///       and emit `ContractOffered`. The seeded `ContractInit` is the first template.
+///   (b) ASSIGN: each Idle hauler (sorted dense row) takes the lowest-`ContractId`
+///       `Offered` contract not already claimed this stage. One hauler -> one contract.
+///       `resolve_contracts` settles the accept next.
+pub fn run_scripted_dispatch(
+    contracts: &mut ContractStore,
+    stations: &StationStore,
+    ships: &mut CraftStore,
+    dispatch: &crate::config::DispatchCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    // (a) REPOST. Bind `n` BEFORE the loop so freshly-pushed rows are not reprocessed.
+    let n = contracts.ids.len();
+    for i in 0..n {
+        // Route key for row i (corp+from+to+resource). Skip if a LATER row shares it
+        // (only the latest contract per route is the repost representative).
+        let later_dup = (i + 1..n).any(|j| {
+            contracts.corp[j] == contracts.corp[i]
+                && contracts.from_station[j] == contracts.from_station[i]
+                && contracts.to_station[j] == contracts.to_station[i]
+                && contracts.resource[j] == contracts.resource[i]
+        });
+        if later_dup {
+            continue;
+        }
+        // A live (non-terminal) contract for this route -> no repost.
+        let terminal = matches!(
+            contracts.status[i],
+            ContractStatus::Completed | ContractStatus::Failed
+        );
+        if !terminal {
+            continue;
+        }
+        // Demand gate: destination station stock below DispatchCfg.demand_low.
+        let to = contracts.to_station[i];
+        let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
+            continue;
+        };
+        let resource = contracts.resource[i];
+        if stations.stock[to_row][resource.index()] >= dispatch.demand_low {
+            continue;
+        }
+        // Clone the route fields of the latest contract for this route (NOT inferred
+        // from producer topology). Fresh status Offered, escrow 0, no hauler.
+        let new_id = contracts.push(
+            contracts.corp[i],
+            resource,
+            contracts.qty[i],
+            contracts.from_station[i],
+            to,
+            contracts.reward_micros[i],
+        );
+        events.emit(Event {
+            tick,
+            kind: EventKind::ContractOffered { contract: new_id },
+        });
+    }
+
+    // (b) ASSIGN. Each Idle hauler (sorted dense row) claims the lowest-ContractId
+    // Offered contract not already claimed (this stage or earlier). Mirrors the ingest
+    // ACCEPT path: set craft.contract + role; resolve_contracts escrows it next.
+    for crow in 0..ships.ids.len() {
+        if ships.role[crow] != CraftRole::Idle {
+            continue;
+        }
+        for kidx in 0..contracts.ids.len() {
+            if contracts.status[kidx] != ContractStatus::Offered {
+                continue;
+            }
+            let cid = contract_id(contracts, kidx);
+            if (0..ships.ids.len()).any(|r| ships.contract[r] == Some(cid)) {
+                continue;
+            }
+            ships.contract[crow] = Some(cid);
+            ships.role[crow] = CraftRole::Hauler;
+            break;
+        }
+    }
+}
+
 /// Contract-resolution stage (deterministic, sorted-`ContractId` order — the dense
 /// `slot == row` invariant makes `0..len` iteration already sorted). Runs after
 /// command ingest (which records ACCEPT intent: `craft.contract` + `role = Hauler`)
