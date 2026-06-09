@@ -364,8 +364,27 @@ pub fn run_scripted_dispatch(
     tick: Tick,
     events: &mut EventStream,
 ) {
-    // (a) REPOST. Bind `n` BEFORE the loop so freshly-pushed rows are not reprocessed.
+    // (a) REPOST — ORDER-UP-TO with a HYSTERESIS deadband (Task 21). The deadband is
+    // store-derived (no new field, LAW 4): "in-flight pipeline" = the Σ qty of a route's
+    // NON-terminal contracts, and `projected = destination stock + in_flight`. The
+    // Schmitt trigger is expressed purely from contract liveness + stock:
+    //
+    //   * IDLE route (no non-terminal contract): START a burst only when destination
+    //     stock < `demand_low` (the low edge).
+    //   * BURST in progress (>=1 non-terminal contract): keep topping up while
+    //     `projected < demand_high` (the order-up-to ceiling / high edge).
+    //
+    // So a route is NOT re-posted while its projected supply sits in the
+    // `[demand_low, demand_high)` deadband — `demand_high == demand_low` collapses the
+    // deadband (undamped). Posting fills the gap to the ceiling IN ONE TICK, so a fresh
+    // burst yields several concurrent Offered rows for the staggered ASSIGN below to
+    // spread across ticks. Bind `n` BEFORE the loop so freshly-pushed rows are not
+    // reprocessed; the per-route representative is the LATEST row (skip if a later row
+    // shares the route), and the in-flight sum spans ALL rows of the route.
     let n = contracts.ids.len();
+    // Backstop bound on posts-per-tick-per-route (the `projected` guard already
+    // terminates the loop; this caps it even on a degenerate config).
+    const MAX_POSTS_PER_ROUTE: usize = 64;
     for i in 0..n {
         // Route key for row i (corp+from+to+resource). Skip if a LATER row shares it
         // (only the latest contract per route is the repost representative).
@@ -378,44 +397,82 @@ pub fn run_scripted_dispatch(
         if later_dup {
             continue;
         }
-        // A live (non-terminal) contract for this route -> no repost.
-        let terminal = matches!(
-            contracts.status[i],
-            ContractStatus::Completed | ContractStatus::Failed
-        );
-        if !terminal {
-            continue;
-        }
-        // Demand gate: destination station stock below DispatchCfg.demand_low.
+        let resource = contracts.resource[i];
         let to = contracts.to_station[i];
         let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
             continue;
         };
-        let resource = contracts.resource[i];
-        if stations.stock[to_row][resource.index()] >= dispatch.demand_low {
+        // A degenerate qty would never raise `projected` -> guard the order-up-to loop.
+        let qty = contracts.qty[i];
+        if qty == 0 {
             continue;
         }
-        // Clone the route fields of the latest contract for this route (NOT inferred
-        // from producer topology). Fresh status Offered, escrow 0, no hauler.
-        let new_id = contracts.push(
-            contracts.corp[i],
-            resource,
-            contracts.qty[i],
-            contracts.from_station[i],
-            to,
-            contracts.reward_micros[i],
-        );
-        events.emit(Event {
-            tick,
-            kind: EventKind::ContractOffered { contract: new_id },
-        });
+        // In-flight pipeline for this route: Σ qty of its NON-terminal contracts, and
+        // the count of them (the regime selector). Spans EVERY row of the route (sorted
+        // dense order, integer).
+        let mut in_flight: i64 = 0;
+        let mut in_flight_count: u32 = 0;
+        for j in 0..n {
+            let same_route = contracts.corp[j] == contracts.corp[i]
+                && contracts.from_station[j] == contracts.from_station[i]
+                && contracts.to_station[j] == contracts.to_station[i]
+                && contracts.resource[j] == contracts.resource[i];
+            if !same_route {
+                continue;
+            }
+            let terminal = matches!(
+                contracts.status[j],
+                ContractStatus::Completed | ContractStatus::Failed
+            );
+            if !terminal {
+                in_flight += contracts.qty[j] as i64;
+                in_flight_count += 1;
+            }
+        }
+        let stock = stations.stock[to_row][resource.index()];
+        // Hysteresis regime: an IDLE route starts a burst only below the LOW edge; a
+        // route with live contracts is already in a burst.
+        let bursting = in_flight_count > 0 || stock < dispatch.demand_low;
+        if !bursting {
+            continue;
+        }
+        // Order-up-to: post (one clone per loop) while projected supply is below the
+        // HIGH edge (the ceiling). `demand_high == demand_low` -> a single post brings
+        // projected to/over the low edge and the loop stops (undamped one-shot).
+        let mut projected = stock + in_flight;
+        let mut posts = 0usize;
+        while projected < dispatch.demand_high.max(dispatch.demand_low)
+            && posts < MAX_POSTS_PER_ROUTE
+        {
+            let new_id = contracts.push(
+                contracts.corp[i],
+                resource,
+                qty,
+                contracts.from_station[i],
+                to,
+                contracts.reward_micros[i],
+            );
+            events.emit(Event {
+                tick,
+                kind: EventKind::ContractOffered { contract: new_id },
+            });
+            projected += qty as i64;
+            posts += 1;
+        }
     }
 
-    // (b) ASSIGN. Each Idle hauler (sorted dense row) claims the lowest-ContractId
-    // Offered contract not already claimed (this stage or earlier). Mirrors the ingest
-    // ACCEPT path: set craft.contract + role; resolve_contracts escrows it next.
+    // (b) ASSIGN — STAGGERED (Task 21). Each Idle hauler (sorted dense row) claims the
+    // lowest-ContractId Offered contract not already claimed (this stage or earlier).
+    // STAGGER GATE: an Idle hauler in dense row `crow` may accept only on ticks where
+    // `tick % stagger_period == crow % stagger_period`; `stagger_period == 1` => every
+    // hauler passes every tick (no stagger). This spreads a fresh burst's acceptances
+    // across `stagger_period` ticks (deterministic, integer, sorted-id, no RNG).
+    let stagger = dispatch.stagger_period.max(1) as u64;
     for crow in 0..ships.ids.len() {
         if ships.role[crow] != CraftRole::Idle {
+            continue;
+        }
+        if tick.0 % stagger != crow as u64 % stagger {
             continue;
         }
         for kidx in 0..contracts.ids.len() {
