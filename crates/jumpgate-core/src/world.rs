@@ -21,6 +21,14 @@ pub struct World {
     // private behind StateView / narrow mutators.
     pub(crate) ships: CraftStore,
     pub(crate) bodies: BodyStore,
+    // Economy stores (pub(crate) so the per-tick state hash folds their SoA arrays
+    // directly, like ships/bodies). Minted EMPTY here; `World::reset` populates them
+    // from `RunConfig` in a later task. `econ` is the audited flow counters.
+    pub(crate) stations: crate::economy::StationStore,
+    pub(crate) producers: crate::economy::ProducerStore,
+    pub(crate) corporations: crate::economy::CorporationStore,
+    pub(crate) contracts: crate::economy::ContractStore,
+    pub(crate) econ: crate::economy::EconCounters,
     eph: Ephemeris,
     #[allow(dead_code)]
     rng: RngStreams,
@@ -188,6 +196,12 @@ impl World {
         let world = World {
             ships,
             bodies,
+            // Economy stores start empty; config-minting lands in a later task.
+            stations: crate::economy::StationStore::empty(),
+            producers: crate::economy::ProducerStore::empty(),
+            corporations: crate::economy::CorporationStore::empty(),
+            contracts: crate::economy::ContractStore::empty(),
+            econ: crate::economy::EconCounters::zero(),
             eph,
             rng,
             log: ActionLog {

@@ -39,19 +39,37 @@
 //!
 //! APPEND BELOW THIS LINE (bump HASH_FORMAT_VERSION + golden test on change):
 //!
-//! 14. prev_fuel[i].to_bits()                  (Task 11, event edge-detect state)
-//! 15. prev_inside_dest[i] as u64              (Task 11, event edge-detect state)
+//! 14. prev_fuel[i].to_bits()      (RESERVED — deferred; transitively pinned, NOT folded)
+//! 15. prev_inside_dest[i] as u64  (RESERVED — deferred; transitively pinned, NOT folded)
+//!
+//! ECONOMY (HASH_FORMAT_VERSION 2 — folded by `write_craft_economy` (per-craft, in
+//! the sorted-craft loop) + `write_economy_stores` (after it). Both are shared by
+//! `state_hash` and the parity recompute so they cannot drift):
+//!
+//!  Per craft (in the sorted-CraftId loop, AFTER word 13/lod):
+//!   16. role.rank() as u64
+//!   17. cargo: 0 (None) | 1 then (resource.index(), qty)
+//!   18. credits_micros as u64
+//!   19. contract: 0 (None) | 1 then (slot, generation)
+//!
+//!  Store-level (after the craft loop; each store: cursor, then sorted-id elements):
+//!   20. EconCounters: mined[0..N], consumed[0..N]
+//!   21. stations:     cursor; per station: slot, gen, body(slot,gen), per-resource (stock, price_micros)
+//!   22. producers:    cursor; per producer: slot, gen, station(slot,gen), recipe(in disc+payload, out disc+payload, interval)
+//!   23. corporations: cursor; per corp: slot, gen, treasury_micros, home_station(slot,gen)
+//!   24. contracts:    cursor; per contract: slot, gen, status.rank(), corp(slot,gen), resource.index(), qty,
+//!                     from(slot,gen), to(slot,gen), reward_micros, escrow_micros, hauler(0|1 then slot,gen)
 
 /// Header magic for the per-tick STATE hash (little-endian, spec §6).
 pub const HASH_MAGIC: u64 = 0x4a55_4d50_4741_5445; // "JUMPGATE"
-/// Bump whenever HASH_FIELD_ORDER changes (e.g. Task 11 appends fields).
-pub const HASH_FORMAT_VERSION: u32 = 1;
+/// Bump whenever HASH_FIELD_ORDER changes. v2: + economy state (words 16..=24).
+pub const HASH_FORMAT_VERSION: u32 = 2;
 
 /// Golden per-tick hash of the minimal zero-init slice under HASH_FIELD_ORDER
 /// words 1..=13. Pinned so any change to the canonical encoding is caught.
 /// Captured from the first run of `golden_zero_state_hash`; if HASH_FIELD_ORDER
 /// or HASH_FORMAT_VERSION changes, recapture AND bump the version.
-pub const GOLDEN_ZERO_STATE_HASH: u64 = 0xf0dd_a1ba_f433_3735;
+pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x65d7_af3b_9a8a_8276; // RE-PINNED: HASH_FORMAT_VERSION 1->2 (+economy state words 16..=24). Was 0xf0dd_a1ba_f433_3735.
 
 /// Shared FNV-1a 64-bit hasher for the per-tick state hash. Folds each u64 as 8
 /// little-endian bytes. `new()` seeds with `HASH_MAGIC` then the version word.
@@ -198,9 +216,146 @@ pub fn state_hash(world: &World) -> u64 {
             .lod(c)
             .expect("dense SoA invariant: live craft row missing lod column");
         h.write_u64(l as u64);
+        // HASH_FIELD_ORDER words 16-19: this craft's economy columns.
+        write_craft_economy(&mut h, world, idx);
     }
 
+    // HASH_FIELD_ORDER words 20-24: store-level economy state (counters + the four
+    // economy stores in sorted-id order). Folded AFTER the craft loop.
+    write_economy_stores(&mut h, world);
+
     h.finish()
+}
+
+/// Fold one craft's HASHED economy columns — HASH_FIELD_ORDER words 16..=19.
+/// `idx` is the craft's dense SoA row. SHARED by `state_hash` and the parity
+/// recompute so the two encodings cannot drift; enums fold discriminant-first.
+pub(crate) fn write_craft_economy(h: &mut FnvHasher, world: &World, idx: usize) {
+    h.write_u64(world.ships.role[idx].rank() as u64); // 16
+    match world.ships.cargo[idx] {
+        // 17
+        None => h.write_u64(0),
+        Some((res, qty)) => {
+            h.write_u64(1);
+            h.write_u64(res.index() as u64);
+            h.write_u64(qty as u64);
+        }
+    }
+    h.write_u64(world.ships.credits_micros[idx] as u64); // 18
+    match world.ships.contract[idx] {
+        // 19
+        None => h.write_u64(0),
+        Some(cid) => {
+            h.write_u64(1);
+            h.write_u64(cid.slot as u64);
+            h.write_u64(cid.generation as u64);
+        }
+    }
+}
+
+/// Fold a `Recipe` into the state hash (input disc+payload, output disc+payload,
+/// interval) — self-delimiting so a `None` input cannot alias a present one.
+fn write_recipe_hash(h: &mut FnvHasher, r: &crate::economy::Recipe) {
+    match r.input {
+        None => h.write_u64(0),
+        Some((res, qty)) => {
+            h.write_u64(1);
+            h.write_u64(res.index() as u64);
+            h.write_u64(qty as u64);
+        }
+    }
+    match r.output {
+        None => h.write_u64(0),
+        Some((res, qty)) => {
+            h.write_u64(1);
+            h.write_u64(res.index() as u64);
+            h.write_u64(qty as u64);
+        }
+    }
+    h.write_u64(r.interval as u64);
+}
+
+/// Fold store-level HASHED economy state — HASH_FIELD_ORDER words 20..=24: the
+/// audited counters, then the four economy stores each as (cursor, then elements
+/// in sorted-id order). SHARED by `state_hash` and the parity recompute. Each
+/// store's allocator cursor is folded (like the ship/body cursors) so a mid-run
+/// `ContractStore::push` is reflected and a future spawn cannot rewrite history.
+pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
+    use crate::economy::N_RESOURCES;
+    // 20. EconCounters.
+    for r in 0..N_RESOURCES {
+        h.write_u64(world.econ.mined[r] as u64);
+    }
+    for r in 0..N_RESOURCES {
+        h.write_u64(world.econ.consumed[r] as u64);
+    }
+    // 21. stations.
+    h.write_u64(world.stations.ids.cursor());
+    let mut sids: Vec<(u32, u32)> = world.stations.ids.iter_ids().collect();
+    sids.sort();
+    for (slot, generation) in sids {
+        let i = world.stations.ids.dense_index(slot, generation).unwrap();
+        h.write_u64(slot as u64);
+        h.write_u64(generation as u64);
+        h.write_u64(world.stations.body[i].slot as u64);
+        h.write_u64(world.stations.body[i].generation as u64);
+        for r in 0..N_RESOURCES {
+            h.write_u64(world.stations.stock[i][r] as u64);
+            h.write_u64(world.stations.price_micros[i][r] as u64);
+        }
+    }
+    // 22. producers.
+    h.write_u64(world.producers.ids.cursor());
+    let mut pids: Vec<(u32, u32)> = world.producers.ids.iter_ids().collect();
+    pids.sort();
+    for (slot, generation) in pids {
+        let i = world.producers.ids.dense_index(slot, generation).unwrap();
+        h.write_u64(slot as u64);
+        h.write_u64(generation as u64);
+        h.write_u64(world.producers.station[i].slot as u64);
+        h.write_u64(world.producers.station[i].generation as u64);
+        write_recipe_hash(h, &world.producers.recipe[i]);
+    }
+    // 23. corporations.
+    h.write_u64(world.corporations.ids.cursor());
+    let mut cids: Vec<(u32, u32)> = world.corporations.ids.iter_ids().collect();
+    cids.sort();
+    for (slot, generation) in cids {
+        let i = world.corporations.ids.dense_index(slot, generation).unwrap();
+        h.write_u64(slot as u64);
+        h.write_u64(generation as u64);
+        h.write_u64(world.corporations.treasury_micros[i] as u64);
+        h.write_u64(world.corporations.home_station[i].slot as u64);
+        h.write_u64(world.corporations.home_station[i].generation as u64);
+    }
+    // 24. contracts.
+    h.write_u64(world.contracts.ids.cursor());
+    let mut kids: Vec<(u32, u32)> = world.contracts.ids.iter_ids().collect();
+    kids.sort();
+    for (slot, generation) in kids {
+        let i = world.contracts.ids.dense_index(slot, generation).unwrap();
+        h.write_u64(slot as u64);
+        h.write_u64(generation as u64);
+        h.write_u64(world.contracts.status[i].rank() as u64);
+        h.write_u64(world.contracts.corp[i].slot as u64);
+        h.write_u64(world.contracts.corp[i].generation as u64);
+        h.write_u64(world.contracts.resource[i].index() as u64);
+        h.write_u64(world.contracts.qty[i] as u64);
+        h.write_u64(world.contracts.from_station[i].slot as u64);
+        h.write_u64(world.contracts.from_station[i].generation as u64);
+        h.write_u64(world.contracts.to_station[i].slot as u64);
+        h.write_u64(world.contracts.to_station[i].generation as u64);
+        h.write_u64(world.contracts.reward_micros[i] as u64);
+        h.write_u64(world.contracts.escrow_micros[i] as u64);
+        match world.contracts.hauler[i] {
+            None => h.write_u64(0),
+            Some(cid) => {
+                h.write_u64(1);
+                h.write_u64(cid.slot as u64);
+                h.write_u64(cid.generation as u64);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -404,7 +559,11 @@ mod tests {
             }
             // HASH_FIELD_ORDER word 13: Lod discriminant (lod() is on StateView).
             h.write_u64(w.lod(c).unwrap() as u64);
+            // HASH_FIELD_ORDER words 16-19: this craft's economy columns (shared fold).
+            super::write_craft_economy(&mut h, w, idx);
         }
+        // HASH_FIELD_ORDER words 20-24: store-level economy state (shared fold).
+        super::write_economy_stores(&mut h, w);
         h.finish()
     }
 
@@ -421,6 +580,85 @@ mod tests {
         );
     }
 
+    /// Build a world whose economy stores + hauler columns + counters are all
+    /// non-trivially populated, so the economy fold is exercised (the zero-world
+    /// goldens and the economy-free parity test leave it as dead code otherwise —
+    /// the advisor's "vacuous guard" gap). Deterministic: no RNG in population.
+    fn populated_world() -> World {
+        use crate::economy::{ContractStatus, Recipe, Resource};
+        use crate::stores::CraftRole;
+        let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        let body = w.body_ids()[0];
+        let st = w.stations.push(body, [10, 5], [100, 200]);
+        let corp = w.corporations.push(1_000_000, st);
+        let _prod = w.producers.push(
+            st,
+            Recipe { input: Some((Resource::Ore, 1)), output: Some((Resource::Fuel, 2)), interval: 3 },
+        );
+        let k = w.contracts.push(corp, Resource::Fuel, 3, st, st, 500_000);
+        w.contracts.status[0] = ContractStatus::Accepted;
+        w.contracts.escrow_micros[0] = 250_000;
+        w.contracts.hauler[0] = Some(w.craft_ids()[0]);
+        w.econ.mined[0] = 5;
+        w.econ.consumed[1] = 3;
+        w.ships.role[0] = CraftRole::Hauler;
+        w.ships.cargo[0] = Some((Resource::Fuel, 2));
+        w.ships.credits_micros[0] = 42;
+        w.ships.contract[0] = Some(k);
+        w
+    }
+
+    #[test]
+    fn populated_world_hashes_deterministically() {
+        assert_eq!(state_hash(&populated_world()), state_hash(&populated_world()));
+    }
+
+    #[test]
+    fn populated_economy_parity() {
+        // state_hash and the independent parity recompute must agree on a POPULATED
+        // economy world (not just the empty-economy world cfg_with_craft_x gives).
+        let w = populated_world();
+        assert_eq!(
+            state_hash(&w),
+            recompute_with_cursors(&w),
+            "state_hash and recompute must agree on populated economy state"
+        );
+    }
+
+    #[test]
+    fn economy_state_is_fully_folded() {
+        use crate::economy::{ContractStatus, Resource};
+        use crate::stores::CraftRole;
+        // Each single-field mutation MUST move the hash — proving the field is folded
+        // (completeness guard: a forgotten field would let two distinct economy states
+        // collide and silently break replay-divergence detection).
+        let h0 = state_hash(&populated_world());
+        macro_rules! moves {
+            ($name:expr, $mut:expr) => {{
+                let mut w = populated_world();
+                $mut(&mut w);
+                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+            }};
+        }
+        moves!("craft role", |w: &mut World| w.ships.role[0] = CraftRole::Idle);
+        moves!("cargo qty", |w: &mut World| w.ships.cargo[0] = Some((Resource::Fuel, 99)));
+        moves!("cargo presence", |w: &mut World| w.ships.cargo[0] = None);
+        moves!("cargo resource", |w: &mut World| w.ships.cargo[0] = Some((Resource::Ore, 2)));
+        moves!("craft credits", |w: &mut World| w.ships.credits_micros[0] = 43);
+        moves!("craft contract handle", |w: &mut World| w.ships.contract[0] = None);
+        moves!("econ.mined", |w: &mut World| w.econ.mined[0] = 6);
+        moves!("econ.consumed", |w: &mut World| w.econ.consumed[1] = 4);
+        moves!("station stock", |w: &mut World| w.stations.stock[0][0] = 11);
+        moves!("station price", |w: &mut World| w.stations.price_micros[0][1] = 201);
+        moves!("corp treasury", |w: &mut World| w.corporations.treasury_micros[0] = 999_999);
+        moves!("producer recipe interval", |w: &mut World| w.producers.recipe[0].interval = 4);
+        moves!("contract status", |w: &mut World| w.contracts.status[0] = ContractStatus::Completed);
+        moves!("contract escrow", |w: &mut World| w.contracts.escrow_micros[0] = 250_001);
+        moves!("contract qty", |w: &mut World| w.contracts.qty[0] = 4);
+        moves!("contract reward", |w: &mut World| w.contracts.reward_micros[0] = 500_001);
+        moves!("contract hauler", |w: &mut World| w.contracts.hauler[0] = None);
+    }
+
     #[test]
     fn state_hash_golden_zero_world() {
         // Hardcoded digest of the canonical zero-init world (cfg_with_craft_x(2.0),
@@ -428,7 +666,8 @@ mod tests {
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
-        assert_eq!(state_hash(&w), 0x532d_07bf_95a2_abc5u64);
+        // RE-PINNED: HASH_FORMAT_VERSION 1->2 (+economy state words 16..=24). Was 0x532d_07bf_95a2_abc5.
+        assert_eq!(state_hash(&w), 0x64dd_5078_a3e0_5886u64);
     }
 
     #[test]
@@ -507,6 +746,20 @@ mod tests {
         h.write_u64(0.0f64.to_bits()); // fuel_mass
         h.write_u64(0); // nav discriminant (Idle)
         h.write_u64(0); // lod discriminant (Player)
+        // economy words 16-19 for the one craft (Idle role, no cargo, 0 credits, no contract):
+        h.write_u64(0); // 16. role.rank() (Idle)
+        h.write_u64(0); // 17. cargo discriminant (None)
+        h.write_u64(0); // 18. credits_micros
+        h.write_u64(0); // 19. contract discriminant (None)
+        // store-level words 20-24, all empty (zero counters; each store cursor 0, no elements):
+        h.write_u64(0); // 20a. econ.mined[Ore]
+        h.write_u64(0); // 20b. econ.mined[Fuel]
+        h.write_u64(0); // 20c. econ.consumed[Ore]
+        h.write_u64(0); // 20d. econ.consumed[Fuel]
+        h.write_u64(0); // 21. stations cursor
+        h.write_u64(0); // 22. producers cursor
+        h.write_u64(0); // 23. corporations cursor
+        h.write_u64(0); // 24. contracts cursor
         assert_eq!(h.finish(), GOLDEN_ZERO_STATE_HASH);
     }
 }

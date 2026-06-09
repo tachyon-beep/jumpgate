@@ -204,6 +204,25 @@ impl ContractStore {
     }
 }
 
+/// Audited per-resource flow counters (i64 units). `mined` accumulates SOURCE legs
+/// (a producer output with no input); `consumed` accumulates SINK legs (a producer
+/// input with no resold output, plus accounted cargo loss on a Failed contract).
+/// They make the resource accounting identity exact:
+/// `Σstock(r) + in_transit(r) == initial(r) + mined(r) − consumed(r)`.
+/// Mutable per-tick state → HASHED (folded in state_hash at the version-2 bump).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EconCounters {
+    pub mined: [i64; N_RESOURCES],
+    pub consumed: [i64; N_RESOURCES],
+}
+
+impl EconCounters {
+    /// All-zero counters (the reset state).
+    pub fn zero() -> Self {
+        EconCounters { mined: [0; N_RESOURCES], consumed: [0; N_RESOURCES] }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
