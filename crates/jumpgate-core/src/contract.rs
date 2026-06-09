@@ -14,7 +14,8 @@
 //! `CommandKind`) live in `crate::types` (Task 3) so `stores.rs` can consume
 //! them without a contract<->stores cycle; this module imports them.
 
-use crate::ids::{BodyId, CraftId};
+use crate::economy::Resource;
+use crate::ids::{BodyId, ContractId, CraftId, ProducerId, StationId};
 use crate::math::Vec3;
 use crate::time::{Dt, Tick};
 use crate::types::{CommandKind, EntityRef, Lod, NavDest, Target};
@@ -65,6 +66,33 @@ pub enum EventKind {
     /// emitting branch is Task 12; the variant is pinned here.
     Wake {
         craft: CraftId,
+    },
+    Production {
+        producer: ProducerId,
+        resource: Resource,
+        qty: u32,
+    },
+    Trade {
+        station: StationId,
+        resource: Resource,
+        qty: u32,
+        price_micros: i64,
+    },
+    PriceUpdate {
+        station: StationId,
+        resource: Resource,
+        price_micros: i64,
+    },
+    ContractOffered {
+        contract: ContractId,
+    },
+    ContractAccepted {
+        contract: ContractId,
+        hauler: CraftId,
+    },
+    ContractFulfilled {
+        contract: ContractId,
+        hauler: CraftId,
     },
 }
 
@@ -253,6 +281,77 @@ mod tests {
         // Lod is Eq.
         assert_eq!(Lod::Player, Lod::Player);
         assert_ne!(Lod::Player, Lod::Nothing);
+    }
+
+    #[test]
+    fn economy_event_kinds_are_copy_and_partial_eq() {
+        use crate::economy::Resource;
+        use crate::ids::{ContractId, CraftId, ProducerId, StationId};
+
+        let producer = ProducerId {
+            slot: 1,
+            generation: 1,
+        };
+        let station = StationId {
+            slot: 2,
+            generation: 1,
+        };
+        let contract = ContractId {
+            slot: 3,
+            generation: 1,
+        };
+        let hauler = CraftId {
+            slot: 4,
+            generation: 1,
+        };
+
+        let production = EventKind::Production {
+            producer,
+            resource: Resource::Ore,
+            qty: 5,
+        };
+        let trade = EventKind::Trade {
+            station,
+            resource: Resource::Ore,
+            qty: 3,
+            price_micros: 1_000_000,
+        };
+        let price_update = EventKind::PriceUpdate {
+            station,
+            resource: Resource::Fuel,
+            price_micros: 2_000_000,
+        };
+        let offered = EventKind::ContractOffered { contract };
+        let accepted = EventKind::ContractAccepted { contract, hauler };
+        let fulfilled = EventKind::ContractFulfilled { contract, hauler };
+
+        // Copy: binding by assignment leaves the original usable.
+        let production_copy = production;
+        let trade_copy = trade;
+        let price_copy = price_update;
+        let offered_copy = offered;
+        let accepted_copy = accepted;
+        let fulfilled_copy = fulfilled;
+
+        // PartialEq: copies equal originals.
+        assert_eq!(production, production_copy);
+        assert_eq!(trade, trade_copy);
+        assert_eq!(price_update, price_copy);
+        assert_eq!(offered, offered_copy);
+        assert_eq!(accepted, accepted_copy);
+        assert_eq!(fulfilled, fulfilled_copy);
+
+        // PartialEq: distinct variants differ.
+        assert_ne!(production, trade);
+        assert_ne!(price_update, offered);
+        assert_ne!(accepted, fulfilled);
+
+        // Wrap one in an Event to confirm the stream type still derives.
+        let ev = Event {
+            tick: Tick(7),
+            kind: accepted,
+        };
+        assert_eq!(ev, ev);
     }
 
     /// Trivial integrator: forward-Euler-ish, proves the trait is object-safe and
