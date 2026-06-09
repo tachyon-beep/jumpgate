@@ -9,7 +9,19 @@ description = "jumpgate PyO3/maturin ML+gym facade (FFI; unsafe allowed here, no
 name = "jumpgate"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# pyo3 FAQ pattern: `extension-module` must be ON for the shipped cdylib
+# (the interpreter provides libpython symbols at import time) but OFF for
+# `cargo test`, whose harness is a standalone executable that must LINK
+# libpython. maturin enables it via pyproject.toml's
+# `[tool.maturin] features = ["pyo3/extension-module"]`; cargo test does not.
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
 jumpgate-core = { path = "../jumpgate-core" }
-pyo3 = { workspace = true, features = ["extension-module", "abi3-py312"] }
+pyo3 = { workspace = true, features = ["abi3-py312"] }
 numpy = { workspace = true }
+# Trait import only (`rand_core::Rng::next_u64` for the seeded target draw);
+# the generator itself is core's ChaCha8 Scenario stream. Workspace-pinned
+# (=0.10.1) — do NOT add the `rand` front-end here (determinism contract).
+rand_core = { workspace = true }

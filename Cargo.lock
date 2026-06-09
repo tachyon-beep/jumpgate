@@ -150,6 +150,7 @@ dependencies = [
  "jumpgate-core",
  "numpy",
  "pyo3",
+ "rand_core",
 ]
 
 [[package]]

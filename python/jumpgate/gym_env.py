@@ -17,17 +17,29 @@ from jumpgate._native import JumpgateEnv
 class JumpgateGymEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, num_envs: int = 1, num_craft: int = 1) -> None:
+    _MODES = {"waypoint": 0, "thrust": 1}
+
+    def __init__(
+        self, num_envs: int = 1, num_craft: int = 1, mode: str = "waypoint"
+    ) -> None:
         super().__init__()
+        if mode not in self._MODES:
+            raise ValueError(f"mode must be one of {sorted(self._MODES)}, got {mode!r}")
         self.num_envs = num_envs
         self.num_craft = num_craft
+        self.mode = mode
         self._native = JumpgateEnv(num_envs, num_craft)
 
-        obs_dim = self._native.obs_dim
-        action_dim = self._native.action_dim
-        n = num_envs * num_craft
+        if mode == "thrust":
+            obs_dim, action_dim = self._native.configure(self._MODES[mode])
+        else:
+            obs_dim, action_dim = self._native.obs_dim, self._native.action_dim
+        self._rebuild_spaces_and_buffers(obs_dim, action_dim)
 
-        # Flat caller-provided buffers, allocated once.
+    def _rebuild_spaces_and_buffers(self, obs_dim: int, action_dim: int) -> None:
+        n = self.num_envs * self.num_craft
+
+        # Flat caller-provided buffers, allocated once per (re)configure.
         self._obs_buf = np.zeros(n * obs_dim, dtype=np.float32)
         self._action_buf = np.zeros(n * action_dim, dtype=np.float32)
         self._reward_buf = np.zeros(n, dtype=np.float32)
@@ -41,6 +53,18 @@ class JumpgateGymEnv(gym.Env):
         self.action_space = gym.spaces.Box(
             low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32
         )
+
+    def set_difficulty(self, **kwargs: Any) -> None:
+        """Pass curriculum/reward knobs through to the native ``configure``.
+
+        Accepts any subset of the native FlightCfg fields (target_dist_min,
+        target_dist_max, star_mass, exhaust_velocity, fuel_capacity,
+        time_limit, arrival_radius, arrival_speed, gamma, fuel_weight,
+        time_penalty, arrival_bonus); omitted fields keep their values.
+        Takes effect at the next reset (call reset() after changing it).
+        """
+        obs_dim, action_dim = self._native.configure(self._MODES[self.mode], **kwargs)
+        self._rebuild_spaces_and_buffers(obs_dim, action_dim)
 
     def reset(
         self,
@@ -73,8 +97,11 @@ class JumpgateGymEnv(gym.Env):
         terminated = bool(self._terminated_buf[0])
         truncated = bool(self._truncated_buf[0])
         # Reward-component breakdown rides info, NEVER obs (spec 7.3).
+        # `is_success` = task success (low-speed arrival), consumed by SB3's
+        # Monitor for the curriculum's rolling arrival rate.
         info: dict[str, Any] = {
             "reward_components": {"total": reward},
+            "is_success": terminated,
         }
         return self._obs_buf.copy(), reward, terminated, truncated, info
 
