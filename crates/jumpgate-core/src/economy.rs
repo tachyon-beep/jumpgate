@@ -285,6 +285,166 @@ pub fn run_producers(
     }
 }
 
+use crate::ephemeris::Ephemeris;
+use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, effective_params};
+use crate::types::{EntityRef, NavDest};
+
+/// Contract-resolution stage (deterministic, sorted-`ContractId` order — the dense
+/// `slot == row` invariant makes `0..len` iteration already sorted). Runs after
+/// command ingest (which records ACCEPT intent: `craft.contract` + `role = Hauler`)
+/// and `run_producers`, before physics. Drives the accept/escrow/load lifecycle a
+/// SINGLE transition-group per tick (a `match` on the current status, never a
+/// fall-through chain):
+///
+///   * `Offered` (a hauler is bound): escrow the reward — debit the corp treasury
+///     into `escrow_micros`, status `Offered->Accepted`, emit `ContractAccepted`;
+///     then, if the hauler is co-located with `from_station`'s body AND the station
+///     has the stock, LOAD in the same tick (status `Accepted->CargoLoaded`). If the
+///     corp treasury cannot cover the reward, REVERT the assignment (clear the
+///     craft's `contract`/`role`, leave the contract `Offered`, hauler `None`) —
+///     deterministic, no escrow movement.
+///   * `Accepted` (escrowed but not yet loaded — e.g. accepted off-station): load
+///     when co-located + stocked (status `Accepted->CargoLoaded`).
+///   * `CargoLoaded`: dispatch — status `CargoLoaded->InTransit` (the craft is
+///     already Seeking the destination body, set at load).
+///
+/// LOADING is a TRANSFER (station stock -> craft cargo / in-transit): it touches NO
+/// flow counter (the resource accounting identity tracks in-transit cargo). The
+/// craft is dispatched by setting its nav to Seek `to_station`'s body.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_contracts(
+    contracts: &mut ContractStore,
+    corporations: &mut CorporationStore,
+    stations: &mut StationStore,
+    ships: &mut CraftStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    guidance: &crate::config::GuidanceParams,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    let _ = guidance; // reserved for a future dv-budget policy; v1 uses fuel-derived dv
+    for kidx in 0..contracts.ids.len() {
+        match contracts.status[kidx] {
+            ContractStatus::Offered => {
+                // The ingest ACCEPT path records intent on the CRAFT side only
+                // (`craft.contract` + `role = Hauler`); the contract-side `hauler`
+                // binding + escrow are deferred here. Find the accepting craft by its
+                // `contract` column, lowest dense row first (sorted, no RNG). No such
+                // craft -> the offer is unclaimed this tick.
+                let contract = contract_id(contracts, kidx);
+                let Some(crow) = (0..ships.ids.len())
+                    .find(|&r| ships.contract[r] == Some(contract))
+                else {
+                    continue;
+                };
+                let hauler = ships.ids_at(crow);
+                // Escrow: debit the corp treasury by the reward. Insufficient
+                // treasury (or a stale corp row) -> REVERT the assignment.
+                let corp = contracts.corp[kidx];
+                let reward = contracts.reward_micros[kidx];
+                let corp_row = corporations.ids.dense_index(corp.slot, corp.generation);
+                let funded = matches!(corp_row, Some(r) if corporations.treasury_micros[r] >= reward);
+                if !funded {
+                    // Deterministic revert: release the craft, leave the offer open.
+                    ships.contract[crow] = None;
+                    ships.role[crow] = CraftRole::Idle;
+                    contracts.hauler[kidx] = None;
+                    continue;
+                }
+                let corp_row = corp_row.expect("funded implies a live corp row");
+                corporations.treasury_micros[corp_row] -= reward;
+                contracts.escrow_micros[kidx] += reward;
+                contracts.hauler[kidx] = Some(hauler);
+                contracts.status[kidx] = ContractStatus::Accepted;
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::ContractAccepted { contract, hauler },
+                });
+                // Same-tick load if co-located at the origin station with stock.
+                try_load(contracts, stations, ships, bodies, eph, kidx, crow, tick);
+            }
+            ContractStatus::Accepted => {
+                if let Some(hauler) = contracts.hauler[kidx]
+                    && let Some(crow) = ships.index_of(hauler)
+                {
+                    try_load(contracts, stations, ships, bodies, eph, kidx, crow, tick);
+                }
+            }
+            ContractStatus::CargoLoaded => {
+                // Dispatch: the craft is already Seeking the destination (set at load).
+                contracts.status[kidx] = ContractStatus::InTransit;
+            }
+            // InTransit/Delivered/Completed/Failed are resolved by later stages
+            // (delivery on Arrival — Task 15; failure on FuelEmpty — Task 16).
+            _ => {}
+        }
+    }
+}
+
+/// Construct the typed `ContractId` for dense row `kidx` (sole live-row helper).
+fn contract_id(contracts: &ContractStore, kidx: usize) -> ContractId {
+    let (slot, generation) = contracts.ids.id_at(kidx).expect("live contract row");
+    ContractId { slot, generation }
+}
+
+/// LOAD an `Accepted` contract's cargo if the hauler (dense row `crow`) is
+/// co-located with `from_station`'s body AND the station has the stock. On success:
+/// move `qty` of `resource` from station stock into craft cargo (a TRANSFER — no
+/// counter), set the craft Seeking `to_station`'s body, status `Accepted->CargoLoaded`.
+/// A not-yet-arrived or under-stocked station is a deterministic no-op (retried next
+/// tick); InTransit promotion happens the tick after CargoLoaded.
+#[allow(clippy::too_many_arguments)]
+fn try_load(
+    contracts: &mut ContractStore,
+    stations: &mut StationStore,
+    ships: &mut CraftStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    kidx: usize,
+    crow: usize,
+    tick: Tick,
+) {
+    let from = contracts.from_station[kidx];
+    let to = contracts.to_station[kidx];
+    let resource = contracts.resource[kidx];
+    let qty = contracts.qty[kidx];
+
+    let Some(from_row) = stations.ids.dense_index(from.slot, from.generation) else {
+        return;
+    };
+    let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
+        return;
+    };
+    let from_body = stations.body[from_row];
+    let Some(from_body_row) = bodies.ids.dense_index(from_body.slot, from_body.generation) else {
+        return;
+    };
+    // Co-location: the hauler must be within ARRIVAL_RADIUS of the origin body.
+    let body_pos = eph.body_pos(bodies.eph_index[from_body_row], tick);
+    if ships.pos[crow].sub(body_pos).length() > crate::autopilot::ARRIVAL_RADIUS {
+        return;
+    }
+    // Stock gate: the origin station must hold the cargo.
+    if stations.stock[from_row][resource.index()] < qty as i64 {
+        return;
+    }
+    // TRANSFER station stock -> craft cargo (in-transit). No counter touched.
+    stations.stock[from_row][resource.index()] -= qty as i64;
+    ships.cargo[crow] = Some((resource, qty));
+    // Dispatch: Seek the destination body. dv budget is fuel-derived (mirrors the
+    // ingest path's no-explicit-budget rule), never INFINITY into dv_remaining.
+    let to_body = stations.body[to_row];
+    let eff = effective_params(&ships.spec[crow], &ships.mods[crow]);
+    let dv = crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ships.fuel_mass[crow]);
+    ships.nav[crow] = NavState::Seeking {
+        dest: NavDest::Entity(EntityRef::Body(to_body)),
+        dv_remaining: dv,
+    };
+    contracts.status[kidx] = ContractStatus::CargoLoaded;
+    let _ = tick; // load itself emits no event in v1 (ContractAccepted already fired)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

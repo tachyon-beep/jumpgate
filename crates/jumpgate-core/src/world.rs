@@ -347,6 +347,22 @@ impl World {
             &mut self.events,
         );
 
+        // (1c) economy contract stage: drive the accept/escrow/load/dispatch
+        //      lifecycle for haulers bound by this tick's ingest. Disjoint &mut
+        //      field borrows + read-only bodies/eph (mirrors run_producers); `next`
+        //      is the resolution tick (co-location is checked against body_pos(next)).
+        crate::economy::resolve_contracts(
+            &mut self.contracts,
+            &mut self.corporations,
+            &mut self.stations,
+            &mut self.ships,
+            &self.bodies,
+            &self.eph,
+            &self.config.guidance,
+            next,
+            &mut self.events,
+        );
+
         // Snapshot body eph_index + mass to avoid borrowing self inside the closure.
         let body_indices: Vec<(usize, f64)> = (0..self.bodies.mass.len())
             .map(|i| (self.bodies.eph_index[i], self.bodies.mass[i]))
@@ -1040,5 +1056,123 @@ mod tests {
             World::reset(cfg),
             Err(ResetError::BadEconomyRef { what: "station.body_index", index: 5 })
         ));
+    }
+
+    /// Two-body economy fixture for the contract accept/load path (Task 14).
+    /// Body 0 is the stationary central star at the origin (a == 0.0), host of
+    /// station A (the contract ORIGIN); the craft starts co-located at the origin
+    /// so the co-location-at-accept check is exact and tick-independent. Body 1 is
+    /// a distinct body (small orbit) hosting station B (the DESTINATION), so "nav
+    /// now Seeking station-B-body" is a meaningful, non-origin target. One
+    /// corporation (treasury 5_000_000µ, home station A) funds one Offered contract:
+    /// move 5 Fuel A->B for reward 1_000_000µ. Station A opens with 10 Fuel in stock
+    /// so a 5-unit load is covered. The single craft is Idle.
+    fn two_body_contract_fixture() -> RunConfig {
+        use crate::config::{ContractInit, CorporationInit, StationInit};
+        use crate::economy::Resource;
+        let mut cfg = one_body_one_thrusting_craft();
+        // Add a second body at a small, distinct orbit (station B's host).
+        cfg.bodies.push(BodyInit {
+            mass: 1e-12, // negligible-mass marker body; only its position matters
+            elements: OrbitalElements {
+                a: 0.001,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
+        });
+        // The craft starts co-located with body 0 (the origin star) so it is at
+        // station A's body when the contract is accepted.
+        cfg.craft[0].pos = Vec3::ZERO;
+        cfg.craft[0].vel = Vec3::ZERO;
+        cfg.stations = vec![
+            // Station A (origin): 10 Fuel in stock to cover the 5-unit load.
+            StationInit {
+                body_index: 0,
+                initial_stock: [0, 10],
+                initial_price_micros: [0, 0],
+            },
+            // Station B (the delivery destination).
+            StationInit {
+                body_index: 1,
+                initial_stock: [0, 0],
+                initial_price_micros: [0, 0],
+            },
+        ];
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 5_000_000,
+            home_station_index: 0,
+        }];
+        cfg.contracts = vec![ContractInit {
+            corp_index: 0,
+            resource: Resource::Fuel,
+            qty: 5,
+            from_station_index: 0,
+            to_station_index: 1,
+            reward_micros: 1_000_000,
+        }];
+        cfg
+    }
+
+    #[test]
+    fn accept_contract_escrows_loads_cargo_and_dispatches_hauler() {
+        use crate::economy::{ContractStatus, Resource};
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let cidx = 0usize; // sole contract, dense row 0
+        let fuel = Resource::Fuel.index();
+
+        // Issue AcceptContract for the sole Offered contract.
+        let contract = world
+            .contracts
+            .ids
+            .id_at(cidx)
+            .map(|(slot, generation)| crate::ids::ContractId { slot, generation })
+            .unwrap();
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+
+        // One step: ingest sets craft.contract + role Hauler; resolve_contracts then
+        // escrows (Offered->Accepted) and loads at the co-located origin (->CargoLoaded).
+        world.step(&mut cmds);
+
+        // Contract escrowed and loaded (final status CargoLoaded after one step).
+        assert_eq!(world.contracts.status[cidx], ContractStatus::CargoLoaded);
+        assert_eq!(world.contracts.escrow_micros[cidx], 1_000_000, "escrow == reward");
+        assert_eq!(world.contracts.hauler[cidx], Some(craft), "hauler bound");
+        // Corp treasury debited by the reward (escrow held off-balance-sheet).
+        assert_eq!(world.corporations.treasury_micros[0], 4_000_000);
+        // Cargo loaded onto the craft; station A Fuel stock dropped by 5.
+        let crow = world.ships.index_of(craft).unwrap();
+        assert_eq!(world.ships.cargo[crow], Some((Resource::Fuel, 5)));
+        assert_eq!(world.stations.stock[0][fuel], 5, "station A Fuel 10 -> 5");
+        // The craft is now dispatched: Seeking station B's body.
+        let to_body = world
+            .bodies
+            .ids
+            .id_at(1)
+            .map(|(slot, generation)| BodyId { slot, generation })
+            .unwrap();
+        match world.ships.nav[crow] {
+            NavState::Seeking { dest, .. } => assert_eq!(
+                dest,
+                NavDest::Entity(EntityRef::Body(to_body)),
+                "nav Seeking station-B body"
+            ),
+            other => panic!("expected Seeking B, got {other:?}"),
+        }
+        // ContractAccepted was emitted for this craft/contract.
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::ContractAccepted { contract: c, hauler } if c == contract && hauler == craft
+            )),
+            "ContractAccepted emitted"
+        );
     }
 }
