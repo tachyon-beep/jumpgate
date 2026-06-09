@@ -1939,4 +1939,121 @@ mod tests {
             "deadband alone still clumps the opening wave onto one tick"
         );
     }
+
+    // ---- Task 22: the PHASE-2 gate -----------------------------------------
+    //
+    // Two verification tests over the FULL Stage-2 demand-deflation fixture
+    // (`stage2_ab_loop_fixture`, T21): repricing LIVE (its base = `one_body_one_thrusting_craft`
+    // -> `PriceCfg::default` -> `reprice_interval: 1`, and `base_micros[Fuel] = 100_000`,
+    // `cap[Fuel] = 100`), supply (miner + refiner at A), a Fuel sink at B, FOUR haulers and a
+    // seeded route template that the order-up-to repost clones. (1) BOTH conservation
+    // identities — the per-resource accounting identity AND the global credit identity
+    // (Σtreasury + Σcredits + Σescrow == initial) — hold EVERY tick under live demand-deflation
+    // pricing; and (2) replay is bit-identical tick-by-tick. Neither moves a golden: the
+    // identities are internal invariants and the determinism test is a cross-INSTANCE equality.
+    //
+    // The headline Phase-2 claim is that PRICING (PriceUpdate = a price write + event only)
+    // disturbs NEITHER resource nor credit quantities. To make that non-vacuous the test
+    // guards that the Fuel price actually MOVED over the run — conservation under a pricing
+    // system that never fired would be a hollow gate.
+
+    #[test]
+    fn phase2_gate_full_demand_deflation_harness_conserves() {
+        use crate::economy::{N_RESOURCES, Resource};
+        // Conservation is config-independent; use the damped (30, 4) config so the full
+        // post -> dispatch -> deliver -> sink-consume wave fires within the window
+        // (first delivery ~tick 58), making the `consumed Fuel > 0` leg reachable.
+        let (mut world, _h) =
+            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+
+        // initial[r] = Σ station stock per resource at tick 0 (mined == consumed == 0).
+        let mut initial = [0i64; N_RESOURCES];
+        for (r, slot) in initial.iter_mut().enumerate() {
+            *slot = world.stations.stock.iter().map(|s| s[r]).sum();
+        }
+        // initial_credit = the three off-balance-sheet buckets at reset (treasury + craft
+        // credits + escrow), captured before any contract motion.
+        let initial_credit = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+
+        let fuel = Resource::Fuel.index();
+        // Snapshot station B's Fuel price at reset to prove repricing actually fires.
+        let price_b_fuel_0 = world.stations.price_micros[1][fuel];
+        let mut price_moved = false;
+
+        // BOTH identities hold at reset and EVERY tick of the live demand-deflation loop.
+        assert_resource_identity(&world, &initial);
+        let credit_now = |w: &World| -> i64 {
+            w.corporations.treasury_micros.iter().sum::<i64>()
+                + w.ships.credits_micros.iter().sum::<i64>()
+                + w.contracts.escrow_micros.iter().sum::<i64>()
+        };
+        assert_eq!(credit_now(&world), initial_credit, "credit identity holds at reset");
+
+        let mut empty: Vec<Command> = Vec::new();
+        for t in 1..=1000u64 {
+            world.step(&mut empty);
+            assert_resource_identity(&world, &initial);
+            assert_eq!(
+                credit_now(&world),
+                initial_credit,
+                "Σtreasury+Σcredits+Σescrow invariant at tick {t}"
+            );
+            if world.stations.price_micros[1][fuel] != price_b_fuel_0 {
+                price_moved = true;
+            }
+        }
+
+        // Non-vacuity guards: a stalled world satisfies both identities trivially, so assert
+        // every leg actually fired — miner (mined Ore), refiner output (mined Fuel) and input
+        // (consumed Ore), and the deliver -> sink-consume path (consumed Fuel > 0 proves Fuel
+        // reached station B via a delivered contract and was consumed by the sink there).
+        let ore = Resource::Ore.index();
+        assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
+        assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
+        assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");
+        assert!(
+            world.econ.consumed[fuel] > 0,
+            "deliver + sink-consume legs fired (consumed Fuel > 0)"
+        );
+
+        // HEADLINE non-vacuity: demand-deflation pricing actually FIRED — station B's Fuel
+        // price moved as its stock changed. Without this, the identities would be conserved
+        // under a pricing system that never wrote anything (a hollow Phase-2 gate).
+        assert!(
+            price_moved,
+            "demand-deflation pricing fired (station B Fuel price moved from {price_b_fuel_0})"
+        );
+    }
+
+    #[test]
+    fn phase2_gate_replay_is_deterministic_state_hash_tick_by_tick() {
+        // Two worlds from the SAME Stage-2 demand-deflation config and the SAME (empty)
+        // command inputs. step() takes the command vec mutably, so give each world its OWN
+        // vec to rule out cross-contamination.
+        let (mut world_a, _ha) =
+            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+        let (mut world_b, _hb) =
+            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+
+        let h0 = crate::hash::state_hash(&world_a);
+        assert_eq!(h0, crate::hash::state_hash(&world_b), "tick 0 hashes agree");
+
+        let mut empty_a: Vec<Command> = Vec::new();
+        let mut empty_b: Vec<Command> = Vec::new();
+        let mut last = h0;
+        for t in 1..=1000u64 {
+            world_a.step(&mut empty_a);
+            world_b.step(&mut empty_b);
+            let ha = crate::hash::state_hash(&world_a);
+            let hb = crate::hash::state_hash(&world_b);
+            assert_eq!(ha, hb, "replay determinism: state_hash diverged at tick {t}");
+            last = ha;
+        }
+
+        // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
+        // constant sequences would compare equal trivially.
+        assert_ne!(last, h0, "state_hash evolved over the 1000-tick run (not a constant)");
+    }
 }
