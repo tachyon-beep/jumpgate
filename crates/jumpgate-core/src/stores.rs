@@ -35,6 +35,33 @@ pub fn effective_params(spec: &BaseSpec) -> Effective {
     }
 }
 
+/// Per-craft EFFECTIVE-parameter modifier bundle — the single combined multiply
+/// applied to `BaseSpec` by `effective_params`. This is the `× component-mods ×
+/// wear` half of the founding `Effective = base × component-mods × wear` intent,
+/// PRE-REDUCED into one struct so `effective_params` never changes signature
+/// again as new factor sources land.
+///
+/// v1 carries only `thrust_factor` (the crew-contributed engine multiplier,
+/// written later by `compute_crew_mods`). Future wear/component factors fold into
+/// the SAME bundle (e.g. `compute_wear`), never a new `effective_params` arg.
+///
+/// DERIVED state: written by the crew-mod / wear tick-stages; read by
+/// `effective_params`. NOT folded into the per-tick state hash — transitively
+/// pinned by its hashed inputs, exactly like `prev_fuel`. v1: identity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectiveMods {
+    /// Multiplier on `max_thrust` — the one wired channel in v1. `1.0` == no effect.
+    pub thrust_factor: f64,
+    // Reserved (default 1.0 in IDENTITY) for wear/component factors — adding a
+    // field here is additive; it is NEVER a change to `effective_params`'s signature.
+}
+
+impl EffectiveMods {
+    /// The no-effect value. `effective_params(spec, &IDENTITY)` is bit-identical
+    /// to the pre-bundle `effective_params(spec)` (`x * 1.0 == x` for finite f64).
+    pub const IDENTITY: EffectiveMods = EffectiveMods { thrust_factor: 1.0 };
+}
+
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
 /// is indexed by the same dense row (v1 invariant: `slot == row`) and must stay
 /// length-parallel. `prev_fuel` / `prev_inside_dest` / `prev_pos` snapshot the
@@ -167,6 +194,14 @@ mod tests {
         assert_eq!(eff.max_thrust, 2.0);
         assert_eq!(eff.exhaust_velocity, 3.0);
         assert_eq!(eff.fuel_capacity, 4.0);
+    }
+
+    #[test]
+    fn effective_mods_identity_is_unit() {
+        let m = EffectiveMods::IDENTITY;
+        assert_eq!(m.thrust_factor, 1.0);
+        let n = m; // Copy + PartialEq are part of the contract (read every tick).
+        assert_eq!(m, n);
     }
 
     #[test]
