@@ -277,15 +277,24 @@ mod tests {
     }
 
     #[test]
-    fn ladder_is_monotone_on_a_fixture() {
-        let seeds: Vec<u64> = (300..304).collect();
-        let mean = |totals: Vec<u64>| totals.iter().sum::<u64>();
-        let cf = fit_closed_form(3, 3, 0, 0, &seeds);
+    fn mobile_closed_form_beats_crowded_constant() {
+        // DISCRIMINATING sanity (replaces a vacuous all-equal fixture). When MORE ships
+        // crowd ONE region, Constant strands them all there and only ever drains region 0,
+        // leaving the other regions untouched; a mobile closed-form spreads out and drains
+        // ALL regions -> strictly more total. Validates the core move mechanic the whole
+        // cut rests on, and would catch a closed-form whose move logic is broken.
+        //
+        // NOTE (sound-invariant discipline): `constant <= closed-form <= myopic` is NOT a
+        // theorem — closed-form and myopic are different heuristics with no guaranteed
+        // order. Only "mobility beats crowded do-nothing" is a sound population invariant.
+        // True ceiling dominance (BR >= any feasible policy) + the per-ship-vs-population
+        // comparability are pinned in the DP/gate phases.
         let cfg = build_scenario(999, 3, 3, 0, 0);
-        let c = mean(rollout(&cfg, &[0, 1, 2], &Constant));
-        let f = mean(rollout(&cfg, &[0, 1, 2], &cf));
-        let m = mean(rollout(&cfg, &[0, 1, 2], &Myopic));
-        assert!(c <= f, "constant {c} <= closed-form {f}");
-        assert!(f <= m, "closed-form {f} <= myopic {m}");
+        let crowded = [0u8, 0, 0, 0]; // 4 ships ALL on region 0, with 3 regions available
+        let mean = |t: Vec<u64>| t.iter().sum::<u64>();
+        let mobile = ClosedForm { tau: crate::STOCK_MAX as u64, move_prob_milli: 1000, seed: 0xC0FFEE };
+        let c = mean(rollout(&cfg, &crowded, &Constant));
+        let f = mean(rollout(&cfg, &crowded, &mobile));
+        assert!(c < f, "mobility must beat crowded constant: constant {c} < mobile {f}");
     }
 }
