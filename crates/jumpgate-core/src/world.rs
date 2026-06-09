@@ -174,6 +174,8 @@ impl World {
             cargo: Vec::new(),
             credits_micros: Vec::new(),
             contract: Vec::new(),
+            risk_appetite: Vec::new(),
+            pirate: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -198,6 +200,10 @@ impl World {
             ships.cargo.push(None);
             ships.credits_micros.push(0);
             ships.contract.push(None);
+            // Trophic columns: default 0 risk-appetite, no pirate state (every
+            // config-minted craft is a non-pirate hauler/idle craft at tick 0).
+            ships.risk_appetite.push(0);
+            ships.pirate.push(None);
         }
 
         // Mint economy stores from the RunConfig init vecs. Dependency order:

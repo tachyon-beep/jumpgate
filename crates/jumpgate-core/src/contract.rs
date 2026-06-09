@@ -94,6 +94,38 @@ pub enum EventKind {
         contract: ContractId,
         hauler: CraftId,
     },
+    // --- Trophic events (additive; NOT folded into state_hash — the event stream
+    // is not hashed, and replay records (tick, state_hash) not events) ---
+    /// A pirate robbed a hauler: cargo value transferred, the contract failed.
+    Robbed {
+        pirate: CraftId,
+        hauler: CraftId,
+        contract: ContractId,
+        value_micros: i64,
+    },
+    /// A hauler drove off a pirate; no cargo transferred.
+    DrivenOff {
+        pirate: CraftId,
+        hauler: CraftId,
+    },
+    /// A pirate killed a hauler (cut-1 salvage stub: the hauler is removed).
+    HaulerKilled {
+        pirate: CraftId,
+        hauler: CraftId,
+    },
+    /// A pirate went lie-low (off the predation field) until the given tick.
+    PirateLieLow {
+        pirate: CraftId,
+        until: Tick,
+    },
+    /// A pirate left the simulation (repeated starvation past tolerance).
+    PirateLeft {
+        pirate: CraftId,
+    },
+    /// A new pirate spawned (well-fed split).
+    PirateSpawned {
+        pirate: CraftId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

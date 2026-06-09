@@ -3,8 +3,14 @@
 //! resolves them BEFORE `contract.rs` (Task 6) builds `Command`/`Event`/traits on
 //! top — this breaks the stores<->contract cycle. These are pure data: no methods.
 
-use crate::ids::{BodyId, CraftId};
+use crate::ids::{BodyId, CraftId, StationId};
 use crate::math::Vec3;
+
+/// A directed route between two stations (from, to). The key for per-route risk
+/// registers / beliefs (Components D/E). `Copy + Eq + Hash + Ord` so it indexes a
+/// map and sorts deterministically. Pure data: no methods.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct RouteKey(pub StationId, pub StationId);
 
 /// Level-of-detail seam (spec §3 must-shape). v1 implements `Player` behaviour;
 /// the dispatch + wake-event hook lives in `world.rs`. The other variants exist
@@ -104,6 +110,24 @@ mod tests {
         }));
         assert_ne!(p, en);
         assert_eq!(p, NavDest::Position(Vec3::new(1.0, 2.0, 3.0)));
+    }
+
+    #[test]
+    fn route_key_is_directed_hashable_ordered() {
+        use std::collections::HashSet;
+        let a = StationId { slot: 0, generation: 0 };
+        let b = StationId { slot: 1, generation: 0 };
+        let ab = RouteKey(a, b);
+        let ba = RouteKey(b, a);
+        // Directed: (a,b) != (b,a).
+        assert_ne!(ab, ba);
+        // Hashable (usable as a map/set key).
+        let mut set = HashSet::new();
+        set.insert(ab);
+        assert!(set.contains(&RouteKey(a, b)));
+        assert!(!set.contains(&ba));
+        // Ord is total and deterministic.
+        assert!(ab < ba);
     }
 
     #[test]

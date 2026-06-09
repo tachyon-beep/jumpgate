@@ -3,6 +3,7 @@
 use crate::config::BaseSpec;
 use crate::ids::{CraftId, SlotMap};
 use crate::math::Vec3;
+use crate::time::Tick;
 use crate::types::{Lod, NavDest};
 
 /// Resolved navigation state the autopilot reads each tick. This is the RESOLVED
@@ -65,21 +66,41 @@ impl EffectiveMods {
     pub const IDENTITY: EffectiveMods = EffectiveMods { thrust_factor: 1.0 };
 }
 
-/// Economic role of a craft. v1: `Idle` or `Hauler`. Hashed economy state
-/// (HASH_FIELD_ORDER, folded discriminant-first via `rank()`). APPEND-ONLY.
+/// Economic role of a craft. `Idle`, `Hauler`, or `Pirate` (the 2nd trophic
+/// level). Hashed economy state (HASH_FIELD_ORDER, folded discriminant-first via
+/// `rank()`). APPEND-ONLY: `Pirate` appends `rank() = 2`; `Idle`/`Hauler` ranks
+/// are unchanged so existing replay identity is preserved for those craft.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CraftRole {
     Idle,
     Hauler,
+    Pirate,
 }
 impl CraftRole {
-    /// Stable discriminant for self-delimiting state-hash folding.
+    /// Stable discriminant for self-delimiting state-hash folding. APPEND-ONLY.
     pub fn rank(self) -> u8 {
         match self {
             CraftRole::Idle => 0,
             CraftRole::Hauler => 1,
+            CraftRole::Pirate => 2,
         }
     }
+}
+
+/// Per-pirate trophic state (the 2nd trophic level). Carried on `CraftStore` as
+/// an `Option<PirateState>` column: `None` for every non-pirate craft, `Some` for
+/// a pirate. HASHED economy state (folded self-delimitingly: tag 0 for `None`,
+/// tag 1 + fields for `Some`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PirateState {
+    /// Accumulated food (i64 microcredits of robbed cargo value). Drives the
+    /// food-driven population dynamics (spawn / lie-low / leave).
+    pub food_micros: i64,
+    /// Accrued heat. Past a threshold it forces a lie-low refuge.
+    pub notoriety: u32,
+    /// While `lie_low_until > tick` the pirate is off the predation field (the
+    /// structural refuge that stops hunters exterminating prey).
+    pub lie_low_until: Tick,
 }
 
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
@@ -121,6 +142,12 @@ pub struct CraftStore {
     pub credits_micros: Vec<i64>,
     /// The contract this craft is fulfilling, or `None`.
     pub contract: Vec<Option<crate::ids::ContractId>>,
+    // --- Trophic columns (length-parallel, HASHED economy state) ---
+    /// Per-hauler risk appetite (fixed-point 0..=1000; 0 default; cautious→greedy).
+    /// Drives the heterogeneous belief-weighted contract choice (Component C).
+    pub risk_appetite: Vec<i32>,
+    /// Per-pirate trophic state: `Some(PirateState)` for a pirate, `None` otherwise.
+    pub pirate: Vec<Option<PirateState>>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -152,6 +179,8 @@ impl CraftStore {
             cargo: Vec::new(),
             credits_micros: Vec::new(),
             contract: Vec::new(),
+            risk_appetite: Vec::new(),
+            pirate: Vec::new(),
         }
     }
 
@@ -181,6 +210,8 @@ impl CraftStore {
         self.cargo.push(None);
         self.credits_micros.push(0);
         self.contract.push(None);
+        self.risk_appetite.push(0);
+        self.pirate.push(None);
         CraftId { slot, generation }
     }
 
@@ -342,11 +373,54 @@ mod tests {
         assert_eq!(ship.cargo[0], None);
         assert_eq!(ship.credits_micros[0], 0);
         assert_eq!(ship.contract[0], None);
+        // Trophic columns default to 0 risk-appetite and no pirate state.
+        assert_eq!(ship.risk_appetite[0], 0);
+        assert_eq!(ship.pirate[0], None);
         // length-parallel with the id authority.
         assert_eq!(ship.role.len(), ship.ids.len());
         assert_eq!(ship.cargo.len(), ship.ids.len());
         assert_eq!(ship.credits_micros.len(), ship.ids.len());
         assert_eq!(ship.contract.len(), ship.ids.len());
+        assert_eq!(ship.risk_appetite.len(), ship.ids.len());
+        assert_eq!(ship.pirate.len(), ship.ids.len());
+    }
+
+    #[test]
+    fn pirate_role_appends_rank_two() {
+        // APPEND-ONLY: existing ranks unchanged, Pirate = 2.
+        assert_eq!(CraftRole::Idle.rank(), 0);
+        assert_eq!(CraftRole::Hauler.rank(), 1);
+        assert_eq!(CraftRole::Pirate.rank(), 2);
+    }
+
+    #[test]
+    fn trophic_columns_round_trip_on_push() {
+        let mut ship = CraftStore::empty();
+        let spec = BaseSpec {
+            base_dry_mass: 10.0,
+            base_max_thrust: 250.0,
+            base_exhaust_velocity: 30.0,
+            base_fuel_capacity: 40.0,
+        };
+        ship.push(spec, Vec3::ZERO, Vec3::ZERO, 40.0);
+        // Mutate the new columns and read them back (round-trip).
+        ship.risk_appetite[0] = 750;
+        ship.role[0] = CraftRole::Pirate;
+        ship.pirate[0] = Some(PirateState {
+            food_micros: 12_345,
+            notoriety: 7,
+            lie_low_until: Tick(99),
+        });
+        assert_eq!(ship.risk_appetite[0], 750);
+        assert_eq!(ship.role[0], CraftRole::Pirate);
+        assert_eq!(
+            ship.pirate[0],
+            Some(PirateState {
+                food_micros: 12_345,
+                notoriety: 7,
+                lie_low_until: Tick(99),
+            })
+        );
     }
 
     #[test]

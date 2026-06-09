@@ -13,19 +13,25 @@
 use rand_chacha::ChaCha8Rng;
 use rand_core::SeedableRng;
 
-/// The named sub-streams available in v1. `Intervention` carries lever/perturbation
-/// randomness; `Scenario` carries initial-condition / loadout randomness.
+/// The named sub-streams. `Intervention` carries lever/perturbation randomness;
+/// `Scenario` carries initial-condition / loadout randomness; `Piracy` (appended)
+/// carries pirate encounter-resolution randomness. APPEND-ONLY: never reorder the
+/// existing variants or change their salts — that changes replay identity.
 #[derive(Clone, Copy)]
 pub enum RngStream {
     Intervention,
     Scenario,
+    Piracy,
 }
 
 /// Per-stream salt constants. Fixed forever (changing one changes replay identity
-/// for that stream). Two unrelated 64-bit constants so `master ^ SALT` never aliases
-/// across the two streams for any single master (since the salts differ).
+/// for that stream). Unrelated 64-bit constants so `master ^ SALT` never aliases
+/// across streams for any single master (since the salts differ).
 const SALT_INTERVENTION: u64 = 0x9E37_79B9_7F4A_7C15;
 const SALT_SCENARIO: u64 = 0xC2B2_AE3D_27D4_EB4F;
+/// Appended for `RngStream::Piracy` (pirate encounter rolls). A new fixed constant
+/// — the existing salts are untouched, so existing streams keep their identity.
+const SALT_PIRACY: u64 = 0x6A09_E667_F3BC_C908;
 
 impl RngStream {
     /// Fixed salt for this stream. `const fn` so the derivation is unambiguous and
@@ -34,6 +40,7 @@ impl RngStream {
         match self {
             RngStream::Intervention => SALT_INTERVENTION,
             RngStream::Scenario => SALT_SCENARIO,
+            RngStream::Piracy => SALT_PIRACY,
         }
     }
 }
@@ -44,6 +51,7 @@ impl RngStream {
 pub struct RngStreams {
     intervention: ChaCha8Rng,
     scenario: ChaCha8Rng,
+    piracy: ChaCha8Rng,
 }
 
 impl RngStreams {
@@ -54,6 +62,7 @@ impl RngStreams {
         RngStreams {
             intervention: ChaCha8Rng::seed_from_u64(master ^ RngStream::Intervention.salt()),
             scenario: ChaCha8Rng::seed_from_u64(master ^ RngStream::Scenario.salt()),
+            piracy: ChaCha8Rng::seed_from_u64(master ^ RngStream::Piracy.salt()),
         }
     }
 
@@ -62,6 +71,7 @@ impl RngStreams {
         match which {
             RngStream::Intervention => &mut self.intervention,
             RngStream::Scenario => &mut self.scenario,
+            RngStream::Piracy => &mut self.piracy,
         }
     }
 }
@@ -97,9 +107,37 @@ mod tests {
         let mut s = RngStreams::from_master(42);
         let iv = draw_n(s.stream(RngStream::Intervention), 8);
         let sc = draw_n(s.stream(RngStream::Scenario), 8);
+        let pi = draw_n(s.stream(RngStream::Piracy), 8);
         assert_ne!(
             iv, sc,
             "Intervention and Scenario must not produce the same sequence"
+        );
+        assert_ne!(iv, pi, "Intervention and Piracy must differ");
+        assert_ne!(sc, pi, "Scenario and Piracy must differ");
+    }
+
+    #[test]
+    fn piracy_stream_reproduces_and_is_draw_order_independent() {
+        // The appended Piracy stream reproduces for the same master and is a pure
+        // function of (master, stream) — draining other streams cannot perturb it.
+        let mut a = RngStreams::from_master(42);
+        let mut b = RngStreams::from_master(42);
+        assert_eq!(
+            draw_n(a.stream(RngStream::Piracy), 8),
+            draw_n(b.stream(RngStream::Piracy), 8),
+            "Piracy sequence must reproduce for the same master"
+        );
+
+        let mut drained = RngStreams::from_master(7);
+        for _ in 0..1000 {
+            drained.stream(RngStream::Scenario).next_u64();
+        }
+        let pi_after_drain = draw_n(drained.stream(RngStream::Piracy), 8);
+        let mut fresh = RngStreams::from_master(7);
+        let pi_fresh = draw_n(fresh.stream(RngStream::Piracy), 8);
+        assert_eq!(
+            pi_after_drain, pi_fresh,
+            "Piracy must be unaffected by draws from other streams"
         );
     }
 

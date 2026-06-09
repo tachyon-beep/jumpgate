@@ -52,6 +52,11 @@
 //!   18. credits_micros as u64
 //!   19. contract: 0 (None) | 1 then (slot, generation)
 //!
+//! TROPHIC (HASH_FORMAT_VERSION 3 — folded by `write_craft_economy` after word 19,
+//! in the per-craft sorted loop; shared by `state_hash` and the parity recompute):
+//!   25. risk_appetite as u64
+//!   26. pirate: 0 (None) | 1 then (food_micros as u64, notoriety as u64, lie_low_until.0)
+//!
 //!  Store-level (after the craft loop; each store: cursor, then sorted-id elements):
 //!   20. EconCounters: mined[0..N], consumed[0..N]
 //!   21. stations:     cursor; per station: slot, gen, body(slot,gen), per-resource (stock, price_micros)
@@ -63,13 +68,14 @@
 /// Header magic for the per-tick STATE hash (little-endian, spec §6).
 pub const HASH_MAGIC: u64 = 0x4a55_4d50_4741_5445; // "JUMPGATE"
 /// Bump whenever HASH_FIELD_ORDER changes. v2: + economy state (words 16..=24).
-pub const HASH_FORMAT_VERSION: u32 = 2;
+/// v3: + trophic state (per-craft `risk_appetite` + `pirate`, words 25..=26).
+pub const HASH_FORMAT_VERSION: u32 = 3;
 
 /// Golden per-tick hash of the minimal zero-init slice under HASH_FIELD_ORDER
 /// words 1..=13. Pinned so any change to the canonical encoding is caught.
 /// Captured from the first run of `golden_zero_state_hash`; if HASH_FIELD_ORDER
 /// or HASH_FORMAT_VERSION changes, recapture AND bump the version.
-pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x65d7_af3b_9a8a_8276; // RE-PINNED: HASH_FORMAT_VERSION 1->2 (+economy state words 16..=24). Was 0xf0dd_a1ba_f433_3735.
+pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x1d44_b373_5ccd_33f7; // RE-PINNED: HASH_FORMAT_VERSION 2->3 (+trophic state words 25..=26). Was 0x65d7_af3b_9a8a_8276.
 
 /// Shared FNV-1a 64-bit hasher for the per-tick state hash. Folds each u64 as 8
 /// little-endian bytes. `new()` seeds with `HASH_MAGIC` then the version word.
@@ -249,6 +255,19 @@ pub(crate) fn write_craft_economy(h: &mut FnvHasher, world: &World, idx: usize) 
             h.write_u64(1);
             h.write_u64(cid.slot as u64);
             h.write_u64(cid.generation as u64);
+        }
+    }
+    // HASH_FIELD_ORDER words 25-26: trophic columns (format v3). risk_appetite
+    // then pirate (self-delimiting: tag 0 for None, tag 1 + fields for Some).
+    h.write_u64(world.ships.risk_appetite[idx] as u64); // 25
+    match world.ships.pirate[idx] {
+        // 26
+        None => h.write_u64(0),
+        Some(ps) => {
+            h.write_u64(1);
+            h.write_u64(ps.food_micros as u64);
+            h.write_u64(ps.notoriety as u64);
+            h.write_u64(ps.lie_low_until.0);
         }
     }
 }
@@ -683,14 +702,69 @@ mod tests {
     }
 
     #[test]
+    fn trophic_columns_are_folded_into_state_hash() {
+        use crate::stores::{CraftRole, PirateState};
+        use crate::time::Tick;
+        // risk_appetite is folded (a non-zero value moves the hash).
+        let h0 = state_hash(&populated_world());
+        let mut w1 = populated_world();
+        w1.ships.risk_appetite[0] = 500;
+        assert_ne!(state_hash(&w1), h0, "risk_appetite must be folded into state_hash");
+
+        // pirate folds self-delimitingly: None vs Some differ, and each is stable.
+        let mut none_a = populated_world();
+        let mut none_b = populated_world();
+        none_a.ships.pirate[0] = None;
+        none_b.ships.pirate[0] = None;
+        assert_eq!(
+            state_hash(&none_a),
+            state_hash(&none_b),
+            "None pirate state must hash stably"
+        );
+
+        let mut some_a = populated_world();
+        let mut some_b = populated_world();
+        let ps = PirateState { food_micros: 1_000, notoriety: 3, lie_low_until: Tick(50) };
+        some_a.ships.role[0] = CraftRole::Pirate;
+        some_a.ships.pirate[0] = Some(ps);
+        some_b.ships.role[0] = CraftRole::Pirate;
+        some_b.ships.pirate[0] = Some(ps);
+        assert_eq!(
+            state_hash(&some_a),
+            state_hash(&some_b),
+            "Some pirate state must hash stably"
+        );
+        assert_ne!(
+            state_hash(&some_a),
+            state_hash(&none_a),
+            "Some vs None pirate state must hash differently (self-delimiting fold)"
+        );
+
+        // Each PirateState field is folded (mutating any field moves the hash).
+        let base = state_hash(&some_a);
+        for mutate in [
+            |p: &mut PirateState| p.food_micros = 2_000,
+            |p: &mut PirateState| p.notoriety = 4,
+            |p: &mut PirateState| p.lie_low_until = Tick(51),
+        ] {
+            let mut w = populated_world();
+            w.ships.role[0] = CraftRole::Pirate;
+            let mut p = ps;
+            mutate(&mut p);
+            w.ships.pirate[0] = Some(p);
+            assert_ne!(state_hash(&w), base, "each PirateState field must be folded");
+        }
+    }
+
+    #[test]
     fn state_hash_golden_zero_world() {
         // Hardcoded digest of the canonical zero-init world (cfg_with_craft_x(2.0),
         // tick 0). Pins HASH_FIELD_ORDER + HASH_FORMAT_VERSION. If this changes,
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
-        // RE-PINNED: HASH_FORMAT_VERSION 1->2 (+economy state words 16..=24). Was 0x532d_07bf_95a2_abc5.
-        assert_eq!(state_hash(&w), 0x64dd_5078_a3e0_5886u64);
+        // RE-PINNED: HASH_FORMAT_VERSION 2->3 (+trophic state words 25..=26). Was 0x64dd_5078_a3e0_5886.
+        assert_eq!(state_hash(&w), 0x2d92_c7ce_4daa_4567u64);
     }
 
     #[test]
@@ -774,6 +848,9 @@ mod tests {
         h.write_u64(0); // 17. cargo discriminant (None)
         h.write_u64(0); // 18. credits_micros
         h.write_u64(0); // 19. contract discriminant (None)
+        // trophic words 25-26 for the one craft (0 risk_appetite, no pirate state):
+        h.write_u64(0); // 25. risk_appetite
+        h.write_u64(0); // 26. pirate discriminant (None)
         // store-level words 20-24, all empty (zero counters; each store cursor 0, no elements):
         h.write_u64(0); // 20a. econ.mined[Ore]
         h.write_u64(0); // 20b. econ.mined[Fuel]
