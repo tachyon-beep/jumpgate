@@ -92,6 +92,42 @@ pub fn write_obs_parts(
     }
 }
 
+/// Thrust-mode obs: own vel (3, /VEL_SCALE) + fuel frac (1) + target rel-pos
+/// (3, /dist_scale) + target rel-vel (3, /VEL_SCALE). All O(1) post-scaling;
+/// the rel_to_f32 guard still applies to every scaled component.
+/// Consumed by the thrust control-mode env wiring (plan Task 3); until that
+/// phase lands, only the unit tests below exercise it (same pattern as
+/// `SCHEMA_VERSION` above).
+#[allow(dead_code)]
+pub const THRUST_OBS_DIM: usize = 10;
+/// Velocity normalizer (AU/day): ~circular-orbit speed at 1 AU, so orbital
+/// velocities land O(1).
+#[allow(dead_code)]
+pub const VEL_SCALE: f64 = 0.02;
+
+#[allow(dead_code)]
+pub fn write_obs_thrust_mode(
+    own_vel: Vec3,
+    fuel_frac: f32,
+    target_rel_pos: Vec3,
+    target_rel_vel: Vec3,
+    dist_scale: f64,
+    out: &mut [f32],
+) {
+    debug_assert_eq!(out.len(), THRUST_OBS_DIM);
+    debug_assert!(dist_scale > 0.0);
+    out[0] = rel_to_f32(own_vel.x / VEL_SCALE);
+    out[1] = rel_to_f32(own_vel.y / VEL_SCALE);
+    out[2] = rel_to_f32(own_vel.z / VEL_SCALE);
+    out[3] = fuel_frac;
+    out[4] = rel_to_f32(target_rel_pos.x / dist_scale);
+    out[5] = rel_to_f32(target_rel_pos.y / dist_scale);
+    out[6] = rel_to_f32(target_rel_pos.z / dist_scale);
+    out[7] = rel_to_f32(target_rel_vel.x / VEL_SCALE);
+    out[8] = rel_to_f32(target_rel_vel.y / VEL_SCALE);
+    out[9] = rel_to_f32(target_rel_vel.z / VEL_SCALE);
+}
+
 use jumpgate_core::ids::CraftId;
 use jumpgate_core::world::View;
 
@@ -168,6 +204,32 @@ mod tests {
         // ego velocity-in-frame holds a raw absolute coord (~10 AU) — the bug.
         let abs_vel = Vec3::new(10.0, 0.0, 0.0);
         write_obs_parts(abs_vel, 0.5, &[], &mut out);
+    }
+
+    #[test]
+    fn thrust_obs_layout_and_scaling() {
+        let mut out = [9.0f32; THRUST_OBS_DIM]; // 10; sentinel proves overwrite
+        write_obs_thrust_mode(
+            Vec3::new(0.01, 0.0, 0.0),  // own vel (AU/day)
+            0.5,                        // fuel frac
+            Vec3::new(0.2, -0.1, 0.0),  // target rel pos (AU)
+            Vec3::new(-0.01, 0.0, 0.0), // target rel vel
+            0.4,                        // dist_scale
+            &mut out,
+        );
+        assert_eq!(out[0], (0.01f64 / VEL_SCALE) as f32); // vel block scaled
+        assert_eq!(out[3], 0.5); // fuel frac raw
+        assert_eq!(out[4], (0.2f64 / 0.4) as f32); // rel pos / dist_scale
+        assert_eq!(out[7], (-0.01f64 / VEL_SCALE) as f32); // rel vel scaled
+    }
+
+    #[test]
+    #[should_panic(expected = "crossed the f32 observation boundary")]
+    #[cfg(debug_assertions)]
+    fn thrust_obs_guard_fires_on_unscaled_absolute() {
+        let mut out = [0.0f32; THRUST_OBS_DIM];
+        // rel pos of 10 AU with dist_scale 1.0 -> scaled value 10 > MAX_REL_AU: guard trips.
+        write_obs_thrust_mode(Vec3::ZERO, 0.5, Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO, 1.0, &mut out);
     }
 
     // Test C: with zero live neighbors, every reserved entity slot is written
