@@ -1592,22 +1592,34 @@ mod tests {
             *slot = world.stations.stock.iter().map(|s| s[r]).sum();
         }
 
-        // Identity holds at reset, and EVERY tick of the self-running fixture.
+        // Identity holds at reset, and EVERY tick of the self-running fixture. The
+        // window must be long enough to drive ALL five legs (mine, refine, load,
+        // deliver, sink-consume) under the identity, not just the producer side. The
+        // destination sits at 0.3 AU, so the first delivery + sink-consume lands well
+        // after tick ~696; run 1000 ticks so the consume leg is genuinely exercised
+        // here (the non-vacuity guards below would fail on a too-short window).
         assert_resource_identity(&world, &initial);
         let mut empty: Vec<Command> = Vec::new();
-        for _ in 0..200 {
+        for _ in 0..1000 {
             world.step(&mut empty);
             assert_resource_identity(&world, &initial);
         }
 
-        // Non-vacuity guard: a stalled world also satisfies the identity trivially.
-        // After 200 ticks the producer chain must be live (flows moving on both sides
-        // of the identity). NOTE: the 200-tick window covers mine/refine/load but does
-        // NOT reach deliver/sink-consume (first consumed[Fuel] > 0 lands ~tick 696, as
-        // the destination sits at 0.3 AU); those legs are exercised under this same
-        // identity invariant by T17's per-tick sweep through completion — exactly as the
-        // Failed→consumed leg is covered by T16, not this sweep.
-        assert!(world.econ.mined[Resource::Ore.index()] > 0, "miner is live (mined Ore > 0)");
+        // Non-vacuity guards: a stalled world satisfies the identity trivially, so
+        // assert every leg of the identity actually fired — miner (mined Ore), refiner
+        // output (mined Fuel) and input (consumed Ore), and the deliver→sink-consume
+        // path (consumed Fuel > 0 proves Fuel reached station B and was consumed there,
+        // which is only possible after a contract delivered). (The Failed→consumed leg
+        // never fires on this healthy fixture; it is covered by T16's targeted test.)
+        let ore = Resource::Ore.index();
+        let fuel = Resource::Fuel.index();
+        assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
+        assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
+        assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");
+        assert!(
+            world.econ.consumed[fuel] > 0,
+            "deliver + sink-consume legs fired (consumed Fuel > 0)"
+        );
     }
 
     #[test]
