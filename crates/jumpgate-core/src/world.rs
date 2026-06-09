@@ -1244,7 +1244,7 @@ mod tests {
 
         // Step (no further commands) until the hauler rendezvous-arrives at station B
         // and the delivery stage settles the contract. Bounded loop: the destination
-        // body 1 sits at a == 0.001 AU and the craft has ample Δv, so this converges
+        // body 1 sits at a == 0.3 AU and the craft has ample Δv, so this converges
         // well within the bound; break on Completed, fail if it never lands.
         let mut empty: Vec<Command> = Vec::new();
         let mut completed = false;
