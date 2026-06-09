@@ -90,6 +90,11 @@ pub enum ResetError {
     /// Craft `craft_index`'s worst-case (empty-tank) braking cannot resolve the
     /// arrival sphere at this `dt`: `a_max_empty * dt^2 >= limit` (limit = R/(2·k_brake)).
     Unbrakable { craft_index: usize, a_max_empty: f64, dt: f64, limit: f64 },
+    /// An economy init vec referenced an out-of-range index (`what` names the
+    /// reference kind, e.g. `"station.body_index"`; `index` is the bad value).
+    /// Validated before tick 0 so a malformed economy config never mints a
+    /// half-populated, SoA-misaligned world.
+    BadEconomyRef { what: &'static str, index: usize },
 }
 
 impl std::fmt::Display for ResetError {
@@ -100,6 +105,10 @@ impl std::fmt::Display for ResetError {
                 "craft {craft_index} is unbrakable: a_max_empty*dt^2 = {} >= R/(2*k_brake) = {limit} \
                  (a_max_empty={a_max_empty}, dt={dt}); remedy: lower max_thrust, raise dry_mass, or shrink dt",
                 a_max_empty * dt * dt
+            ),
+            ResetError::BadEconomyRef { what, index } => write!(
+                f,
+                "economy config {what} references out-of-range index {index}"
             ),
         }
     }
@@ -191,16 +200,75 @@ impl World {
             ships.contract.push(None);
         }
 
+        // Mint economy stores from the RunConfig init vecs. Dependency order:
+        // stations (resolve body_index) -> producers/corporations (resolve
+        // station_index) -> contracts (resolve corp_index + from/to station). Every
+        // index is validated against the already-minted slot-maps; an out-of-range
+        // ref aborts BEFORE tick 0 with BadEconomyRef (no half-populated SoA). The
+        // minted ids are dense (slot == row, no despawn), so id_at(index) maps a
+        // config index straight to the live id.
+        let mut stations = crate::economy::StationStore::empty();
+        let mut station_ids: Vec<crate::ids::StationId> = Vec::with_capacity(cfg.stations.len());
+        for s in cfg.stations.iter() {
+            let (slot, generation) = bodies.ids.id_at(s.body_index).ok_or(
+                ResetError::BadEconomyRef { what: "station.body_index", index: s.body_index },
+            )?;
+            let body = BodyId { slot, generation };
+            station_ids.push(stations.push(body, s.initial_stock, s.initial_price_micros));
+        }
+
+        let mut producers = crate::economy::ProducerStore::empty();
+        for p in cfg.producers.iter() {
+            let station = *station_ids.get(p.station_index).ok_or(
+                ResetError::BadEconomyRef { what: "producer.station_index", index: p.station_index },
+            )?;
+            producers.push(station, p.recipe);
+        }
+
+        let mut corporations = crate::economy::CorporationStore::empty();
+        let mut corp_ids: Vec<crate::ids::CorporationId> =
+            Vec::with_capacity(cfg.corporations.len());
+        for c in cfg.corporations.iter() {
+            let home_station = *station_ids.get(c.home_station_index).ok_or(
+                ResetError::BadEconomyRef {
+                    what: "corporation.home_station_index",
+                    index: c.home_station_index,
+                },
+            )?;
+            corp_ids.push(corporations.push(c.treasury_micros, home_station));
+        }
+
+        let mut contracts = crate::economy::ContractStore::empty();
+        for k in cfg.contracts.iter() {
+            let corp = *corp_ids.get(k.corp_index).ok_or(ResetError::BadEconomyRef {
+                what: "contract.corp_index",
+                index: k.corp_index,
+            })?;
+            let from_station = *station_ids.get(k.from_station_index).ok_or(
+                ResetError::BadEconomyRef {
+                    what: "contract.from_station_index",
+                    index: k.from_station_index,
+                },
+            )?;
+            let to_station = *station_ids.get(k.to_station_index).ok_or(
+                ResetError::BadEconomyRef {
+                    what: "contract.to_station_index",
+                    index: k.to_station_index,
+                },
+            )?;
+            // status Offered (ContractStore::push seeds it), escrow 0, no hauler.
+            contracts.push(corp, k.resource, k.qty, from_station, to_station, k.reward_micros);
+        }
+
         let rng = RngStreams::from_master(cfg.master_seed);
         let dt = cfg.dt;
         let world = World {
             ships,
             bodies,
-            // Economy stores start empty; config-minting lands in a later task.
-            stations: crate::economy::StationStore::empty(),
-            producers: crate::economy::ProducerStore::empty(),
-            corporations: crate::economy::CorporationStore::empty(),
-            contracts: crate::economy::ContractStore::empty(),
+            stations,
+            producers,
+            corporations,
+            contracts,
             econ: crate::economy::EconCounters::zero(),
             eph,
             rng,
@@ -851,5 +919,75 @@ mod tests {
         assert_eq!(world.ships.mods[0], crate::stores::EffectiveMods::IDENTITY);
         let p = world.craft_pos(id).unwrap();
         assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
+    }
+
+    /// A `one_body_one_craft` config with an economy: 2 stations on body 0 plus one
+    /// ∅->Ore miner attached to station 0. Exercises the RESET-FROM-CONFIG minting
+    /// path (distinct from `populated_economy_parity`, which hand-mutates).
+    fn one_body_two_stations_one_miner() -> RunConfig {
+        use crate::config::{ProducerInit, StationInit};
+        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        let mut cfg = one_body_one_craft();
+        cfg.stations = vec![
+            StationInit {
+                body_index: 0,
+                initial_stock: [7, 3],
+                initial_price_micros: [100, 200],
+            },
+            StationInit {
+                body_index: 0,
+                initial_stock: [0; N_RESOURCES],
+                initial_price_micros: [150, 250],
+            },
+        ];
+        cfg.producers = vec![ProducerInit {
+            station_index: 0,
+            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+        }];
+        cfg
+    }
+
+    #[test]
+    fn reset_mints_economy_from_config_deterministically() {
+        // Two worlds reset from the SAME economy config mint bit-identical state.
+        let (wa, _) = World::reset(one_body_two_stations_one_miner()).expect("resolvable config");
+        let (wb, _) = World::reset(one_body_two_stations_one_miner()).expect("resolvable config");
+        assert_eq!(
+            crate::hash::state_hash(&wa),
+            crate::hash::state_hash(&wb),
+            "two worlds minted from the same economy config must have equal state_hash"
+        );
+
+        // Minted store contents match the RunConfig init vecs.
+        assert_eq!(wa.stations.ids.len(), 2, "2 stations minted");
+        assert_eq!(wa.producers.ids.len(), 1, "1 producer minted");
+        // Station 0's opening market came straight from StationInit[0].
+        assert_eq!(wa.stations.stock[0], [7, 3]);
+        assert_eq!(wa.stations.price_micros[0], [100, 200]);
+        // The minted producer points at the minted StationId for station_index 0.
+        let st0 = wa.stations.ids.id_at(0).map(|(slot, generation)| crate::ids::StationId {
+            slot,
+            generation,
+        });
+        assert_eq!(Some(wa.producers.station[0]), st0, "producer bound to minted station 0");
+        // Flow counters start zero (no firing at reset).
+        assert_eq!(wa.econ, crate::economy::EconCounters::zero());
+    }
+
+    #[test]
+    fn reset_rejects_out_of_range_economy_ref() {
+        use crate::config::StationInit;
+        use crate::economy::N_RESOURCES;
+        let mut cfg = one_body_one_craft();
+        // body_index 5 is out of range (only 1 body) -> BadEconomyRef before tick 0.
+        cfg.stations = vec![StationInit {
+            body_index: 5,
+            initial_stock: [0; N_RESOURCES],
+            initial_price_micros: [0; N_RESOURCES],
+        }];
+        assert!(matches!(
+            World::reset(cfg),
+            Err(ResetError::BadEconomyRef { what: "station.body_index", index: 5 })
+        ));
     }
 }
