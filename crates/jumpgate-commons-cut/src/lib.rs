@@ -6,6 +6,7 @@
 /// Start at 20; the gradient check (Task 4) raises it to 50 if depletion flattens.
 pub const STOCK_MAX: u32 = 20;
 
+pub mod dynamics;
 pub mod rng_bridge;
 
 /// A mining region. All integer (determinism).
