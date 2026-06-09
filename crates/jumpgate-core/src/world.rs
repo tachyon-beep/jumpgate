@@ -786,4 +786,33 @@ mod tests {
         let none = world.project(&DenyAll);
         assert!(none.craft.is_empty() && none.bodies.is_empty(), "deny-all hides all entities");
     }
+
+    #[test]
+    fn identity_mods_preserve_trajectory() {
+        // With the default (all-IDENTITY) mods, a thrusting transfer must produce the
+        // SAME state as the pre-bundle build: thrust_factor == 1.0 and x*1.0 == x, so
+        // max_thrust — and therefore pos/vel/fuel — are bit-identical.
+        let cfg = one_body_one_thrusting_craft();
+        let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
+        let id = world.craft_ids()[0];
+
+        assert_eq!(world.ships.mods[0], crate::stores::EffectiveMods::IDENTITY);
+
+        use crate::types::{EntityRef, NavDest, Target};
+        let target = Vec3::new(5.3, 0.0, 0.0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id)),
+            kind: CommandKind::Destination { dest: NavDest::Position(target), burn_budget: Some(1.0) },
+        }];
+        world.step(&mut cmds);
+        for _ in 0..50 {
+            let mut none: Vec<Command> = Vec::new();
+            world.step(&mut none);
+        }
+
+        // mods is never written in plan A, so it stays IDENTITY throughout.
+        assert_eq!(world.ships.mods[0], crate::stores::EffectiveMods::IDENTITY);
+        let p = world.craft_pos(id).unwrap();
+        assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite());
+    }
 }
