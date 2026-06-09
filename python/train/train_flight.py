@@ -14,7 +14,7 @@ from stable_baselines3.common.running_mean_std import RunningMeanStd
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
 from jumpgate.gym_env import JumpgateGymEnv
-from curriculum import Curriculum
+from curriculum import Curriculum, STAGES
 
 GAMMA = 0.99  # MUST match FlightCfg.gamma (potential-shaping invariant)
 
@@ -38,17 +38,55 @@ class FreshSeedOnReset(gym.Wrapper):
         return self.env.reset(seed=seed, options=options)
 
 
-def make_env(stage, idx: int):
-    def _f():
-        env = JumpgateGymEnv(num_envs=1, num_craft=1, mode="thrust")
-        env.set_difficulty(
+class ReplayMixWrapper(gym.Wrapper):
+    """Episode-level stage mixing: 75% current stage, 25% uniform over earlier
+    (already-cleared) stages. Without rehearsal each promotion OVERWRITES the
+    previous stage's skill (measured: run-3 cleared every stage transiently but
+    the final policy scored 1/25 hop, 0/25 sprint held-out). Tags every step's
+    info with stage_idx so the curriculum only counts current-stage episodes
+    toward promotion (earlier-stage episodes are easier and would inflate it)."""
+
+    def __init__(self, env, stages, base_seed: int):
+        super().__init__(env)
+        self._stages = stages
+        self._unlocked = 0
+        self._episode_stage = 0
+        self._rng = np.random.default_rng(base_seed)
+
+    def unlock_stage(self, idx: int) -> None:
+        self._unlocked = idx
+
+    def _apply(self, stage) -> None:
+        self.env.set_difficulty(
             target_dist_min=stage.target_dist_min, target_dist_max=stage.target_dist_max,
             star_mass=stage.star_mass, exhaust_velocity=stage.exhaust_velocity,
             time_limit=stage.time_limit, gamma=GAMMA,
             arrival_radius=stage.arrival_radius, arrival_speed=stage.arrival_speed,
             time_penalty=stage.time_penalty,
         )
-        return FreshSeedOnReset(env, base_seed=10_000 + idx)
+
+    def reset(self, *, seed=None, options=None):
+        if self._unlocked > 0 and self._rng.random() < 0.25:
+            self._episode_stage = int(self._rng.integers(0, self._unlocked))
+        else:
+            self._episode_stage = self._unlocked
+        self._apply(self._stages[self._episode_stage])
+        obs, info = self.env.reset(seed=seed, options=options)
+        info["stage_idx"] = self._episode_stage
+        return obs, info
+
+    def step(self, action):
+        obs, r, term, trunc, info = self.env.step(action)
+        info["stage_idx"] = self._episode_stage
+        return obs, r, term, trunc, info
+
+
+def make_env(stage, idx: int):
+    def _f():
+        env = JumpgateGymEnv(num_envs=1, num_craft=1, mode="thrust")
+        mixed = ReplayMixWrapper(env, STAGES, base_seed=20_000 + idx)
+        mixed._apply(stage)  # initial spaces before first reset
+        return FreshSeedOnReset(mixed, base_seed=10_000 + idx)
     return _f
 
 
@@ -67,25 +105,25 @@ class CurriculumCallback(BaseCallback):
             if ep is None:
                 continue
             arrived = bool(info.get("is_success", info.get("terminated", False)))
+            # Replay-mix episodes from EARLIER stages rehearse old skills but
+            # must not count toward promotion (they are easier).
+            if info.get("stage_idx", self.cur.idx) != self.cur.idx:
+                continue
             promoted = self.cur.record(arrived)
             rate = self.cur.rolling_rate()
             self.rows.append([self.num_timesteps, self.cur.stage.name, f"{rate:.3f}", f"{ep['r']:.3f}"])
             if promoted:
                 print(f"PROMOTED -> {self.cur.stage.name} at {self.num_timesteps} steps")
                 self.model.save(f"runs/flight_{self.cur.stage.name}_entry")
+                # Snapshot vecnorm stats PAIRED with the checkpoint (before the
+                # reset below) so the checkpoint stays faithfully evaluable.
+                vn0 = self.model.get_vec_normalize_env()
+                if vn0 is not None:
+                    vn0.save(f"runs/flight_vecnorm_{self.cur.stage.name}_entry.pkl")
                 # env_method reaches through VecNormalize/VecMonitor to the
                 # base JumpgateGymEnv (verified: DummyVecEnv.env_method
                 # getattr-walks gym wrappers); takes effect at next reset.
-                self.training_env.env_method(
-                    "set_difficulty",
-                    target_dist_min=self.cur.stage.target_dist_min,
-                    target_dist_max=self.cur.stage.target_dist_max,
-                    star_mass=self.cur.stage.star_mass,
-                    exhaust_velocity=self.cur.stage.exhaust_velocity,
-                    time_limit=self.cur.stage.time_limit, gamma=GAMMA,
-                    arrival_radius=self.cur.stage.arrival_radius,
-                    arrival_speed=self.cur.stage.arrival_speed,
-                    time_penalty=self.cur.stage.time_penalty)
+                self.training_env.env_method("unlock_stage", self.cur.idx)
                 # Reset VecNormalize running statistics: obs/return scaling fit
                 # to the OLD stage poisons the value function on the new one
                 # (measured as the run-1 sprint decay). One transient
