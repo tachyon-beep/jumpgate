@@ -9,6 +9,7 @@ pub const STOCK_MAX: u32 = 20;
 pub mod dp;
 pub mod dynamics;
 pub mod gate;
+pub mod mc;
 pub mod policies;
 pub mod rng_bridge;
 
