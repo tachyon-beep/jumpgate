@@ -478,6 +478,30 @@ impl World {
             &mut self.events,
         );
 
+        // (3c) economy failure stage: fail any InTransit contract whose hauler ran out
+        //      of propellant this tick. Lift this tick's FuelEmpty craft-ids out of the
+        //      event stream FIRST (drops the immutable borrow), then mutate — same
+        //      event-lift borrow pattern as 3b. Runs AFTER 3b so a same-tick
+        //      Arrival+FuelEmpty resolves as delivered (3b clears the contract; 3c skips
+        //      the now-non-InTransit row). Refund is a credit TRANSFER; cargo loss is an
+        //      accounted SINK leg (consumed += qty). Resolution is sorted-ContractId.
+        let failed_craft: Vec<CraftId> = self
+            .events
+            .since(next)
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::FuelEmpty { craft } => Some(craft),
+                _ => None,
+            })
+            .collect();
+        crate::economy::resolve_failures(
+            &mut self.contracts,
+            &mut self.corporations,
+            &mut self.ships,
+            &mut self.econ,
+            &failed_craft,
+        );
+
         // (4) copy-forward the boundary-edge arrays so next tick's detection has a
         //     prior. These arrays are folded into state_hash at the position fixed by
         //     HASH_FIELD_ORDER (a later hash task pins their contribution).
@@ -1145,6 +1169,107 @@ mod tests {
             reward_micros: 1_000_000,
         }];
         cfg
+    }
+
+    /// A STARVED variant of `two_body_contract_fixture`: the craft can still accept
+    /// and load at station A (loading pulls economy Fuel cargo from A's stock, which
+    /// is independent of propellant `fuel_mass`), but its propellant is exhausted
+    /// mid-transit before it can rendezvous with station B, so a `FuelEmpty` event
+    /// fires while the contract is `InTransit`. The lever is `fuel_mass`: it starts
+    /// just above `FUEL_EMPTY_EPS` (1e-9), enough to survive step 1 (still
+    /// `CargoLoaded`, so the once-only FuelEmpty edge must NOT fire there) but drained
+    /// across the eps threshold a couple of ticks into the burn, long before the craft
+    /// can cover the 0.3 AU to station B.
+    fn two_body_starved_contract_fixture() -> RunConfig {
+        let mut cfg = two_body_contract_fixture();
+        // Start propellant just above FUEL_EMPTY_EPS (1e-9): enough to survive step 1
+        // (where the contract is still CargoLoaded) but exhausted a couple of ticks
+        // into the burn — long before the craft can cover the 0.3 AU to station B — so
+        // FuelEmpty fires while the contract is InTransit. (Fuel cargo loaded at A is
+        // independent of this propellant `fuel_mass`.)
+        cfg.craft[0].fuel_mass = 1.06e-9;
+        cfg
+    }
+
+    #[test]
+    fn starved_hauler_fails_contract_refunds_escrow_and_accounts_cargo_loss() {
+        use crate::economy::{ContractStatus, Resource};
+        use crate::stores::CraftRole;
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) =
+            World::reset(two_body_starved_contract_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let cidx = 0usize; // sole contract, dense row 0
+        let fuel = Resource::Fuel.index();
+
+        // Credit identity baseline (escrow is corp money held off-balance-sheet).
+        let initial_credit = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+        let initial_treasury = world.corporations.treasury_micros[0];
+        let consumed_fuel_before = world.econ.consumed[fuel];
+
+        // Accept the sole Offered contract (escrow + load on step 1).
+        let contract = world
+            .contracts
+            .ids
+            .id_at(cidx)
+            .map(|(slot, generation)| crate::ids::ContractId { slot, generation })
+            .unwrap();
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(
+            world.contracts.status[cidx],
+            ContractStatus::CargoLoaded,
+            "loaded at origin on step 1"
+        );
+        // The loaded cargo qty (debited from A at load); lost when the contract fails.
+        let crow0 = world.ships.index_of(craft).unwrap();
+        let (lost_res, lost_qty) = world.ships.cargo[crow0].expect("cargo loaded on step 1");
+        assert_eq!((lost_res, lost_qty), (Resource::Fuel, 5));
+
+        // Step (no commands) until a FuelEmpty fires while InTransit and the failure
+        // stage settles the contract. Bounded loop; break on Failed.
+        let mut empty: Vec<Command> = Vec::new();
+        let mut failed = false;
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            if world.contracts.status[cidx] == ContractStatus::Failed {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "contract reached Failed within the step bound");
+
+        // Escrow refunded to the owning corp; corp treasury back to its pre-accept
+        // value; escrow zeroed.
+        assert_eq!(world.contracts.escrow_micros[cidx], 0, "escrow zeroed on fail");
+        assert_eq!(
+            world.corporations.treasury_micros[0], initial_treasury,
+            "escrow refunded to corp treasury"
+        );
+
+        // Craft cargo/contract handle cleared; role back to Idle.
+        let crow = world.ships.index_of(craft).unwrap();
+        assert_eq!(world.ships.cargo[crow], None, "cargo cleared (lost) on fail");
+        assert_eq!(world.ships.contract[crow], None, "contract handle cleared");
+        assert_eq!(world.ships.role[crow], CraftRole::Idle, "role back to Idle");
+
+        // Cargo-loss accounting leg: consumed[Fuel] rose by the lost cargo qty.
+        assert_eq!(
+            world.econ.consumed[fuel],
+            consumed_fuel_before + lost_qty as i64,
+            "lost cargo accounted into consumed[Fuel]"
+        );
+
+        // Global credit identity holds: refund creates/destroys no money.
+        let final_credit = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+        assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
     }
 
     #[test]

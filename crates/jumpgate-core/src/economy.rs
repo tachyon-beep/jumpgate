@@ -513,6 +513,68 @@ pub fn resolve_deliveries(
     }
 }
 
+/// Contract-failure stage on propellant exhaustion (deterministic, sorted-`ContractId`
+/// order). Runs in `World::step` AFTER the delivery stage (3b): `failed_craft` is the
+/// list of craft-ids lifted from this tick's just-detected `FuelEmpty` events. For
+/// each `InTransit` contract whose bound `hauler` ran out of propellant this tick:
+///
+///   * status `InTransit -> Failed`,
+///   * refund `escrow_micros` -> the owning corp's `treasury_micros`, zero the escrow
+///     (a credit TRANSFER: Σtreasury+Σcredits+Σescrow is invariant — the money the corp
+///     escrowed at accept returns to the corp; the hauler is NOT paid),
+///   * **v1: the loaded cargo is LOST.** Account it into `consumed[resource]` and clear
+///     the craft's `cargo`. This keeps the resource identity
+///     (`Σstock + in_transit == initial + mined − consumed`) exact: the cargo was
+///     debited from origin stock at load and rode as in-transit; on loss the sink leg
+///     (`consumed += qty`) balances the now-vanished in-transit cargo.
+///   * clear the craft's `contract`/`role` (`Hauler -> Idle`).
+///
+/// Ordering after 3b is load-bearing: a same-tick Arrival+FuelEmpty resolves as
+/// DELIVERED (3b already moved the contract off `InTransit`, so 3c skips it). Removes
+/// nothing from any store (status-only lifecycle, LAW 6).
+pub fn resolve_failures(
+    contracts: &mut ContractStore,
+    corporations: &mut CorporationStore,
+    ships: &mut CraftStore,
+    counters: &mut EconCounters,
+    failed_craft: &[CraftId],
+) {
+    for kidx in 0..contracts.ids.len() {
+        if contracts.status[kidx] != ContractStatus::InTransit {
+            continue;
+        }
+        let Some(hauler) = contracts.hauler[kidx] else {
+            continue;
+        };
+        // Did this contract's hauler run out of propellant THIS tick?
+        if !failed_craft.contains(&hauler) {
+            continue;
+        }
+        // Refund escrow -> owning corp treasury (credit TRANSFER; identity invariant).
+        // A stale corp row -> skip the refund leg but still fail the contract; the
+        // escrow stays put so Σtreasury+Σcredits+Σescrow remains invariant.
+        let corp = contracts.corp[kidx];
+        if let Some(corp_row) = corporations.ids.dense_index(corp.slot, corp.generation) {
+            corporations.treasury_micros[corp_row] += contracts.escrow_micros[kidx];
+            contracts.escrow_micros[kidx] = 0;
+        }
+        // Cargo loss: account the lost cargo as a SINK leg, then clear it.
+        if let Some(crow) = ships.index_of(hauler) {
+            if let Some((resource, qty)) = ships.cargo[crow] {
+                counters.consumed[resource.index()] += qty as i64;
+                ships.cargo[crow] = None;
+            }
+            ships.contract[crow] = None;
+            ships.role[crow] = CraftRole::Idle;
+        }
+        // Terminal status. v1 emits no dedicated failure event (the FuelEmpty event
+        // already fired this tick and carries the cause); adding an EventKind variant
+        // is out of scope for Phase 1b (would force a jumpgate-py exhaustive-match
+        // update).
+        contracts.status[kidx] = ContractStatus::Failed;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
