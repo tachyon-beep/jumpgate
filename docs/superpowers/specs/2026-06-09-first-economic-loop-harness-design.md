@@ -1,7 +1,7 @@
 # First Economic Loop — Deterministic Harness (design spec)
 
 Date: 2026-06-09   Owner: John   Author: acting-PM (Claude)   Issue: `jumpgate-fe825a65f3`
-Status: draft for owner review
+Status: approved (owner, 2026-06-09; all open questions resolved) — ready for writing-plans
 Related: PDR-0005 (DRL repositioned to scale/density), `docs/superpowers/reviews/2026-06-09-vertical-slice-shaping-findings.md`, charter land-order, RAID R2/R5.
 
 ## Purpose
@@ -105,12 +105,16 @@ The whole point of the harness is replay. Rules:
 - **Stage-2 stability test:** drive the closed loop and assert price/stock reach a hysteresis band rather than a growing limit cycle (the oscillation hazard is real — make it a regression test, not a hope).
 - **Lifecycle tests:** every contract transition incl. `Failed`/escrow-return; no-negative-stock; producer all-or-nothing firing.
 
-## Open questions for the owner (do not block drafting; resolve before/at planning)
+## Resolved decisions (owner, 2026-06-09)
 
-1. **Commodity names/chain depth:** Ore→Fuel→consume as the one chain — fine, or a different first chain?
-2. **Stage-2 deflation curve:** linear `price = base·(2 − stock/cap·1.8)` as the starting form, tuned in config — acceptable as a starting point (it is replaceable without reshaping the loop)?
-3. **Stations as Bodies (LOAD-BEARING — answer at review, not at planning):** the docking story rests on stations sitting on (orbiting with) Bodies, so haulers rendezvous with a *moving* target via the already-live arrival path (`NavDest::Entity(Body)`). If stations are instead fixed inertial points, nothing breaks (`NavDest::Position` is supported) but the station data model changes — so this shapes the plan and must be settled before writing-plans. (Body-attached is also the physically-correct model and what the dense arena will need.)
-4. **One spec or split plan:** this is one coherent loop but a sizeable build; the natural plan phases are: **prelude** (hash-bump scaffolding + stores) → **Stage 1** (producers + contracts + scripted haul, fixed price, conservation gate) → **Stage 2** (reprice clock + stability). OK to keep as one spec with phased plan, or split Stage 2 into its own?
+1. **Commodity chain — Ore→Fuel→consume, cargo-only.** Miner ∅→Ore, refiner Ore→Fuel, demand-sink consumes Fuel. The traded **Fuel is cargo, kept distinct from the craft's propellant `fuel_mass`** (which thrust already burns, world.rs:312) in v1 — the harness stays decoupled from the propulsion model. "Delivered Fuel refuels haulers" (making transport demand endogenous) is a clean *later* coupling, explicitly out of the thin loop.
+2. **Stage-2 deflation curve — linear, config-tuned.** `price = base·(2 − stock/cap·1.8)`, constants in `RunConfig`. The starting form; replaceable without reshaping the loop if dynamics come out flat.
+3. **Stations are Bodies.** Stations orbit with Bodies; haulers rendezvous with the *moving* station via the already-live arrival path (`NavDest::Entity(EntityRef::Body)`, events.rs:130). This is the physically-correct model, the most visible motion in the loop, and what the dense arena will need. (A station is a Body + its market columns; the two are decoupled, as `Corporation` is non-spatial.)
+4. **One spec, phased plan.** Keep this one spec; `writing-plans` sequences it: **prelude** (HASH_FORMAT_VERSION 1→2 + economy stores + RunConfig economy fields) → **Stage 1** (producers + station market + corp + contracts + scripted haul, fixed price; accounting-identity gate) → **Stage 2** (reprice clock + hysteresis + staggered dispatch; stability test). The economy columns land in the single hash bump in the prelude.
+
+## Deferred (later, additive — named so they are foreclosed-nothing)
+
+Delivered-Fuel-refuels-haulers coupling; multi-commodity graphs; multiple corporations; `ARRIVAL_RADIUS`→config; LOD dormancy / Task-12 Wake; combat/piracy/law; crews. None require reshaping the loop or the seams.
 
 ## Reality-check note (standing memory: workflow agents fabricate in-code claims)
 
