@@ -11,6 +11,9 @@ use jumpgate_core::math::Vec3;
 
 /// Bumped whenever the obs layout changes. The variable-N entity set is
 /// reserved (zeroed-absent) in v1 so combat's neighbors never force a break.
+/// Reserved contract surface (the Python wrapper/training side reads it via
+/// the versioned schema); not yet consumed by Rust code in v1.
+#[allow(dead_code)]
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// Ego block: own velocity in the target frame (3) + fuel fraction (1).

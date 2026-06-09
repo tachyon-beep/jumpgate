@@ -7,6 +7,7 @@ name = "jumpgate"
 version = "0.1.0"
 description = "jumpgate deterministic Newtonian space sim + Gymnasium env"
 requires-python = ">=3.12"
+dependencies = ["numpy>=2.0", "gymnasium>=1.2"]
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3.12",
