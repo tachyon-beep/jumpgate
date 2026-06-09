@@ -20,25 +20,30 @@ The DRL agents ARE the actors (miner / hauler / pirate / law). "DRL > scripted, 
 ## v1 done-definition — *VENUE CONFIRMED (owner, 2026-06-09); concrete metric TBD at shaping*
 > **Direction CONFIRMED** (owner 2026-06-09; product PDR-0002, `docs/product/decisions/0002-thesis-venue-is-strategic-operational.md`): the thesis is **strategic/operational, not tactical** — "not a fly-by-stick game; almost all transit is navigation over weeks/months." So v1's done-definition is **NOT** "beat the autopilot on the single-craft A→B transfer" (that tactical task is near-convex — DRL can only tie, and "entertaining" has near-zero variance there). It is: **learned DRL agents (miner/hauler/pirate/law) make measurably better long-horizon decisions — contract/route/fuel-commitment under endogenous deflationary pricing + predation risk — than scripted-heuristic agents, inside the demand-driven multi-agent ecosystem, seed-reproducibly on the same build.**
 
-The single-craft navigator A→B is reclassified as the **first trainable rung** (a Plan-4 milestone proving an agent can exist + be trained), not the thesis test. **Still open:** the concrete falsifiable ecosystem metric (the `TARGET`) — define it with the owner at vertical-slice shaping. Product north-star: `docs/product/metrics.md`. This ties "done" to the thesis, not to features shipped.
+The single-craft navigator A→B is reclassified as the **first trainable rung** (a Plan-4 milestone proving an agent can exist + be trained), not the thesis test. Product north-star: `docs/product/metrics.md`. This ties "done" to the thesis, not to features shipped.
+
+> **REFINED by shaping pass + PDR-0005 (owner, 2026-06-09).** The done-definition *construct* stands (measurable strategic/operational DRL-vs-scripted differential), but its **arena moves off the thin market**. The shaping pass (`docs/superpowers/reviews/2026-06-09-vertical-slice-shaping-findings.md`) found no DRL room is demonstrable inside the small tractable economy — 3 of 6 candidate arenas provably presolvable, 3 LOW/MEDIUM + unmeasured; *buildability anti-correlated with room* — reconfirming the six prior probes (`vsl-cannot-host-judgment-principle`: replay-determinism IS presolvability). So the DRL thesis is **repositioned to the scale/density/population path** (PDR-0005). The first economic loop is built as a **deterministic harness**, explicitly NOT the DRL win; the dense/population arena (the real thesis vehicle) is a *later* shaping pass on top of that substrate, gated by a cheap analytic cut. The concrete falsifiable `TARGET` is set when that arena is designed — NOT at this pass.
 
 ## Scope
 - **In (v1):** deterministic core (✅ Plans 0–3), guidance params (✅), Person+Ship foundation (Plan A → B → C), the gym surface (Plan-4 / Tasks 16–18), single stepped LOD tier with the enum+dispatch seam shaped.
 - **Out / deferred (foreclose-nothing, implement-trivially):** craft–craft force perturbation; multi-tier LOD bodies (only one tier implemented); wear/component/heat modifier layers (the `EffectiveMods` bundle reserves them); non-autopilot Person brains; combat/sensors/economy domains; barycentric two-body wobble.
 - **North star (NOT v1):** multi-domain high-fidelity sim (economy/combat/exploration/industry); crew-on-a-flight-deck is the depth yardstick.
 
-## Land order (sequencing) — CONFIRMED (owner, 2026-06-09)
+## Land order (sequencing) — UPDATED post-shaping (owner, 2026-06-09; PDR-0005)
 ```
-Plan A (the one irreversible seam — FIRST regardless)
-  ├─ Plan-4 gym + navigator "first trainable rung"   (A-gated; proves the gym works; can run early)
-  └─ vertical-slice shaping pass (harvest archive)    (defines the Layer-1 backlog + the falsifiable metric)
-→ Layer-1 economy build:
-     mechanical loop (scripted, FIXED price) → demand-driven pricing
-     → ecosystem obs/action surface → swap scripted→DRL & MEASURE   ← the thesis test
+Plan A (the one irreversible seam — FIRST regardless)                      ✅ LANDED
+  ├─ Plan-4 gym + navigator "first trainable rung"   (A-gated)            ✅ LANDED
+  └─ vertical-slice shaping pass (harvest + adversarial arena grading)    ✅ DONE → PDR-0005
+→ FIRST LOOP AS A DETERMINISTIC HARNESS (charter-locked, additive, NOT the DRL win):
+     Stage 1 mechanical loop (producers→stock→contracts→haulers→arrival, FIXED price)
+     → Stage 2 demand-deflation pricing (close the reprice loop + hysteresis/staggered dispatch)
+     [seam budget: ARRIVAL_RADIUS→config re-pin 0x278c; ONE HASH_FORMAT_VERSION bump for all economy columns]
+→ SCALE/DENSITY DRL ARENA (the real thesis vehicle — a LATER shaping pass on top of the harness):
+     design the dense/population arena → cheap analytic cut (expected-fail gate) → IF clears, train & MEASURE
 → then THICKEN (all additive): crews (Person B/C) → engines/wear → combat/piracy/law trophic level
 ```
 
-**Rationale (debt-avoidance + thesis-risk, reconciled).** Plan A is the only non-additive seam — first regardless; the economy actors (mining yield, hauler capacity, weapons) are exactly what `EffectiveMods` will carry. After it, the work that *retires the thesis risk* — the demand-driven economy where DRL actually has room (PDR-0002 / RAID R5) — precedes crew fidelity. **Person B/C are additive enrichment that land AFTER the first loop closes, not before hauling** (owner's bottom-up order, with crews reordered after the loop). Every thin primitive sits on the real seams (additive SoA / `EffectiveMods` / event+contract surface), so thin-first incurs **no rip-and-replace debt**. The shaping pass decomposes the Layer-1 epic into concrete issues and sets the metric `TARGET`.
+**Rationale (post-shaping).** Plan A (the only non-additive seam) and the gym rung both landed. The shaping pass (PDR-0005) established that the DRL thesis cannot be proven inside the thin market, so the sequence now **separates the harness from the thesis vehicle**: build the economic loop as a deterministic correctness/replay substrate (it is needed regardless, sits entirely on additive seams + the already-live co-orbiting rendezvous arrival, and is where the cheap analytic cut runs), then design the dense/population arena where DRL actually has room as a *separate* pass. **Person B/C remain additive enrichment after the loop.** No rip-and-replace debt: every primitive is additive SoA / `EffectiveMods` / event+contract. The Layer-1 epic decomposes into (a) the harness loop, (b) the scale/density arena shaping.
 
 ## Cutover gate — *OPEN QUESTION, CONFIRM WITH OWNER*
 Everything lives on `jumpgate-v1-design`; `main` = last-stable. Is the long-lived WIP branch deliberate, and **what gate cuts v1 over to `main`?** (e.g. "Plan-4 green + a trained agent beats baseline" = the done-definition above.) Currently undefined.
