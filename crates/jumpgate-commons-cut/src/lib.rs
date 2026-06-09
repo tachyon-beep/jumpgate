@@ -11,6 +11,7 @@ pub mod dynamics;
 pub mod gate;
 pub mod mc;
 pub mod policies;
+pub mod report;
 pub mod rng_bridge;
 
 /// A mining region. All integer (determinism).
