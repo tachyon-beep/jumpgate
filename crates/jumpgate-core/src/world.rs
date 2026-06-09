@@ -337,6 +337,16 @@ impl World {
         //     into NavState, logs, emits ActionIngested.
         crate::ingest::ingest_commands(self, cur, cmds);
 
+        // (1b) economy production stage: fire eligible producers BEFORE physics.
+        //      `next` is the firing tick (consistent with event tick stamping).
+        crate::economy::run_producers(
+            &mut self.stations,
+            &mut self.producers,
+            &mut self.econ,
+            next,
+            &mut self.events,
+        );
+
         // Snapshot body eph_index + mass to avoid borrowing self inside the closure.
         let body_indices: Vec<(usize, f64)> = (0..self.bodies.mass.len())
             .map(|i| (self.bodies.eph_index[i], self.bodies.mass[i]))
@@ -972,6 +982,47 @@ mod tests {
         assert_eq!(Some(wa.producers.station[0]), st0, "producer bound to minted station 0");
         // Flow counters start zero (no firing at reset).
         assert_eq!(wa.econ, crate::economy::EconCounters::zero());
+    }
+
+    /// One station (Ore=0) with a ∅->Ore(5) miner at interval 1, attached to it.
+    /// Used to prove `run_producers` is wired into `World::step`.
+    fn one_body_one_station_one_miner_ore_zero() -> RunConfig {
+        use crate::config::{ProducerInit, StationInit};
+        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        let mut cfg = one_body_one_craft();
+        cfg.stations = vec![StationInit {
+            body_index: 0,
+            initial_stock: [0; N_RESOURCES],
+            initial_price_micros: [0; N_RESOURCES],
+        }];
+        cfg.producers = vec![ProducerInit {
+            station_index: 0,
+            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+        }];
+        cfg
+    }
+
+    #[test]
+    fn step_runs_producers_each_tick() {
+        use crate::economy::Resource;
+        // Miner ∅->Ore(5), interval 1, station Ore starts at 0. Stepping 3 ticks
+        // fires the producer at next = 1,2,3 -> stock and mined[Ore] both reach 15.
+        let (mut world, _) =
+            World::reset(one_body_one_station_one_miner_ore_zero()).expect("resolvable config");
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..3 {
+            world.step(&mut empty);
+        }
+        assert_eq!(
+            world.stations.stock[0][Resource::Ore.index()],
+            15,
+            "3 firings of ∅->Ore(5) raise station Ore stock to 15"
+        );
+        assert_eq!(
+            world.econ.mined[Resource::Ore.index()],
+            15,
+            "mined[Ore] counter tracks the 3 firings"
+        );
     }
 
     #[test]
