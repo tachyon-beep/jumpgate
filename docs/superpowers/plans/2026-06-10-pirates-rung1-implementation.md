@@ -119,8 +119,8 @@ PyO3/jumpgate-py, SB3 PPO (CPU), pytest.
       pub hull_price_micros: [i64; 2],   // [8_000_000, 20_000_000]
       pub escort_price_micros: [i64; 2], // [5_000_000, 12_000_000]
       pub hull_step_units: u32,          // 5
-      pub max_hull_level: u8,            // 2
-      pub max_escort_level: u8,          // 2
+      pub max_hulls: u8,                 // 2  (cap on the un-simulated fleet ledger, spec §6)
+      pub max_escorts: u8,               // 2
       pub buy_headroom_milli: u32,       // 1500
   }
   ```
@@ -152,7 +152,10 @@ PyO3/jumpgate-py, SB3 PPO (CPU), pytest.
   ```rust
   // stores.rs
   #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-  pub struct UpgradeLevels { pub hull: u8, pub escort: u8 }   // strength & capacity DERIVED, never stored
+  pub struct UpgradeLevels { pub hulls: u8, pub escorts: u8 }
+  // FLEET LEDGER (owner caveat, spec §6): counts of un-simulated SHIPS, never stat
+  // levels. Demotes to real craft at the commodore rung; must not outlive it.
+  // Never folded into physics/EffectiveMods. Strength & capacity DERIVED, never stored.
   // CraftStore: pub upgrades: Vec<UpgradeLevels>, pub info_tick: Vec<Tick>,
   //             pub pending_upgrade: Vec<Option<UpgradeKind>>   // TRANSIENT, unhashed (prev_* doc pattern)
   // PirateState: + pub engage_cooldown_until: Tick   (append INSIDE the word-26 self-delimiting fold)
@@ -194,7 +197,7 @@ PyO3/jumpgate-py, SB3 PPO (CPU), pytest.
   additive) + ingest arm (AcceptContract template: write intent only, `ActionIngested`
   always, ActionLog). NEW `resolve_purchases(...)` called as stage 1d in `World::step`
   (after `resolve_contracts`, pre-physics, `body_pos(t-1)` frame for the dock predicate —
-  the try_load precedent). `cargo_capacity(r) = spec.base_cargo_capacity + hull as u32 * shipyard.hull_step_units`;
+  the try_load precedent). `cargo_capacity(r) = spec.base_cargo_capacity + hulls as u32 * shipyard.hull_step_units`;
   gate at the Offered→Accepted settle + the same filter in scripted ASSIGN. Saturating
   arithmetic throughout (the spec §8 totality discipline). New `EventKind::UpgradePurchased
   { craft: CraftId, kind: UpgradeKind, level: u8, price_micros: i64 }` (check the single

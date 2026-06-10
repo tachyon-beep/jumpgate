@@ -120,7 +120,7 @@ mid-cruise mode, cut 2+).
 **Outcome resolution (statistical coercion — the PERMANENT top layer):**
 
 ```
-strength(craft) = upgrades.escort + (role == Pirate ? cfg.pirate_base_strength : 0)   // base 1
+strength(craft) = upgrades.escorts + (role == Pirate ? cfg.pirate_base_strength : 0)   // base 1; escorts = wing SIZE (ship count), see §6
 ```
 
 1. Eligibility already guarantees `strength(p) > strength(h)` (the owner's "fight off
@@ -234,10 +234,24 @@ A — decided NOW so the config golden moves once, not twice).
 
 **Catalog this rung (both roles, same prices, levels only increase, no resale):**
 
-| Line | Effect | Prices (micros) | Cap |
+| Line | What you buy | Prices (micros) | Cap |
 |---|---|---|---|
-| **Escort** | `strength += 1`/level; deterministic protection threshold (§2) | L1 5_000_000, L2 12_000_000 | 2 (both roles) |
-| **Hull** | `cargo_capacity = base (5) + 5×level`; gates contract tiers | L1 8_000_000, L2 20_000_000 | 2 (capacity 15) |
+| **Escort** | ONE escort ship for your wing (`escorts += 1`; strength = wing size while un-simulated); deterministic protection threshold (§2) | 1st 5_000_000, 2nd 12_000_000 | 2 (both roles) |
+| **Hull** | ONE additional cargo hull (`hulls += 1`; capacity = base 5 + 5×hulls); gates contract tiers | 1st 8_000_000, 2nd 20_000_000 | 2 (capacity 15) |
+
+**Fleet-ledger honesty (owner caveat, decision-3 sign-off):** the columns are
+`UpgradeLevels { hulls: u8, escorts: u8 }` — **counts of ships the craft owns that the
+sim does not yet individually fly**, never abstract stat levels. The purchase verb buys a
+SHIP; the chronicle narrates a wing ("H7's escorts drove them off"), never a level-up. A
+fleet is "a collection of ships with a single policy acting as a strategic head" (the
+commodore chair, per the glossary captain→commodore→admiral taxonomy) — so the migration
+is a DEMOTION of this ledger, not a reinterpretation: when the commodore rung lands,
+each count mints real craft into a fleet under one GuidanceParams policy, and the columns
+die. Named sunset debt: **the ledger must not outlive the fleet rung.** Implementation
+rules that keep the demotion honest: nothing may fold escorts/hulls into physics or
+EffectiveMods (ships fly, stats don't); nothing may assume the wing is unlosable
+(attrition becomes possible the day they're real); caps stay small (2) so the
+un-simulated wing never grows past what a chronicle line can carry.
 
 Caps are STRUCTURAL (`ShipyardCfg.max_*_level`, settle no-op at cap, unit-tested) — they
 keep the obs scale stationary (strength ∈ [0, 3], `PIRATE_STRENGTH_SCALE = 4`), kill the
@@ -356,7 +370,8 @@ re-derived via the ignored `print_golden` test, never invented; current values a
   prices, caps, hull_step_units }`. `engage_radius = 0` or zero pirates ⇒ the whole
   trophic machinery inert.
 - **Commit B — state v4** (HASH_FORMAT_VERSION 3→4, both state goldens re-pinned, one
-  cause): `CraftStore.upgrades: Vec<UpgradeLevels { hull: u8, escort: u8 }>` (words
+  cause): `CraftStore.upgrades: Vec<UpgradeLevels { hulls: u8, escorts: u8 }>` (the
+  fleet ledger, §6) (words
   appended after 26 in `write_craft_economy`; strength and capacity are DERIVED, never
   stored), `PirateState.engage_cooldown_until` (append inside the self-delimiting word-26
   fold), `CraftStore.info_tick`, `World.route_evidence` rings (world-level words).
@@ -530,15 +545,20 @@ commitments in §8/§14 keep them additive).
 
 ## 15. Owner decision points
 
-1. **Takings model:** ransom transfer (RECOMMENDED — zero new identity legs, no
+1. ✅ **APPROVED (owner, 2026-06-10)** — with first-class goods banked as §14.6.
+   **Takings model:** ransom transfer (RECOMMENDED — zero new identity legs, no
    fence-vs-REPOST self-cancellation, robbery debits the RL trader directly) vs
    cargo-loot + fencing now (richer, but the panel proved the fence damps the boom/bust
    it feeds unless fencing is restricted to lawless stations — cut-2 scope either way).
-2. **Tanker deferral:** Hull + Escort this rung; Tanker lands WITH the refuel package
+2. ✅ **APPROVED (owner, 2026-06-10).**
+   **Tanker deferral:** Hull + Escort this rung; Tanker lands WITH the refuel package
    (cut 2) — accepts that one of your three verbatim lines arrives one rung late, for the
    three reasons in §6. Also requires deciding then whether tanker buys range or speed.
-3. **Fleet abstraction:** "additional hulls" = capacity levels on one craft this rung
-   (unanimous panel recommendation); true multi-craft fleets wait for the commodore era.
+3. ✅ **APPROVED WITH CAVEAT (owner, 2026-06-10):** no "fleet as level" system lingering
+   past its due date — fleets are "collections of ships with a single policy acting as a
+   strategic head" (the commodore chair, not fleetLevel 3), and escorts get the same
+   care. Hardened into §6's fleet-ledger rules (counts of un-simulated ships; demotion
+   not reinterpretation; named sunset debt; never folded into physics).
 4. **Gym stance:** contacts-in-obs yes / purchase-actions no this rung. The trader reads
    the risk field; it cannot yet spend on protection.
 5. **Endgame asymmetry:** maxed pirates (3) out-rank maxed haulers (2) — predation never
