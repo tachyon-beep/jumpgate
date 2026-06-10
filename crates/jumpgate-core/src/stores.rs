@@ -103,6 +103,43 @@ pub struct PirateState {
     /// While `lie_low_until > tick` the pirate is off the predation field (the
     /// structural refuge that stops hunters exterminating prey).
     pub lie_low_until: Tick,
+    /// No re-engagement until this tick (the post-rob/drive-off cooldown that
+    /// stops same-pair rerolls every tick, spec §2). HASHED: appended INSIDE
+    /// the word-26 self-delimiting `Some` fold (format v4).
+    pub engage_cooldown_until: Tick,
+}
+
+/// What a `BuyUpgrade` intent purchases (spec §6 catalog: a SHIP, never a stat).
+/// APPEND-ONLY: never reorder the variants — the `UpgradePurchased` event payload
+/// and any future stable-rank fold depend on their order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpgradeKind {
+    Hull,
+    Escort,
+}
+
+/// **Fleet-ledger honesty (owner caveat, spec §6, decision-3 sign-off):** the
+/// columns are `UpgradeLevels { hulls: u8, escorts: u8 }` — **counts of ships the
+/// craft owns that the sim does not yet individually fly**, never abstract stat
+/// levels. The purchase verb buys a SHIP; the chronicle narrates a wing ("H7's
+/// escorts drove them off"), never a level-up. A fleet is "a collection of ships
+/// with a single policy acting as a strategic head" (the commodore chair, per the
+/// glossary captain→commodore→admiral taxonomy) — so the migration is a DEMOTION
+/// of this ledger, not a reinterpretation: when the commodore rung lands, each
+/// count mints real craft into a fleet under one GuidanceParams policy, and the
+/// columns die. Named sunset debt: **the ledger must not outlive the fleet rung.**
+/// Implementation rules that keep the demotion honest: nothing may fold
+/// escorts/hulls into physics or EffectiveMods (ships fly, stats don't); nothing
+/// may assume the wing is unlosable (attrition becomes possible the day they're
+/// real); caps stay small (2) so the un-simulated wing never grows past what a
+/// chronicle line can carry.
+///
+/// Strength and capacity are DERIVED from these counts, never stored. HASHED
+/// state (HASH_FIELD_ORDER word 27, format v4).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct UpgradeLevels {
+    pub hulls: u8,
+    pub escorts: u8,
 }
 
 /// SoA store for mobile craft. `ids` is the slot/generation authority; every other Vec
@@ -150,6 +187,20 @@ pub struct CraftStore {
     pub risk_appetite: Vec<i32>,
     /// Per-pirate trophic state: `Some(PirateState)` for a pirate, `None` otherwise.
     pub pirate: Vec<Option<PirateState>>,
+    // --- Pirates-rung columns (length-parallel, state v4) ---
+    /// The fleet ledger (see `UpgradeLevels` doc: counts of un-simulated ships,
+    /// never stat levels). HASHED (HASH_FIELD_ORDER word 27).
+    pub upgrades: Vec<UpgradeLevels>,
+    /// Tick of this craft's last information refresh — dock-gated route-evidence
+    /// read freshness (spec §7): refreshed only while docked, stale in flight.
+    /// HASHED (HASH_FIELD_ORDER word 28).
+    pub info_tick: Vec<Tick>,
+    /// TRANSIENT purchase intent (the `prev_*` unhashed-by-design doc pattern,
+    /// but stricter): written by ingest/scripted policy, consumed by
+    /// `resolve_purchases` (stage 1d) the SAME tick, so it is always `None` at
+    /// every hash point — `state_hash` debug_asserts exactly that. NOT folded
+    /// into HASH_FIELD_ORDER.
+    pub pending_upgrade: Vec<Option<UpgradeKind>>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -183,6 +234,9 @@ impl CraftStore {
             contract: Vec::new(),
             risk_appetite: Vec::new(),
             pirate: Vec::new(),
+            upgrades: Vec::new(),
+            info_tick: Vec::new(),
+            pending_upgrade: Vec::new(),
         }
     }
 
@@ -214,6 +268,9 @@ impl CraftStore {
         self.contract.push(None);
         self.risk_appetite.push(0);
         self.pirate.push(None);
+        self.upgrades.push(UpgradeLevels::default());
+        self.info_tick.push(Tick(0));
+        self.pending_upgrade.push(None);
         CraftId { slot, generation }
     }
 
@@ -396,6 +453,13 @@ mod tests {
         // Trophic columns default to 0 risk-appetite and no pirate state.
         assert_eq!(ship.risk_appetite[0], 0);
         assert_eq!(ship.pirate[0], None);
+        // Pirates-rung (v4) columns default to an empty fleet ledger, tick-0
+        // info freshness, and no pending purchase intent.
+        assert_eq!(ship.upgrades[0], UpgradeLevels::default());
+        assert_eq!(ship.upgrades[0].hulls, 0);
+        assert_eq!(ship.upgrades[0].escorts, 0);
+        assert_eq!(ship.info_tick[0], Tick(0));
+        assert_eq!(ship.pending_upgrade[0], None);
         // length-parallel with the id authority.
         assert_eq!(ship.role.len(), ship.ids.len());
         assert_eq!(ship.cargo.len(), ship.ids.len());
@@ -403,6 +467,9 @@ mod tests {
         assert_eq!(ship.contract.len(), ship.ids.len());
         assert_eq!(ship.risk_appetite.len(), ship.ids.len());
         assert_eq!(ship.pirate.len(), ship.ids.len());
+        assert_eq!(ship.upgrades.len(), ship.ids.len());
+        assert_eq!(ship.info_tick.len(), ship.ids.len());
+        assert_eq!(ship.pending_upgrade.len(), ship.ids.len());
     }
 
     #[test]
@@ -431,6 +498,7 @@ mod tests {
             food_micros: 12_345,
             notoriety: 7,
             lie_low_until: Tick(99),
+            engage_cooldown_until: Tick(123),
         });
         assert_eq!(ship.risk_appetite[0], 750);
         assert_eq!(ship.role[0], CraftRole::Pirate);
@@ -440,6 +508,7 @@ mod tests {
                 food_micros: 12_345,
                 notoriety: 7,
                 lie_low_until: Tick(99),
+                engage_cooldown_until: Tick(123),
             })
         );
     }

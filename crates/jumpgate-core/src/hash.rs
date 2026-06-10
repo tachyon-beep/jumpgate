@@ -57,7 +57,39 @@
 //! TROPHIC (HASH_FORMAT_VERSION 3 — folded by `write_craft_economy` after word 19,
 //! in the per-craft sorted loop; shared by `state_hash` and the parity recompute):
 //!   25. risk_appetite as u64
-//!   26. pirate: 0 (None) | 1 then (food_micros as u64, notoriety as u64, lie_low_until.0)
+//!   26. pirate: 0 (None) | 1 then (food_micros as u64, notoriety as u64, lie_low_until.0,
+//!       engage_cooldown_until.0) — the cooldown is APPENDED INSIDE this
+//!       self-delimiting fold at format v4 (tag-1 payload grew; tag 0 unchanged)
+//!
+//! PIRATES RUNG (HASH_FORMAT_VERSION 4):
+//!
+//!  Per craft (folded by `write_craft_economy` after word 26, in the sorted loop):
+//!   27. upgrades: hulls as u64, escorts as u64   (the fleet ledger, spec §6 —
+//!       counts of un-simulated ships; strength/capacity DERIVED, never stored)
+//!   28. info_tick.0                              (dock-gated info freshness, spec §7)
+//!
+//!  World-level (folded by `write_route_evidence` AFTER the economy stores,
+//!  shared by `state_hash` and the parity recompute):
+//!   29. route_evidence: robs.len() as u64; per directed route (dense row-major
+//!       n_stations²): robs[0..8].0, then cursor as u64
+//!
+//!  NOT folded at v4 (transient): `CraftStore.pending_upgrade` — purchase intent
+//!  written and consumed within the same tick (stage 1d), always `None` at every
+//!  hash point; `state_hash` debug_asserts that invariant (the `prev_*` doc
+//!  pattern, but stricter — emptiness is enforced, not just transitivity).
+//!
+//! ## Piracy stream cursor — Class-3 transitively-pinned state (the `prev_*` precedent)
+//!
+//! The `RngStream::Piracy` generator's cursor (number of draws consumed since
+//! reset) is runtime-mutable state that is NOT folded into the per-tick hash,
+//! and does not need to be: every Piracy draw site sits at a fixed tick stage
+//! iterating hashed state in dense-row order, so the draw count at tick t is a
+//! pure function of the hashed trajectory up to t. Replay rebuilds the cursor
+//! exactly from reset + the action log, so bit-identity holds end-to-end. The
+//! scope caveat is explicit, not implicit: equal `state_hash` at one mid-run
+//! tick does NOT by itself certify two worlds continue identically — they must
+//! also share draw history from reset, which record/replay guarantees and
+//! arbitrary state surgery would not.
 //!
 //!  Store-level (after the craft loop; each store: cursor, then sorted-id elements):
 //!   20. EconCounters: mined[0..N], consumed[0..N]
@@ -71,13 +103,15 @@
 pub const HASH_MAGIC: u64 = 0x4a55_4d50_4741_5445; // "JUMPGATE"
 /// Bump whenever HASH_FIELD_ORDER changes. v2: + economy state (words 16..=24).
 /// v3: + trophic state (per-craft `risk_appetite` + `pirate`, words 25..=26).
-pub const HASH_FORMAT_VERSION: u32 = 3;
+/// v4: + pirates-rung state (per-craft `upgrades`/`info_tick` words 27..=28,
+/// `engage_cooldown_until` inside word 26, world-level `route_evidence` word 29).
+pub const HASH_FORMAT_VERSION: u32 = 4;
 
 /// Golden per-tick hash of the minimal zero-init slice under HASH_FIELD_ORDER
 /// words 1..=13. Pinned so any change to the canonical encoding is caught.
 /// Captured from the first run of `golden_zero_state_hash`; if HASH_FIELD_ORDER
 /// or HASH_FORMAT_VERSION changes, recapture AND bump the version.
-pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x1d44_b373_5ccd_33f7; // RE-PINNED: HASH_FORMAT_VERSION 2->3 (+trophic state words 25..=26). Was 0x65d7_af3b_9a8a_8276.
+pub const GOLDEN_ZERO_STATE_HASH: u64 = 0xafdc_5c35_6266_0ff0; // RE-PINNED: HASH_FORMAT_VERSION 3->4 (+upgrades/info_tick/engage_cooldown/route_evidence). Was 0x1d44_b373_5ccd_33f7.
 
 /// Shared FNV-1a 64-bit hasher for the per-tick state hash. Folds each u64 as 8
 /// little-endian bytes. `new()` seeds with `HASH_MAGIC` then the version word.
@@ -241,6 +275,17 @@ pub fn state_hash(world: &World) -> u64 {
     // economy stores in sorted-id order). Folded AFTER the craft loop.
     write_economy_stores(&mut h, world);
 
+    // HASH_FIELD_ORDER word 29: world-level route-evidence rings (format v4).
+    write_route_evidence(&mut h, world);
+
+    // `pending_upgrade` is TRANSIENT intent: written and consumed within one
+    // tick (stage 1d), so it must be empty at EVERY hash point. A `Some` here
+    // is a stage-ordering bug, not merely unhashed state — fail loud in debug.
+    debug_assert!(
+        world.ships.pending_upgrade.iter().all(Option::is_none),
+        "pending_upgrade must be fully consumed (all None) at every state-hash point"
+    );
+
     h.finish()
 }
 
@@ -279,8 +324,16 @@ pub(crate) fn write_craft_economy(h: &mut FnvHasher, world: &World, idx: usize) 
             h.write_u64(ps.food_micros as u64);
             h.write_u64(ps.notoriety as u64);
             h.write_u64(ps.lie_low_until.0);
+            // engage_cooldown_until: APPENDED INSIDE the self-delimiting tag-1
+            // payload at format v4 (the tag-0 arm is unchanged).
+            h.write_u64(ps.engage_cooldown_until.0);
         }
     }
+    // HASH_FIELD_ORDER words 27-28: pirates-rung columns (format v4). The fleet
+    // ledger (counts, spec §6) then the dock-gated info-freshness tick.
+    h.write_u64(world.ships.upgrades[idx].hulls as u64); // 27a
+    h.write_u64(world.ships.upgrades[idx].escorts as u64); // 27b
+    h.write_u64(world.ships.info_tick[idx].0); // 28
 }
 
 /// Fold a `Recipe` into the state hash (input disc+payload, output disc+payload,
@@ -385,6 +438,27 @@ pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
                 h.write_u64(cid.generation as u64);
             }
         }
+    }
+}
+
+/// Fold the world-level route-evidence rings — HASH_FIELD_ORDER word 29
+/// (format v4). Length first (self-delimiting; transitively pinned by
+/// config_hash's station count, folded anyway so surgery cannot alias), then
+/// each directed route's 8-slot rob-tick ring and its cursor in dense
+/// row-major order. SHARED by `state_hash` and the parity recompute.
+pub(crate) fn write_route_evidence(h: &mut FnvHasher, world: &World) {
+    let re = &world.route_evidence;
+    debug_assert_eq!(
+        re.robs.len(),
+        re.cursor.len(),
+        "route_evidence rings and cursors must stay length-parallel"
+    );
+    h.write_u64(re.robs.len() as u64);
+    for (ring, cur) in re.robs.iter().zip(re.cursor.iter()) {
+        for t in ring {
+            h.write_u64(t.0);
+        }
+        h.write_u64(*cur as u64);
     }
 }
 
@@ -607,6 +681,8 @@ mod tests {
         }
         // HASH_FIELD_ORDER words 20-24: store-level economy state (shared fold).
         super::write_economy_stores(&mut h, w);
+        // HASH_FIELD_ORDER word 29: world-level route-evidence rings (shared fold).
+        super::write_route_evidence(&mut h, w);
         h.finish()
     }
 
@@ -748,7 +824,12 @@ mod tests {
 
         let mut some_a = populated_world();
         let mut some_b = populated_world();
-        let ps = PirateState { food_micros: 1_000, notoriety: 3, lie_low_until: Tick(50) };
+        let ps = PirateState {
+            food_micros: 1_000,
+            notoriety: 3,
+            lie_low_until: Tick(50),
+            engage_cooldown_until: Tick(0),
+        };
         some_a.ships.role[0] = CraftRole::Pirate;
         some_a.ships.pirate[0] = Some(ps);
         some_b.ships.role[0] = CraftRole::Pirate;
@@ -770,6 +851,7 @@ mod tests {
             |p: &mut PirateState| p.food_micros = 2_000,
             |p: &mut PirateState| p.notoriety = 4,
             |p: &mut PirateState| p.lie_low_until = Tick(51),
+            |p: &mut PirateState| p.engage_cooldown_until = Tick(61),
         ] {
             let mut w = populated_world();
             w.ships.role[0] = CraftRole::Pirate;
@@ -781,21 +863,96 @@ mod tests {
     }
 
     #[test]
+    fn state_v4_columns_are_folded() {
+        use crate::stores::{CraftRole, PirateState};
+        use crate::time::Tick;
+        // v4 completeness guard (the economy_state_is_fully_folded pattern): each
+        // single-field mutation MUST move the hash — proving the field is folded
+        // (a forgotten field would let two distinct states collide and silently
+        // break replay-divergence detection).
+        let h0 = state_hash(&populated_world());
+        macro_rules! moves {
+            ($name:expr, $mut:expr) => {{
+                let mut w = populated_world();
+                $mut(&mut w);
+                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+            }};
+        }
+        // HASH_FIELD_ORDER word 27: the fleet ledger (both counts).
+        moves!("upgrades.hulls", |w: &mut World| w.ships.upgrades[0].hulls = 1);
+        moves!("upgrades.escorts", |w: &mut World| w.ships.upgrades[0].escorts = 2);
+        // HASH_FIELD_ORDER word 28: dock-gated info freshness.
+        moves!("info_tick", |w: &mut World| w.ships.info_tick[0] = Tick(9));
+
+        // engage_cooldown_until folds INSIDE the word-26 self-delimiting pirate fold.
+        let pirated = |w: &mut World| {
+            w.ships.role[0] = CraftRole::Pirate;
+            w.ships.pirate[0] = Some(PirateState {
+                food_micros: 1_000,
+                notoriety: 3,
+                lie_low_until: Tick(50),
+                engage_cooldown_until: Tick(0),
+            });
+        };
+        let mut pbase = populated_world();
+        pirated(&mut pbase);
+        let hp = state_hash(&pbase);
+        let mut pmoved = populated_world();
+        pirated(&mut pmoved);
+        pmoved.ships.pirate[0].as_mut().unwrap().engage_cooldown_until = Tick(77);
+        assert_ne!(
+            state_hash(&pmoved),
+            hp,
+            "pirate.engage_cooldown_until must be folded into state_hash"
+        );
+
+        // HASH_FIELD_ORDER word 29: route_evidence — every ring slot AND the
+        // cursor are world-level hashed words (populated_world has no stations
+        // at reset, so size one directed route by hand for the probe).
+        let evidenced = |w: &mut World| {
+            w.route_evidence.robs = vec![[Tick(0); 8]];
+            w.route_evidence.cursor = vec![0];
+        };
+        let mut ebase = populated_world();
+        evidenced(&mut ebase);
+        let he = state_hash(&ebase);
+        for slot in 0..8 {
+            let mut w = populated_world();
+            evidenced(&mut w);
+            w.route_evidence.robs[0][slot] = Tick(1234);
+            assert_ne!(
+                state_hash(&w),
+                he,
+                "every route_evidence ring slot must be folded into state_hash"
+            );
+        }
+        let mut wc = populated_world();
+        evidenced(&mut wc);
+        wc.route_evidence.cursor[0] = 3;
+        assert_ne!(
+            state_hash(&wc),
+            he,
+            "route_evidence ring cursor must be folded into state_hash"
+        );
+    }
+
+    #[test]
     fn state_hash_golden_zero_world() {
         // Hardcoded digest of the canonical zero-init world (cfg_with_craft_x(2.0),
         // tick 0). Pins HASH_FIELD_ORDER + HASH_FORMAT_VERSION. If this changes,
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
-        // RE-PINNED: HASH_FORMAT_VERSION 2->3 (+trophic state words 25..=26). Was 0x64dd_5078_a3e0_5886.
-        assert_eq!(state_hash(&w), 0x2d92_c7ce_4daa_4567u64);
+        // RE-PINNED: HASH_FORMAT_VERSION 3->4 (+upgrades/info_tick/engage_cooldown/route_evidence). Was 0x2d92_c7ce_4daa_4567.
+        assert_eq!(state_hash(&w), 0xa29b_6334_16f7_cd20u64);
     }
 
     #[test]
-    #[ignore = "prints the golden constant for state_hash_golden_zero_world"]
+    #[ignore = "prints the golden constants for state_hash_golden_zero_world AND golden_zero_state_hash"]
     fn print_golden() {
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         println!("GOLDEN=0x{:016x}", state_hash(&w));
+        println!("GOLDEN_ZERO_STATE_HASH=0x{:016x}", manual_zero_fold());
     }
 
     #[test]
@@ -838,13 +995,10 @@ mod tests {
         assert_ne!(base, h.finish(), "even writing 0 must move the hash");
     }
 
-    /// GOLDEN HASH. This pins the canonical encoding of the HASH_FIELD_ORDER
-    /// header + a zero-initialized single-body single-craft state slice (the
-    /// same words Task 13's zero-init `state_hash` will reproduce). If this value
-    /// changes, the canonical hash encoding changed — that is ONLY allowed
-    /// alongside a HASH_FORMAT_VERSION bump and a HASH_FIELD_ORDER edit.
-    #[test]
-    fn golden_zero_state_hash() {
+    /// The manual zero-fold behind `golden_zero_state_hash`, factored out so the
+    /// ignored `print_golden` re-derives BOTH golden literals from the same code
+    /// (never invented, never copied from a plan).
+    fn manual_zero_fold() -> u64 {
         let mut h = FnvHasher::new();
         // header (words 1-2) are already folded by new(); now the rest of a
         // minimal zero-init slice per HASH_FIELD_ORDER words 3..=13:
@@ -872,9 +1026,14 @@ mod tests {
         h.write_u64(0); // 17. cargo discriminant (None)
         h.write_u64(0); // 18. credits_micros
         h.write_u64(0); // 19. contract discriminant (None)
-        // trophic words 25-26 for the one craft (0 risk_appetite, no pirate state):
+        // trophic words 25-26 for the one craft (0 risk_appetite, no pirate state;
+        // the None arm is unchanged at v4 — engage_cooldown_until lives inside tag 1):
         h.write_u64(0); // 25. risk_appetite
         h.write_u64(0); // 26. pirate discriminant (None)
+        // pirates-rung words 27-28 for the one craft (empty fleet ledger, tick-0 info):
+        h.write_u64(0); // 27a. upgrades.hulls
+        h.write_u64(0); // 27b. upgrades.escorts
+        h.write_u64(0); // 28. info_tick
         // store-level words 20-24, all empty (zero counters; each store cursor 0, no elements):
         h.write_u64(0); // 20a. econ.mined[Ore]
         h.write_u64(0); // 20b. econ.mined[Fuel]
@@ -884,6 +1043,19 @@ mod tests {
         h.write_u64(0); // 22. producers cursor
         h.write_u64(0); // 23. corporations cursor
         h.write_u64(0); // 24. contracts cursor
-        assert_eq!(h.finish(), GOLDEN_ZERO_STATE_HASH);
+        // world-level word 29: route_evidence (no stations -> 0 directed routes,
+        // so only the self-delimiting length word is folded):
+        h.write_u64(0); // 29. route_evidence robs.len()
+        h.finish()
+    }
+
+    /// GOLDEN HASH. This pins the canonical encoding of the HASH_FIELD_ORDER
+    /// header + a zero-initialized single-body single-craft state slice (the
+    /// same words Task 13's zero-init `state_hash` will reproduce). If this value
+    /// changes, the canonical hash encoding changed — that is ONLY allowed
+    /// alongside a HASH_FORMAT_VERSION bump and a HASH_FIELD_ORDER edit.
+    #[test]
+    fn golden_zero_state_hash() {
+        assert_eq!(manual_zero_fold(), GOLDEN_ZERO_STATE_HASH);
     }
 }

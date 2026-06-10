@@ -14,6 +14,21 @@ use crate::stores::{BodyStore, CraftStore, NavState, effective_params};
 use crate::time::{Dt, Tick};
 use crate::types::{EntityRef, Lod, NavDest};
 
+/// Per-directed-route robbery evidence rings (the media seam's v0 storage,
+/// spec §7): for each directed station route (dense row-major `n_stations²`,
+/// route index = `from_row * n_stations + to_row`), the last 8 rob ticks and a
+/// ring cursor. World-level HASHED state (HASH_FIELD_ORDER word 29, format v4):
+/// written at robbery settlement (Task 4), read dock-gated through `info_tick`
+/// (Task 5). Sized ONCE at reset from the station count (no mid-run station
+/// spawn in v1), so the length is transitively pinned by config_hash.
+pub struct RouteEvidence {
+    /// Ring of the last 8 rob ticks per directed route. Zero-init `Tick(0)` ==
+    /// "no recorded rob" (older than any evidence window once past warm-up).
+    pub robs: Vec<[Tick; 8]>,
+    /// Next write slot per ring (0..8), length-parallel with `robs`.
+    pub cursor: Vec<u8>,
+}
+
 /// The authoritative simulation aggregate. Single writer; all facades read via `StateView`.
 pub struct World {
     // `ships`/`bodies` are pub(crate) so the per-tick state hash (hash.rs, a later
@@ -29,6 +44,9 @@ pub struct World {
     pub(crate) corporations: crate::economy::CorporationStore,
     pub(crate) contracts: crate::economy::ContractStore,
     pub(crate) econ: crate::economy::EconCounters,
+    /// World-level robbery-evidence rings (pub(crate) so the per-tick state
+    /// hash folds them directly, like the stores above).
+    pub(crate) route_evidence: RouteEvidence,
     eph: Ephemeris,
     #[allow(dead_code)]
     rng: RngStreams,
@@ -176,6 +194,9 @@ impl World {
             contract: Vec::new(),
             risk_appetite: Vec::new(),
             pirate: Vec::new(),
+            upgrades: Vec::new(),
+            info_tick: Vec::new(),
+            pending_upgrade: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -208,10 +229,15 @@ impl World {
                     food_micros: cfg.trophic.grubstake_micros,
                     notoriety: 0,
                     lie_low_until: Tick(0),
-                    // Task-2: engage_cooldown_until joins this mint with state v4.
+                    engage_cooldown_until: Tick(0),
                 }),
                 _ => None,
             });
+            // Pirates-rung (v4) columns: empty fleet ledger, tick-0 info
+            // freshness, no pending purchase intent (transient, never hashed).
+            ships.upgrades.push(crate::stores::UpgradeLevels::default());
+            ships.info_tick.push(Tick(0));
+            ships.pending_upgrade.push(None);
         }
 
         // Mint economy stores from the RunConfig init vecs. Dependency order:
@@ -274,6 +300,15 @@ impl World {
             contracts.push(corp, k.resource, k.qty, from_station, to_station, k.reward_micros);
         }
 
+        // Route-evidence rings: dense n_stations² directed routes, sized once
+        // here (no mid-run station spawn in v1). Saturating per the spec §8
+        // totality discipline — an absurd station count degrades, never panics.
+        let n_routes = stations.ids.len().saturating_mul(stations.ids.len());
+        let route_evidence = RouteEvidence {
+            robs: vec![[Tick(0); 8]; n_routes],
+            cursor: vec![0u8; n_routes],
+        };
+
         let rng = RngStreams::from_master(cfg.master_seed);
         let dt = cfg.dt;
         let world = World {
@@ -284,6 +319,7 @@ impl World {
             corporations,
             contracts,
             econ: crate::economy::EconCounters::zero(),
+            route_evidence,
             eph,
             rng,
             log: ActionLog {

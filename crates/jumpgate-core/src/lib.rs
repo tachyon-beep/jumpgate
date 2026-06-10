@@ -62,11 +62,11 @@ pub use rng::{RngStream, RngStreams};
 pub use ship::thrust_accel_and_burn;
 pub use stores::{
     BodyStore, CraftRole, CraftStore, Effective, EffectiveMods, NavState, PirateState,
-    effective_params,
+    UpgradeKind, UpgradeLevels, effective_params,
 };
 pub use time::{Dt, Tick, sim_time};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, RouteKey, Target};
-pub use world::{FullObserver, Observer, ResetError, View, World};
+pub use world::{FullObserver, Observer, ResetError, RouteEvidence, View, World};
 
 /// Scaffold smoke value. Proves the crate compiles and the test harness runs.
 /// Replaced by real module wiring in later tasks.
