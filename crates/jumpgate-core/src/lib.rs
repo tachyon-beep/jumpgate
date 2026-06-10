@@ -50,7 +50,7 @@ pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sor
 pub use ephemeris::Ephemeris;
 pub use events::{EventStream, FUEL_EMPTY_EPS, detect_boundary_events};
 pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC, state_hash, write_store_cursor};
-pub use ids::{BodyId, CraftId, SlotMap};
+pub use ids::{BodyId, ContractId, CraftId, SlotMap, StationId};
 pub use ingest::{ActionLog, ingest_into};
 pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
 pub use math::{G_CANONICAL, Vec3, tsiolkovsky_dv};

@@ -4,7 +4,7 @@ use crate::config::{ConfigHash, RunConfig};
 use crate::contract::{Command, Event, EventKind, Integrator, StateView};
 use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
-use crate::ids::{BodyId, CraftId, SlotMap};
+use crate::ids::{BodyId, ContractId, CraftId, SlotMap, StationId};
 use crate::ingest::ActionLog;
 use crate::integrator::{VelocityVerlet, gravity_accel, substep_count};
 use crate::math::Vec3;
@@ -327,6 +327,64 @@ impl World {
         // SlotMap::id_at returns Option; delegate to the CraftStore wrapper
         // `ids_at`, which does the `expect` internally and returns CraftId.
         self.ships.ids_at(dense_index)
+    }
+
+    // --- read-only trader accessors (the strategic layer's board/wallet reads) ---
+    // Plain reads over already-hashed economy state: no store layout, fold-order, or
+    // stepping change — hash- and determinism-neutral by construction.
+
+    /// `Offered` + unclaimed contracts (the strategic board), dense row order.
+    /// A row is OFF the board if its status is not `Offered`, OR a hauler is
+    /// bound, OR any craft holds accept-INTENT for it (the ingest ACCEPT path
+    /// records intent on `ships.contract` one stage before `resolve_contracts`
+    /// binds the contract side).
+    pub fn offered_contracts(&self) -> Vec<(ContractId, i64, StationId, StationId)> {
+        use crate::economy::ContractStatus;
+        (0..self.contracts.ids.len())
+            .filter_map(|k| {
+                if self.contracts.status[k] != ContractStatus::Offered
+                    || self.contracts.hauler[k].is_some()
+                {
+                    return None;
+                }
+                let (slot, generation) = self.contracts.ids.id_at(k)?;
+                let cid = ContractId { slot, generation };
+                let intent_claimed =
+                    (0..self.ships.ids.len()).any(|r| self.ships.contract[r] == Some(cid));
+                if intent_claimed {
+                    return None;
+                }
+                Some((
+                    cid,
+                    self.contracts.reward_micros[k],
+                    self.contracts.from_station[k],
+                    self.contracts.to_station[k],
+                ))
+            })
+            .collect()
+    }
+
+    /// The station's body position at the CURRENT tick (orbits move), or `None`
+    /// for a stale/unknown station id.
+    pub fn station_pos(&self, id: StationId) -> Option<Vec3> {
+        let row = self.stations.ids.dense_index(id.slot, id.generation)?;
+        let body = self.stations.body[row];
+        let brow = self.bodies.ids.dense_index(body.slot, body.generation)?;
+        Some(self.eph.body_pos(self.bodies.eph_index[brow], self.tick))
+    }
+
+    /// Earned credits (microcredits) of a live craft, or `None` for a stale id.
+    pub fn craft_credits(&self, id: CraftId) -> Option<i64> {
+        self.ship_index(id).map(|i| self.ships.credits_micros[i])
+    }
+
+    /// Idle == available for a strategic decision: role `Idle` AND no bound (or
+    /// intended) contract. `None` for a stale id.
+    pub fn craft_is_idle(&self, id: CraftId) -> Option<bool> {
+        self.ship_index(id).map(|i| {
+            self.ships.role[i] == crate::stores::CraftRole::Idle
+                && self.ships.contract[i].is_none()
+        })
     }
 
     /// Advance one tick. `dt` is owned by the World, never an argument.
@@ -1674,6 +1732,73 @@ mod tests {
             + world.ships.credits_micros.iter().sum::<i64>()
             + world.contracts.escrow_micros.iter().sum::<i64>();
         assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+    }
+
+    #[test]
+    fn trader_read_accessors_expose_board_and_wallet() {
+        // The four read-only trader accessors (strategic-layer board/wallet reads):
+        // offered_contracts / station_pos / craft_credits / craft_is_idle. A contract
+        // is ON the board iff status == Offered AND hauler is None AND no craft holds
+        // accept-intent for it (`ships.contract` pointing at it pre-resolve).
+        use crate::ids::{ContractId, StationId};
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let crow = world.ships.index_of(craft).unwrap();
+
+        // (1) Board: exactly the seeded Offered row, with its route fields.
+        let board = world.offered_contracts();
+        assert_eq!(board.len(), 1, "one seeded Offered contract");
+        let (cid, reward, from, to) = board[0];
+        assert_eq!(cid, ContractId { slot: 0, generation: 0 });
+        assert_eq!(reward, 1_000_000);
+        assert_eq!(from, StationId { slot: 0, generation: 0 });
+        assert_eq!(to, StationId { slot: 1, generation: 0 });
+
+        // (2) station_pos == the station's body position at the current tick (the
+        // same eph read the projection makes); stale id -> None.
+        let view = world.project(&FullObserver);
+        assert_eq!(world.station_pos(from), view.body_pos(world.stations.body[0]));
+        assert_eq!(world.station_pos(to), view.body_pos(world.stations.body[1]));
+        assert_eq!(world.station_pos(StationId { slot: 99, generation: 0 }), None);
+
+        // (3) Wallet/idleness before any motion; stale craft id -> None.
+        assert_eq!(world.craft_credits(craft), Some(0));
+        assert_eq!(world.craft_is_idle(craft), Some(true));
+        let stale = CraftId { slot: 99, generation: 0 };
+        assert_eq!(world.craft_credits(stale), None);
+        assert_eq!(world.craft_is_idle(stale), None);
+
+        // (4) Accept-INTENT alone (ships.contract set pre-resolve; contract still
+        // Offered + hauler None) takes the slot OFF the board.
+        world.ships.contract[crow] = Some(cid);
+        assert!(world.offered_contracts().is_empty(), "intent claims the slot");
+        assert_eq!(world.craft_is_idle(craft), Some(false), "intent breaks idleness");
+        world.ships.contract[crow] = None;
+        assert_eq!(world.offered_contracts().len(), 1, "board restored");
+
+        // (5) Real accept through the single ingest path: the board empties (status
+        // leaves Offered) and the craft is no longer idle.
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        world.step(&mut cmds);
+        assert!(world.offered_contracts().is_empty(), "accepted contract off the board");
+        assert_eq!(world.craft_is_idle(craft), Some(false));
+
+        // (6) Drive to delivery: escrow settles into the wallet, idle again.
+        let mut empty: Vec<Command> = Vec::new();
+        let mut paid = false;
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            if world.craft_credits(craft) == Some(1_000_000) {
+                paid = true;
+                break;
+            }
+        }
+        assert!(paid, "escrow settled into craft_credits within the step bound");
+        assert_eq!(world.craft_is_idle(craft), Some(true), "idle again after delivery");
     }
 
     // ---- Task 18: the PHASE-1 gate -----------------------------------------
