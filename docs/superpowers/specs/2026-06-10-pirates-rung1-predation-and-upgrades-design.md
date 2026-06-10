@@ -1,6 +1,6 @@
 # Pirates Rung 1 — Choke-Point Predation + the Upgrades Arms Race
 
-Date: 2026-06-10   Status: DRAFT (awaiting owner review)   Author: acting-PM (Claude)
+Date: 2026-06-10   Status: APPROVED — all §15 decisions resolved, build authorized   Author: acting-PM (Claude)
 Provenance: synthesized from a 14-agent design panel (5 code scouts → 3 designers:
 ecology / economy / substrate → 6 adversarial critiques across frame + feasibility
 lenses). Supersedes the pirate half of `2026-06-10-trophic-cut-1-boom-bust-and-decisions-design.md`
@@ -579,8 +579,12 @@ commitments in §8/§14 keep them additive).
    strategic head" (the commodore chair, not fleetLevel 3), and escorts get the same
    care. Hardened into §6's fleet-ledger rules (counts of un-simulated ships; demotion
    not reinterpretation; named sunset debt; never folded into physics).
-4. **Gym stance:** contacts-in-obs yes / purchase-actions no this rung. The trader reads
+4. ✅ **APPROVED (owner, 2026-06-10).**
+   **Gym stance:** contacts-in-obs yes / purchase-actions no this rung. The trader reads
    the risk field; it cannot yet spend on protection.
-5. **Endgame asymmetry:** maxed pirates (3) out-rank maxed haulers (2) — predation never
-   goes extinct, the frontier never becomes fully safe (until the navy). Sign off on
-   "the arms race favors the lawless" as the rung's intended end-state texture.
+5. ✅ **APPROVED (owner, 2026-06-10: "that is expected").**
+   **Endgame asymmetry:** maxed pirates (3) out-rank maxed haulers (2) — predation never
+   goes extinct, the frontier never becomes fully safe (until the navy). "The arms race
+   favors the lawless" is the rung's intended end-state texture.
+
+All five decision points are resolved; the spec is BUILD-AUTHORIZED as of 2026-06-10.
