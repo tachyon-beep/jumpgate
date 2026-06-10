@@ -136,11 +136,67 @@ pub fn write_obs_thrust_mode(
     out[10] = scale_feat as f32;
 }
 
+// --- Trader-mode obs (strategic Rung 1, spec §5.3) ---
+
+/// Board slots in the observation (M). Mirrored by `env::TRADER_BOARD_SLOTS`
+/// (the action decode) — both are facets of the same layout.
+pub const TRADER_OBS_SLOTS: usize = 4;
+
+/// Per-slot block: `[present, reward, d_pickup, d_haul]`.
+pub const TRADER_SLOT_STRIDE: usize = 4;
+
 /// Trader-mode obs width: 4 board slots × `[present, reward, d_pickup,
 /// d_haul]` + own `[fuel_frac, credits, busy, time_remaining_frac]`.
-/// Layout + writer land with the macro-step (`write_obs_trader`); the width
-/// is needed by `configure(mode=2)` first.
-pub const TRADER_OBS_DIM: usize = 20;
+pub const TRADER_OBS_DIM: usize = TRADER_OBS_SLOTS * TRADER_SLOT_STRIDE + 4;
+
+/// FIXED global scales (flight-rung lesson #2/run-6: running obs
+/// normalization whipsaws under non-stationarity; build stationary obs by
+/// construction). Reward scale = the max seeded route reward (micros);
+/// dist scale = the max pairwise station distance (AU); credits scale =
+/// 10× reward scale (a strong episode's earnings stay O(1)).
+pub const TRADER_REWARD_SCALE: f64 = 3_000_000.0;
+pub const TRADER_DIST_SCALE: f64 = 2.4;
+pub const TRADER_CREDITS_SCALE: f64 = 30_000_000.0;
+
+/// Trader-mode obs writer. `board` rows are
+/// `(reward_micros, d_pickup_au, d_haul_au)` for PRESENT slots only (≤ 4, in
+/// board order); absent slots are written as zeros (presence flag 0 + zeroed
+/// payload — same masked-absent discipline as `write_obs_parts`). All scales
+/// are compile-time constants, values O(1) by construction; this is NOT the
+/// frame-relative f32 boundary (no raw absolute coordinate can reach here),
+/// so `rel_to_f32`'s tripwire does not apply.
+pub fn write_obs_trader(
+    board: &[(f64, f64, f64)],
+    fuel_frac: f32,
+    credits_micros: f64,
+    busy: bool,
+    time_remaining_frac: f32,
+    out: &mut [f32],
+) {
+    debug_assert_eq!(out.len(), TRADER_OBS_DIM, "obs buffer must be TRADER_OBS_DIM wide");
+    debug_assert!(board.len() <= TRADER_OBS_SLOTS, "board rows exceed slot count");
+    for slot in 0..TRADER_OBS_SLOTS {
+        let base = slot * TRADER_SLOT_STRIDE;
+        match board.get(slot) {
+            Some(&(reward_micros, d_pickup_au, d_haul_au)) => {
+                out[base] = 1.0; // present
+                out[base + 1] = (reward_micros / TRADER_REWARD_SCALE) as f32;
+                out[base + 2] = (d_pickup_au / TRADER_DIST_SCALE) as f32;
+                out[base + 3] = (d_haul_au / TRADER_DIST_SCALE) as f32;
+            }
+            None => {
+                for k in 0..TRADER_SLOT_STRIDE {
+                    out[base + k] = 0.0;
+                }
+            }
+        }
+    }
+    let own = TRADER_OBS_SLOTS * TRADER_SLOT_STRIDE;
+    out[own] = fuel_frac;
+    out[own + 1] = (credits_micros / TRADER_CREDITS_SCALE) as f32;
+    out[own + 2] = if busy { 1.0 } else { 0.0 };
+    out[own + 3] = time_remaining_frac;
+}
 
 use jumpgate_core::ids::CraftId;
 use jumpgate_core::world::View;
@@ -246,6 +302,53 @@ mod tests {
         let mut out = [0.0f32; THRUST_OBS_DIM];
         // rel pos of 10 AU with dist_scale 1.0 -> scaled value 10 > MAX_REL_AU: guard trips.
         write_obs_thrust_mode(Vec3::ZERO, 0.5, Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO, 1.0, &mut out);
+    }
+
+    #[test]
+    fn trader_obs_layout_scales_and_absent_slot_zeroing() {
+        let mut out = [9.0f32; TRADER_OBS_DIM]; // sentinel proves overwrite
+        // Two present slots, two absent.
+        let board = [
+            (1_000_000.0, 0.0, 0.48), // route 0->1: co-located pickup
+            (3_000_000.0, 1.2, 2.4),  // the max-reward route
+        ];
+        write_obs_trader(&board, 0.75, 4_500_000.0, false, 0.9, &mut out);
+
+        // Slot 0: present + scaled payload.
+        assert_eq!(out[0], 1.0);
+        assert_eq!(out[1], (1_000_000.0f64 / TRADER_REWARD_SCALE) as f32);
+        assert_eq!(out[2], 0.0);
+        assert_eq!(out[3], (0.48f64 / TRADER_DIST_SCALE) as f32);
+        // Slot 1: max seeded reward / max pairwise distance land at exactly 1.0.
+        assert_eq!(out[4], 1.0);
+        assert_eq!(out[5], 1.0);
+        assert_eq!(out[6], (1.2f64 / TRADER_DIST_SCALE) as f32);
+        assert_eq!(out[7], 1.0);
+        // Slots 2 and 3: masked-absent (flag 0 + zeroed payload).
+        for slot in 2..TRADER_OBS_SLOTS {
+            let base = slot * TRADER_SLOT_STRIDE;
+            for k in 0..TRADER_SLOT_STRIDE {
+                assert_eq!(out[base + k], 0.0, "slot {slot} dim {k} must be 0");
+            }
+        }
+        // Own block.
+        assert_eq!(out[16], 0.75);
+        assert_eq!(out[17], (4_500_000.0f64 / TRADER_CREDITS_SCALE) as f32);
+        assert_eq!(out[18], 0.0); // not busy
+        assert_eq!(out[19], 0.9);
+    }
+
+    #[test]
+    fn trader_obs_busy_flag_and_empty_board() {
+        let mut out = [9.0f32; TRADER_OBS_DIM];
+        write_obs_trader(&[], 1.0, 0.0, true, 1.0, &mut out);
+        for (d, &v) in out.iter().enumerate().take(16) {
+            assert_eq!(v, 0.0, "empty board dim {d} must be 0");
+        }
+        assert_eq!(out[16], 1.0);
+        assert_eq!(out[17], 0.0);
+        assert_eq!(out[18], 1.0); // busy
+        assert_eq!(out[19], 1.0);
     }
 
     // Test C: with zero live neighbors, every reserved entity slot is written

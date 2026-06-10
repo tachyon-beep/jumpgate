@@ -3,9 +3,10 @@
 //! Pure `decode_action` / `compute_reward` are unit-tested without the GIL.
 
 use crate::obs::{write_obs_frame_relative, write_obs_thrust_mode, OBS_DIM, THRUST_OBS_DIM};
-use crate::obs::TRADER_OBS_DIM;
+use crate::obs::{write_obs_trader, TRADER_OBS_DIM};
 use jumpgate_core::{
-    BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt, EntityRef, Event, EventKind,
+    BaseSpec, BodyInit, Command, CommandKind, ContractId, CraftId, CraftInit, Dt, EntityRef,
+    Event, EventKind,
     FullObserver, G_CANONICAL, GuidanceParams, NavDest, OrbitalElements, RngStream, RngStreams,
     RunConfig,
     StateView, SubstepCfg, Target, Vec3, World,
@@ -251,15 +252,29 @@ fn mix(seed: u64, k: u64) -> u64 {
 /// board flowing).
 ///
 /// Craft spec is LIFTED from the proven world.rs forage-loop fixture
-/// (`one_body_one_thrusting_craft` + the stage2 forager `exhaust_velocity`
-/// raise): dry 1e-9 / thrust 1e-12 / capacity 1e-9 at dt=0.25 passes the §6
-/// anti-tunnel reset guard (a_max_empty·dt² = 6.25e-5 < R/(2·k_brake) = 1e-4).
-/// The plan's dt=1.0 would REJECT this spec (1e-3 ≥ 1e-4), so trader mode
-/// keeps the economy fixtures' proven dt=0.25. `exhaust_velocity = 2.0`
-/// (vs the forage fixture's 1.0) doubles the full-burn tank life to ~2000
-/// days — ≥4x a 2000-tick (500-day) episode's worst-case continuous burn —
-/// without touching thrust/mass (the guard inputs) or trip times
-/// (accel-limited, not cruise-cap-limited).
+/// (`one_body_one_thrusting_craft`): dry 1e-9 / thrust 1e-12 / capacity 1e-9
+/// at the fixtures' dt=0.25 passes the §6 anti-tunnel reset guard
+/// (a_max_empty·dt² = 6.25e-5 < R/(2·k_brake) = 1e-4; the plan's dt=1.0
+/// would reject it, 1e-3 ≥ 1e-4).
+///
+/// STAR MASS 1e-3, not the spec's 1 M_sun — a measured calibration, same
+/// class as the fixtures' near-massless centrals: seeded phases regularly
+/// put a route's endpoints near-opposite, so the transfer chord grazes the
+/// star, where 1-M_sun gravity (g ~ 0.12 AU/day² at 0.05 AU) exceeds ANY
+/// guard-compliant thrust (the guard caps a_max_empty·dt² < 1e-4) — measured
+/// as a star-dive trap (thrust 1e-12: slingshot to 17 AU, 5610 ticks for one
+/// delivery; thrust 8e-12 @ dt=0.1: captured circling the star indefinitely).
+/// At M=1e-3 the well is controllable EVERYWHERE (g(0.05 AU) ~ 1.2e-4 ≪
+/// a_max_full = 5e-4) while orbits still move: the inner body sweeps ~75°
+/// per 2000-tick episode (T ≈ 2390 days at a=0.35), so within-episode
+/// geometry shifts AND cross-episode phases vary (anti-memorization both
+/// ways). Body motion per tick (~2.3e-4 AU ≈ 2.3× ARRIVAL_RADIUS at a=0.35)
+/// is what surfaced the try_load frame fix.
+/// `exhaust_velocity = 2.0` (vs the forage fixture's 1e-2): full-burn tank
+/// life = capacity·v_e/thrust = 2000 days ≥ 4× a 500-day episode; tank Δv
+/// 2·ln2 ≈ 1.39 ≫ the ~0.03/trip a transfer spends (≥ 3× greedy-burn margin,
+/// spec §4.3). Raising v_e (not capacity) keeps wet mass — and therefore
+/// trip times (~150–400 ticks/leg at a_full 5e-4) — unchanged.
 pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     use jumpgate_core::config::{
         ContractInit, CorporationInit, DispatchCfg, PriceCfg, ProducerInit, StationInit,
@@ -272,8 +287,13 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     /// positions matter; no local gravity wells around stations.
     const BODY_MASS: f64 = 1.0e-12;
 
+    /// Central mass (M_sun): 1e-3, the controllable-everywhere calibration
+    /// (doc above) — orbits move on episode timescales, gravity never beats
+    /// guard-compliant thrust.
+    const STAR_MASS: f64 = 1.0e-3;
+
     let star = BodyInit {
-        mass: 1.0, // 1 M_sun in canonical units
+        mass: STAR_MASS,
         elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
     };
     let mut bodies = vec![star];
@@ -302,7 +322,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     // two_body_contract_fixture opening.
     let m0_home = bodies[1].elements.m0;
     let a_home = ORBIT_AU[0];
-    let mu = G_CANONICAL * (1.0 + BODY_MASS);
+    let mu = G_CANONICAL * (STAR_MASS + BODY_MASS);
     let v_circ = (mu / a_home).sqrt();
     let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
     let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
@@ -356,7 +376,8 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     RunConfig {
         master_seed: seed,
         // dt 0.25: the proven economy-fixture timestep; see the doc above for
-        // why dt=1.0 is rejected by the anti-tunnel guard with this craft spec.
+        // why the plan's dt=1.0 is rejected by the anti-tunnel guard with
+        // this craft spec.
         dt: Dt::new(0.25),
         softening: 1.0e-4,
         substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
@@ -402,6 +423,12 @@ pub struct JumpgateEnv {
     episode_counter: u64,   // total auto-resets since the last reset()
     // --- trader control-mode state (strategic Rung 1) ---
     trader: TraderCfg, // macro-step horizon
+    /// Slot → contract-id mapping captured at obs-write time
+    /// (`num_envs × TRADER_BOARD_SLOTS`; `None` = empty slot). The action
+    /// decode targets the SAME board snapshot the agent observed.
+    board_ids: Vec<Option<ContractId>>,
+    /// Per-env credit snapshot at the last decision point (reward = Δ).
+    prev_credits: Vec<i64>,
 }
 
 /// Write the 10-dim thrust-mode obs for one craft (static target v1:
@@ -453,6 +480,8 @@ impl JumpgateEnv {
             master_seed: 0,
             episode_counter: 0,
             trader: TraderCfg::default(),
+            board_ids: vec![None; num_envs * TRADER_BOARD_SLOTS],
+            prev_credits: vec![0; num_envs],
         }
     }
 
@@ -594,6 +623,14 @@ impl JumpgateEnv {
         let out = out_obs.as_slice_mut().expect("out_obs must be contiguous");
         self.master_seed = seed;
         self.episode_counter = 0;
+        if self.control_mode == 2 {
+            // Trader mode: the world is rebuilt from the SEED-derived template
+            // (geometry varies per seed), not from self.template.
+            for env in 0..self.num_envs {
+                self.reset_trader_episode(env, seed, out);
+            }
+            return;
+        }
         for env in 0..self.num_envs {
             let mut cfg = self.template.clone();
             cfg.master_seed = seed.wrapping_add(env as u64);
@@ -648,6 +685,10 @@ impl JumpgateEnv {
 
         if self.control_mode == 1 {
             self.step_thrust(act, obs, rew, term, trunc);
+            return;
+        }
+        if self.control_mode == 2 {
+            self.step_trader(act, obs, rew, term, trunc);
             return;
         }
 
@@ -829,6 +870,156 @@ impl JumpgateEnv {
             }
         }
     }
+
+    // === Trader mode (strategic Rung 1): semi-MDP macro-step ===
+    //
+    // One step() = one strategic DECISION, not one tick. Trader mode drives
+    // craft 0 of each env (one agent craft, spec §6); buffers are indexed per
+    // ENV (obs `env*TRADER_OBS_DIM`, act/rew/flags `env`).
+
+    /// (Re)start a trader episode for `env`: rebuild the world from the
+    /// seed-derived scenario template (geometry varies per seed), zero the
+    /// episode clock and credit snapshot, then write the first decision
+    /// point's obs (the craft starts idle with a seeded board, so the first
+    /// decision is immediate at tick 0).
+    fn reset_trader_episode(&mut self, env: usize, seed: u64, out: &mut [f32]) {
+        let cfg = trader_config_template(seed.wrapping_add(env as u64), self.num_craft);
+        let (world, _hash) = World::reset(cfg).expect("resolvable trader cfg");
+        self.worlds[env] = world;
+        self.ticks_in_episode[env] = 0;
+        let craft = self.worlds[env].craft_ids()[0];
+        self.prev_credits[env] = self.worlds[env].craft_credits(craft).unwrap_or(0);
+        self.write_trader_obs(env, out);
+    }
+
+    /// Rebuild the board snapshot (first `TRADER_BOARD_SLOTS` rows of
+    /// `offered_contracts`, dense row order) into `board_ids`, then write the
+    /// 20-dim obs for `env` into `out[env*obs_dim ..]`. Station positions are
+    /// sampled at the CURRENT tick (orbits move).
+    fn write_trader_obs(&mut self, env: usize, out: &mut [f32]) {
+        let world = &self.worlds[env];
+        let craft = world.craft_ids()[0];
+        let craft_pos = world.craft_pos(craft).unwrap_or(Vec3::ZERO);
+
+        let offered = world.offered_contracts();
+        let mut rows: Vec<(f64, f64, f64)> = Vec::with_capacity(TRADER_BOARD_SLOTS);
+        for slot in 0..TRADER_BOARD_SLOTS {
+            let idx = env * TRADER_BOARD_SLOTS + slot;
+            match offered.get(slot) {
+                Some(&(cid, reward_micros, from, to)) => {
+                    self.board_ids[idx] = Some(cid);
+                    let from_pos = world.station_pos(from).unwrap_or(craft_pos);
+                    let to_pos = world.station_pos(to).unwrap_or(from_pos);
+                    rows.push((
+                        reward_micros as f64,
+                        from_pos.sub(craft_pos).length(),
+                        to_pos.sub(from_pos).length(),
+                    ));
+                }
+                None => self.board_ids[idx] = None,
+            }
+        }
+
+        let fuel = world.craft_fuel(craft).unwrap_or(0.0);
+        let cap = world.craft_fuel_capacity(craft).unwrap_or(1.0);
+        let fuel_frac = if cap > 0.0 { (fuel / cap) as f32 } else { 0.0 };
+        let credits = world.craft_credits(craft).unwrap_or(0) as f64;
+        let busy = !world.craft_is_idle(craft).unwrap_or(false);
+        let horizon = self.trader.horizon.max(1);
+        let elapsed = self.ticks_in_episode[env].min(horizon);
+        let time_remaining_frac = ((horizon - elapsed) as f64 / horizon as f64) as f32;
+
+        let obs_base = env * self.obs_dim;
+        write_obs_trader(
+            &rows,
+            fuel_frac,
+            credits,
+            busy,
+            time_remaining_frac,
+            &mut out[obs_base..obs_base + self.obs_dim],
+        );
+    }
+
+    /// Trader-mode macro-step. Decode the f32 action index (0 = wait,
+    /// j = accept board slot j-1), then advance world ticks until the next
+    /// decision point:
+    ///   - accept path: until the craft is idle again (delivered / failed /
+    ///     no-op accept of a stale-empty slot ≡ a 1-tick wait) or horizon;
+    ///   - wait path: exactly `TRADER_WAIT_TICKS` ticks (or horizon).
+    ///
+    /// Reward = Δ craft credits over the macro-step, in credits (micros/1e6).
+    /// `terminated` is always false (continuing task); `truncated` at the
+    /// horizon, then AUTO-RESET with the thrust-mode derived-seed scheme.
+    fn step_trader(
+        &mut self,
+        act: &[f32],
+        obs: &mut [f32],
+        rew: &mut [f32],
+        term: &mut [bool],
+        trunc: &mut [bool],
+    ) {
+        for env in 0..self.num_envs {
+            let craft = self.worlds[env].craft_ids()[0];
+            let a_base = env * self.action_dim;
+            let choice = (act[a_base] as f64)
+                .round()
+                .clamp(0.0, TRADER_BOARD_SLOTS as f64) as usize;
+            let accept_path = choice >= 1;
+
+            let mut cmds: Vec<Command> = Vec::new();
+            if accept_path
+                && let Some(cid) = self.board_ids[env * TRADER_BOARD_SLOTS + (choice - 1)]
+            {
+                cmds.push(Command {
+                    target: Target::Entity(EntityRef::Craft(craft)),
+                    kind: CommandKind::AcceptContract { contract: cid },
+                });
+            }
+
+            let credits_before = self.prev_credits[env];
+            let mut truncated = false;
+            let mut ticks_advanced: u64 = 0;
+            loop {
+                // Commands only on the FIRST tick of the macro-step.
+                self.worlds[env].step(&mut cmds);
+                cmds.clear();
+                self.ticks_in_episode[env] += 1;
+                ticks_advanced += 1;
+                if self.ticks_in_episode[env] >= self.trader.horizon {
+                    truncated = true;
+                    break;
+                }
+                let idle = self.worlds[env].craft_is_idle(craft).unwrap_or(true);
+                if accept_path {
+                    // Accept ran until the trip resolved (idle again) — or the
+                    // accept was a no-op (empty/stale slot, unfunded revert)
+                    // and the craft never left idle: a 1-tick wait.
+                    if idle {
+                        break;
+                    }
+                } else if ticks_advanced >= TRADER_WAIT_TICKS {
+                    break;
+                }
+            }
+
+            let credits_now = self.worlds[env].craft_credits(craft).unwrap_or(0);
+            rew[env] = ((credits_now - credits_before) as f64 / 1.0e6) as f32;
+            term[env] = false; // continuing task: never terminated
+            trunc[env] = truncated;
+            self.prev_credits[env] = credits_now;
+            self.write_trader_obs(env, obs);
+
+            if truncated {
+                // Auto-reset (SB3 VecEnv contract), same derived-seed scheme
+                // as thrust mode; the obs written above is overwritten with
+                // the NEW episode's initial obs while the flags still report
+                // the old episode's end.
+                self.episode_counter += 1;
+                let fresh_seed = self.master_seed ^ self.episode_counter;
+                self.reset_trader_episode(env, fresh_seed, obs);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -970,6 +1161,147 @@ mod tests {
             world.step(&mut empty);
         }
         assert_eq!(world.craft_is_idle(craft), Some(true), "no scripted acceptance");
+    }
+
+    // --- trader macro-step tests (no Python needed) ---
+
+    /// Build a trader-mode env the way `configure(mode=2)` + `reset(seed)`
+    /// would, but driveable from Rust (the pymethods need numpy buffers).
+    fn trader_env(num_envs: usize, horizon: u64) -> JumpgateEnv {
+        let mut env = JumpgateEnv::new(num_envs, 1);
+        env.control_mode = 2;
+        env.trader = TraderCfg { horizon };
+        env.obs_dim = TRADER_OBS_DIM;
+        env.action_dim = TRADER_ACTION_DIM;
+        env
+    }
+
+    fn trader_reset(env: &mut JumpgateEnv, seed: u64, out: &mut [f32]) {
+        env.master_seed = seed;
+        env.episode_counter = 0;
+        for e in 0..env.num_envs {
+            env.reset_trader_episode(e, seed, out);
+        }
+    }
+
+    #[test]
+    fn trader_macro_step_accept_pays_delta_credits() {
+        // The end-to-end proof IN RUST: accept the co-located route's slot,
+        // macro-step until the trip resolves, and the escrow settlement shows
+        // up as a positive Δ-credits reward.
+        let mut env = trader_env(1, 2000);
+        let mut obs = vec![0.0f32; TRADER_OBS_DIM];
+        trader_reset(&mut env, 7, &mut obs);
+
+        // Craft spawns co-located with station 0's body; board row 0 is the
+        // seeded route 0->1 (reward 1.0 cr), so slot 0's pickup distance ~ 0.
+        assert_eq!(obs[0], 1.0, "slot 0 present");
+        assert!(obs[2] < 1e-6, "slot-0 pickup is co-located: {}", obs[2]);
+        assert_eq!(obs[18], 0.0, "craft idle at the decision point");
+
+        let act = [1.0f32]; // accept slot 0
+        let mut rew = [0.0f32];
+        let mut term = [false];
+        let mut trunc = [false];
+        env.step_trader(&act, &mut obs, &mut rew, &mut term, &mut trunc);
+
+        assert!(
+            rew[0] > 0.0,
+            "accept macro-step must pay the delivery (rew={}, ticks={})",
+            rew[0],
+            env.ticks_in_episode[0]
+        );
+        assert!((rew[0] - 1.0).abs() < 1e-6, "route 0->1 pays 1.0 cr: {}", rew[0]);
+        assert!(!term[0], "terminated is always false");
+        assert!(!trunc[0], "trip resolved inside the horizon");
+        let craft = env.worlds[0].craft_ids()[0];
+        assert_eq!(env.worlds[0].craft_is_idle(craft), Some(true), "idle again");
+        assert_eq!(obs[18], 0.0, "next decision point: not busy");
+        // Credits now visible in the own block (1 cr / 30 cr scale).
+        assert!((obs[17] - (1.0e6 / crate::obs::TRADER_CREDITS_SCALE) as f32).abs() < 1e-9);
+    }
+
+    #[test]
+    fn trader_wait_advances_eight_ticks() {
+        let mut env = trader_env(1, 2000);
+        let mut obs = vec![0.0f32; TRADER_OBS_DIM];
+        trader_reset(&mut env, 7, &mut obs);
+
+        let act = [0.0f32]; // wait
+        let mut rew = [0.0f32];
+        let mut term = [false];
+        let mut trunc = [false];
+        env.step_trader(&act, &mut obs, &mut rew, &mut term, &mut trunc);
+
+        assert_eq!(env.ticks_in_episode[0], TRADER_WAIT_TICKS);
+        assert_eq!(env.worlds[0].tick().0, TRADER_WAIT_TICKS);
+        assert_eq!(rew[0], 0.0, "waiting earns nothing");
+        assert!(!term[0] && !trunc[0]);
+        // time_remaining_frac dropped by exactly 8/2000.
+        let expect = ((2000 - TRADER_WAIT_TICKS) as f64 / 2000.0) as f32;
+        assert_eq!(obs[19], expect);
+    }
+
+    #[test]
+    fn trader_accept_of_empty_slot_is_a_one_tick_wait() {
+        let mut env = trader_env(1, 2000);
+        let mut obs = vec![0.0f32; TRADER_OBS_DIM];
+        trader_reset(&mut env, 7, &mut obs);
+        // Force slot 3 empty (only 4 seeded offers exist, so make one vanish
+        // from the snapshot): clear the captured id directly.
+        env.board_ids[3] = None;
+
+        let act = [4.0f32]; // accept the (now empty) slot 3
+        let mut rew = [0.0f32];
+        let mut term = [false];
+        let mut trunc = [false];
+        env.step_trader(&act, &mut obs, &mut rew, &mut term, &mut trunc);
+
+        assert_eq!(env.ticks_in_episode[0], 1, "no-op accept ≡ 1-tick wait");
+        assert_eq!(rew[0], 0.0);
+        let craft = env.worlds[0].craft_ids()[0];
+        assert_eq!(env.worlds[0].craft_is_idle(craft), Some(true));
+    }
+
+    #[test]
+    fn trader_truncates_at_horizon_and_autoresets() {
+        let mut env = trader_env(1, 20);
+        let mut obs = vec![0.0f32; TRADER_OBS_DIM];
+        trader_reset(&mut env, 7, &mut obs);
+
+        let act = [0.0f32];
+        let mut rew = [0.0f32];
+        let mut term = [false];
+        let mut trunc = [false];
+        // 8 + 8 + 4(clipped at horizon 20) ticks -> truncation on step 3.
+        for step in 0..3 {
+            env.step_trader(&act, &mut obs, &mut rew, &mut term, &mut trunc);
+            assert!(!term[0], "never terminated (step {step})");
+            if step < 2 {
+                assert!(!trunc[0], "not yet truncated (step {step})");
+            }
+        }
+        assert!(trunc[0], "horizon hit truncates");
+        // Auto-reset happened: fresh episode counter, fresh clock, fresh obs
+        // (the new episode's first decision point: full time remaining).
+        assert_eq!(env.episode_counter, 1);
+        assert_eq!(env.ticks_in_episode[0], 0);
+        assert_eq!(obs[19], 1.0, "new episode obs: time_remaining_frac == 1");
+        assert_eq!(obs[18], 0.0, "new episode obs: idle");
+        assert_eq!(obs[0], 1.0, "new episode obs: a fresh seeded board");
+    }
+
+    #[test]
+    fn trader_reset_is_seed_deterministic_and_seed_varied() {
+        let mut env = trader_env(1, 2000);
+        let mut a = vec![0.0f32; TRADER_OBS_DIM];
+        let mut b = vec![0.0f32; TRADER_OBS_DIM];
+        let mut c = vec![0.0f32; TRADER_OBS_DIM];
+        trader_reset(&mut env, 11, &mut a);
+        trader_reset(&mut env, 11, &mut b);
+        trader_reset(&mut env, 12, &mut c);
+        assert_eq!(a, b, "same seed -> identical first obs");
+        assert_ne!(a, c, "different seed -> different geometry/obs");
     }
 
     #[test]
