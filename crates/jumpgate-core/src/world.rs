@@ -428,7 +428,9 @@ impl World {
         // (1c) economy contract stage: drive the accept/escrow/load/dispatch
         //      lifecycle for haulers bound by this tick's ingest. Disjoint &mut
         //      field borrows + read-only bodies/eph (mirrors run_producers); `next`
-        //      is the resolution tick (co-location is checked against body_pos(next)).
+        //      is the resolution/event tick. Runs PRE-physics: ships.pos is still the
+        //      tick-`cur` state, so try_load's co-location gate samples body_pos at
+        //      `next - 1 == cur` — the same frame (see try_load).
         crate::economy::resolve_contracts(
             &mut self.contracts,
             &mut self.corporations,
@@ -1369,6 +1371,86 @@ mod tests {
             reward_micros: 1_000_000,
         }];
         cfg
+    }
+
+    /// A FAST-ORBIT variant of `two_body_contract_fixture`: the contract ORIGIN
+    /// station rides body 1 on a tight a = 0.05 AU circular orbit around the
+    /// full-mass (1 M_sun) central star, so the pickup body moves
+    /// v·dt ≈ 0.077 AU/day · 0.25 day ≈ 0.019 AU ≈ 190× ARRIVAL_RADIUS per
+    /// tick. The craft spawns EXACTLY co-located and co-orbiting with body 1
+    /// (for e=0/i=0 conics the ephemeris state at m0=0 is pos = (a, 0, 0),
+    /// vel = v_circ·(0, 1, 0) with v_circ = sqrt(mu/a), mu = G·(M_star+m_body)).
+    /// Regression fixture for the try_load frame fix: `resolve_contracts` runs
+    /// PRE-physics, so `ships.pos` is the tick t-1 state and the co-location
+    /// gate must sample `body_pos` at the SAME tick — sampling at t put the
+    /// body ~190 arrival-radii ahead and the load starved forever.
+    fn fast_orbit_pickup_fixture() -> RunConfig {
+        use crate::config::{ContractInit, CorporationInit, StationInit};
+        use crate::economy::Resource;
+        let mut cfg = one_body_one_thrusting_craft();
+        // Body 1: the fast-orbit pickup host (negligible-mass marker body).
+        let a = 0.05;
+        let body_mass = 1e-12;
+        cfg.bodies.push(BodyInit {
+            mass: body_mass,
+            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+        });
+        // Craft co-located + co-orbiting with body 1 at tick 0.
+        let v_circ = (crate::G_CANONICAL * (1.0 + body_mass) / a).sqrt();
+        cfg.craft[0].pos = Vec3::new(a, 0.0, 0.0);
+        cfg.craft[0].vel = Vec3::new(0.0, v_circ, 0.0);
+        cfg.stations = vec![
+            // Station A (origin) on the FAST body: 10 Fuel covers the 5-unit load.
+            StationInit { body_index: 1, initial_stock: [0, 10], initial_price_micros: [0, 0] },
+            // Station B (destination) on the central star.
+            StationInit { body_index: 0, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+        ];
+        cfg.corporations =
+            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
+        cfg.contracts = vec![ContractInit {
+            corp_index: 0,
+            resource: Resource::Fuel,
+            qty: 5,
+            from_station_index: 0,
+            to_station_index: 1,
+            reward_micros: 1_000_000,
+        }];
+        cfg
+    }
+
+    #[test]
+    fn try_load_compares_craft_and_body_in_the_same_frame() {
+        use crate::economy::{ContractStatus, Resource};
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(fast_orbit_pickup_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let contract = world
+            .contracts
+            .ids
+            .id_at(0)
+            .map(|(slot, generation)| crate::ids::ContractId { slot, generation })
+            .unwrap();
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        // The frame-correct gate loads same-tick: ships.pos (the tick-0
+        // pre-physics state) vs body_pos(0) is an EXACT co-location. The
+        // frame-mixed gate (body_pos(1)) saw the body ~190x ARRIVAL_RADIUS
+        // ahead and left the contract Accepted, chasing a body it can never
+        // catch (orbital speed 0.077 AU/day vs craft a_max·day ~ 1e-3).
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::CargoLoaded,
+            "co-located fast-orbit pickup loads on step 1"
+        );
+        let crow = world.ships.index_of(craft).unwrap();
+        assert_eq!(
+            world.ships.cargo[crow],
+            Some((Resource::Fuel, 5)),
+            "cargo transferred from the fast-orbit station"
+        );
     }
 
     /// A STARVED variant of `two_body_contract_fixture`: the craft can still accept

@@ -629,8 +629,16 @@ fn try_load(
     let Some(from_body_row) = bodies.ids.dense_index(from_body.slot, from_body.generation) else {
         return;
     };
-    // Co-location: the hauler must be within ARRIVAL_RADIUS of the origin body.
-    let body_pos = eph.body_pos(bodies.eph_index[from_body_row], tick);
+    // Co-location: the hauler must be within ARRIVAL_RADIUS of the origin body,
+    // compared IN THE CRAFT'S FRAME: resolve_contracts runs at stage (1c), BEFORE
+    // physics, so `ships.pos` is still the tick-(`tick`-1) state — the same frame
+    // the autopilot resolves destinations in (`resolve_dest_pos(dest, cur)`).
+    // Comparing against body_pos(`tick`) mixed two time points: invisible for the
+    // near-stationary fixture bodies (motion/tick ≪ ARRIVAL_RADIUS), but a body on
+    // a 1-M_sun orbit moves ~73x ARRIVAL_RADIUS per tick (0.029 AU/day × 0.25 day),
+    // so a hauler PERFECTLY tracking its pickup body could never pass the gate and
+    // the load starved forever (found by the trader-rung scenario).
+    let body_pos = eph.body_pos(bodies.eph_index[from_body_row], Tick(tick.0.saturating_sub(1)));
     if ships.pos[crow].sub(body_pos).length() > crate::autopilot::ARRIVAL_RADIUS {
         // Not at the pickup yet: WALK TO THE FOOD. Dispatch the hauler to Seek the
         // origin body so a hauler that just delivered elsewhere (now Idle but bound to
