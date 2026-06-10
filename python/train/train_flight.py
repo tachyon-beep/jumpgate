@@ -106,12 +106,16 @@ class CurriculumCallback(BaseCallback):
                 continue
             arrived = bool(info.get("is_success", info.get("terminated", False)))
             # Replay-mix episodes from EARLIER stages rehearse old skills but
-            # must not count toward promotion (they are easier).
-            if info.get("stage_idx", self.cur.idx) != self.cur.idx:
+            # must not count toward promotion (they are easier). Log them
+            # tagged so retention is visible in the CSV.
+            ep_stage = info.get("stage_idx", self.cur.idx)
+            if ep_stage != self.cur.idx:
+                self.rows.append([self.num_timesteps, f"rehearsal:{ep_stage}",
+                                  "", f"{ep['r']:.3f}", int(arrived)])
                 continue
             promoted = self.cur.record(arrived)
             rate = self.cur.rolling_rate()
-            self.rows.append([self.num_timesteps, self.cur.stage.name, f"{rate:.3f}", f"{ep['r']:.3f}"])
+            self.rows.append([self.num_timesteps, self.cur.stage.name, f"{rate:.3f}", f"{ep['r']:.3f}", int(arrived)])
             if promoted:
                 print(f"PROMOTED -> {self.cur.stage.name} at {self.num_timesteps} steps")
                 self.model.save(f"runs/flight_{self.cur.stage.name}_entry")
@@ -138,7 +142,7 @@ class CurriculumCallback(BaseCallback):
     def _on_training_end(self):
         self.log_path.parent.mkdir(exist_ok=True)
         with open(self.log_path, "w", newline="") as f:
-            csv.writer(f).writerows([["step", "stage", "arrival_rate", "ep_return"], *self.rows])
+            csv.writer(f).writerows([["step", "stage", "arrival_rate", "ep_return", "arrived"], *self.rows])
 
 
 def main():
@@ -146,6 +150,7 @@ def main():
     p.add_argument("--steps", type=int, default=2_000_000)
     p.add_argument("--n-envs", type=int, default=8)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--log-path", default="runs/flight_log.csv")
     args = p.parse_args()
 
     cur = Curriculum()
@@ -165,7 +170,7 @@ def main():
     model = PPO("MlpPolicy", venv, gamma=GAMMA, n_steps=2048, batch_size=256,
                 learning_rate=lambda pr: 3e-5 + pr * (3e-4 - 3e-5),
                 ent_coef=0.003, seed=args.seed, verbose=1)
-    model.learn(total_timesteps=args.steps, callback=CurriculumCallback(cur, "runs/flight_log.csv"))
+    model.learn(total_timesteps=args.steps, callback=CurriculumCallback(cur, args.log_path))
     model.save("runs/flight_final")
     venv.save("runs/flight_vecnorm.pkl")
 

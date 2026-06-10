@@ -9,7 +9,7 @@ def _make(**kw):
 
 def test_thrust_mode_spaces():
     env = _make()
-    assert env.observation_space.shape == (10,)
+    assert env.observation_space.shape == (11,)
     assert env.action_space.shape == (3,)
 
 def test_targets_vary_by_seed_and_obs_sees_them():

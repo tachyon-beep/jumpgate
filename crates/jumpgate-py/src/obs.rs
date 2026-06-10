@@ -99,7 +99,7 @@ pub fn write_obs_parts(
 /// phase lands, only the unit tests below exercise it (same pattern as
 /// `SCHEMA_VERSION` above).
 #[allow(dead_code)]
-pub const THRUST_OBS_DIM: usize = 10;
+pub const THRUST_OBS_DIM: usize = 11;
 /// Velocity normalizer (AU/day): ~circular-orbit speed at 1 AU, so orbital
 /// velocities land O(1).
 #[allow(dead_code)]
@@ -114,6 +114,12 @@ pub fn write_obs_thrust_mode(
     dist_scale: f64,
     out: &mut [f32],
 ) {
+    // Scale feature (obs[10]): WITHOUT it, per-stage rel-pos normalization
+    // makes curriculum stages ALIASED — a hop and a sprint produce identical
+    // observations at episode start while demanding different control
+    // regimes, so one policy cannot serve mixed stages (measured: replay-mix
+    // floored sprint acquisition in two runs). ln(scale/1e-3)/ln(1e3) maps
+    // the curriculum band 0.001..1.0 AU onto ~0..1.
     debug_assert_eq!(out.len(), THRUST_OBS_DIM);
     debug_assert!(dist_scale > 0.0);
     out[0] = rel_to_f32(own_vel.x / VEL_SCALE);
@@ -126,6 +132,8 @@ pub fn write_obs_thrust_mode(
     out[7] = rel_to_f32(target_rel_vel.x / VEL_SCALE);
     out[8] = rel_to_f32(target_rel_vel.y / VEL_SCALE);
     out[9] = rel_to_f32(target_rel_vel.z / VEL_SCALE);
+    let scale_feat = ((dist_scale / 1.0e-3).ln() / 1.0e3_f64.ln()).clamp(0.0, 1.0);
+    out[10] = scale_feat as f32;
 }
 
 use jumpgate_core::ids::CraftId;
@@ -221,6 +229,8 @@ mod tests {
         assert_eq!(out[3], 0.5); // fuel frac raw
         assert_eq!(out[4], (0.2f64 / 0.4) as f32); // rel pos / dist_scale
         assert_eq!(out[7], (-0.01f64 / VEL_SCALE) as f32); // rel vel scaled
+        let expect = ((0.4f64 / 1.0e-3).ln() / 1.0e3_f64.ln()).clamp(0.0, 1.0) as f32;
+        assert_eq!(out[10], expect); // scale feature
     }
 
     #[test]
