@@ -350,7 +350,20 @@ impl World {
                     continue;
                 }
                 let u = rng.stream(crate::rng::RngStream::Piracy).next_u64();
-                let srow = (u % station_ids.len() as u64) as usize;
+                // The haven station (hideout body) is excluded from the
+                // scatter — a pirate does not lurk where it fences (the
+                // seed-23 ghetto lesson; see pirate.rs::relocate_lurk_target).
+                let haven: Option<usize> = bodies
+                    .ids
+                    .id_at(cfg.trophic.hideout_body_index as usize)
+                    .map(|(slot, generation)| crate::ids::BodyId { slot, generation })
+                    .and_then(|hb| (0..station_ids.len()).find(|&s| stations.body[s] == hb));
+                let candidates: Vec<usize> =
+                    (0..station_ids.len()).filter(|&s| Some(s) != haven).collect();
+                let Some(&srow) = candidates.get((u % candidates.len().max(1) as u64) as usize)
+                else {
+                    continue; // haven-only world: nowhere huntable to scatter
+                };
                 let body = stations.body[srow];
                 let eff = effective_params(&ships.spec[row], &ships.mods[row]);
                 let dv = crate::math::tsiolkovsky_dv(

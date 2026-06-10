@@ -346,26 +346,27 @@ pub fn relocate_lurk_target(
     anchor: Vec3,
     station_pos: &[Vec3],
     max_reach_au: f64,
+    exclude: Option<usize>,
     u: u64,
 ) -> Option<usize> {
-    if station_pos.is_empty() {
-        return None;
-    }
+    let huntable = |s: &usize| Some(*s) != exclude;
     let in_reach: Vec<usize> = (0..station_pos.len())
-        .filter(|&s| station_pos[s].sub(anchor).length() <= max_reach_au)
+        .filter(|&s| huntable(&s) && station_pos[s].sub(anchor).length() <= max_reach_au)
         .collect();
     if !in_reach.is_empty() {
         return Some(in_reach[(u % in_reach.len() as u64) as usize]);
     }
-    // None in reach: the nearest station, deterministically (strict `<` keeps
-    // the lowest dense row on ties).
-    let mut best = 0usize;
-    for s in 1..station_pos.len() {
-        if station_pos[s].sub(anchor).length() < station_pos[best].sub(anchor).length() {
-            best = s;
-        }
+    // None huntable in reach: a MAROONED pirate (the hideout-ghetto lesson,
+    // seed-23 console session 2026-06-11) breaks out with ONE committal flight
+    // to a uniform draw over ALL huntable stations — the lair round-trip is
+    // already long-range travel, so bounding the return leg by hop-reach is
+    // what created the ghetto. Hunting hops stay reach-bounded; only the
+    // breakout is unbounded.
+    let all: Vec<usize> = (0..station_pos.len()).filter(huntable).collect();
+    if all.is_empty() {
+        return None;
     }
-    Some(best)
+    Some(all[(u % all.len() as u64) as usize])
 }
 
 /// Issue a fuel-derived-budget Seek of `body` (the ingest/try_load dv rule:
@@ -426,6 +427,14 @@ pub fn run_pirate_brains(
                 .unwrap_or(Vec3::ZERO)
         })
         .collect();
+    // The haven station (on the hideout body) is excluded from every lurk
+    // draw: a pirate does not rob where it fences (and a haven lurk is the
+    // seed-23 ghetto's other half — a starving pirate camped at its own lair).
+    let haven_station: Option<usize> = bodies
+        .ids
+        .id_at(trophic.hideout_body_index as usize)
+        .map(|(slot, generation)| BodyId { slot, generation })
+        .and_then(|hb| (0..stations.ids.len()).find(|&s| stations.body[s] == hb));
     for row in 0..ships.ids.len() {
         if ships.role[row] != CraftRole::Pirate {
             continue;
@@ -473,6 +482,7 @@ pub fn run_pirate_brains(
                     ships.pos[row],
                     &station_pos,
                     trophic.pirate_max_reach_au,
+                    haven_station,
                     u,
                 ) {
                     Some(s) => s,
@@ -480,8 +490,19 @@ pub fn run_pirate_brains(
                 }
             }
         };
-        // Staggered relocation: sticky (stay_milli), reach-bounded, uniform.
-        if trophic.relocate_period > 0
+        // Starvation-triggered relocation (owner GO 2026-06-11, console
+        // session 1): a FED pirate (food >= grubstake) camps — locality is
+        // preserved exactly where predation works; a HUNGRY one roams on its
+        // stagger slot — coverage exactly where it is failing. The fresh
+        // grubstake is the restlessness reference (deliberately not a new
+        // config knob: no taste scalar, no config-golden churn). Within the
+        // hungry branch relocation stays sticky (stay_milli), reach-bounded,
+        // uniform, traffic-blind.
+        let hungry = ships.pirate[row]
+            .as_ref()
+            .is_some_and(|p| p.food_micros < trophic.grubstake_micros);
+        if hungry
+            && trophic.relocate_period > 0
             && tick.0 % trophic.relocate_period == (row as u64) % trophic.relocate_period
         {
             let stay = (rng.stream(RngStream::Piracy).next_u64() % 1000) as u32;
@@ -491,6 +512,7 @@ pub fn run_pirate_brains(
                     station_pos[lurk],
                     &station_pos,
                     trophic.pirate_max_reach_au,
+                    haven_station,
                     u,
                 ) {
                     lurk = s;
@@ -1299,7 +1321,8 @@ mod tests {
         let mut hits = [0u32; 6];
         for _ in 0..64 {
             let u = rng.stream(RngStream::Piracy).next_u64();
-            let s = relocate_lurk_target(anchor, &station_pos, reach, u).expect("stations exist");
+            let s = relocate_lurk_target(anchor, &station_pos, reach, None, u)
+                .expect("stations exist");
             assert!(in_reach.contains(&s), "target {s} is beyond reach");
             hits[s] += 1;
         }
@@ -1310,20 +1333,27 @@ mod tests {
         // evenly (16 each) — no weighting of any kind.
         let mut exact = [0u32; 6];
         for u in 0..64u64 {
-            exact[relocate_lurk_target(anchor, &station_pos, reach, u).unwrap()] += 1;
+            exact[relocate_lurk_target(anchor, &station_pos, reach, None, u).unwrap()] += 1;
         }
         for &s in &in_reach {
             assert_eq!(exact[s], 16, "u %% n_candidates must map uniformly");
         }
-        // None in reach -> the NEAREST station, deterministically.
+        // None in reach -> the marooned BREAKOUT: one committal flight to a
+        // uniform draw over ALL huntable stations (u % 6 = 1 here), never the
+        // nearest-only ghetto (seed-23 lesson).
         let far = Vec3::new(50.0, 0.0, 0.0);
         assert_eq!(
-            relocate_lurk_target(far, &station_pos, reach, 7).unwrap(),
-            2,
-            "no candidate in reach falls back to the nearest station"
+            relocate_lurk_target(far, &station_pos, reach, None, 7).unwrap(),
+            1,
+            "marooned breakout draws uniformly over all huntable stations"
         );
+        // The haven is never huntable: in-reach (anchor covers 0,1,3,5 minus
+        // excluded 1 -> [0,3,5], u=4 -> 4 % 3 = 1 -> station 3) and breakout
+        // (far, exclude 2 -> [0,1,3,4,5], 7 % 5 = 2 -> station 3) both skip it.
+        assert_eq!(relocate_lurk_target(anchor, &station_pos, reach, Some(1), 4), Some(3));
+        assert_eq!(relocate_lurk_target(far, &station_pos, reach, Some(2), 7), Some(3));
         // No stations at all -> None (totality, spec §8).
-        assert_eq!(relocate_lurk_target(anchor, &[], reach, 7), None);
+        assert_eq!(relocate_lurk_target(anchor, &[], reach, None, 7), None);
     }
 
     #[test]
@@ -1388,6 +1418,62 @@ mod tests {
             }
             ref other => panic!("expected Seeking, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn fed_pirate_camps_hungry_pirate_roams() {
+        // Owner GO 2026-06-11 (console session 1): starvation-triggered
+        // relocation — a FED pirate (food >= grubstake) never redraws its
+        // lurk (locality preserved where predation works); a HUNGRY one
+        // roams on its stagger slot (coverage exactly where it is failing).
+        fn lurk_of(world: &World, row: usize) -> Option<BodyId> {
+            match world.ships.nav[row] {
+                NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
+                    Some(b)
+                }
+                _ => None,
+            }
+        }
+        fn cfg() -> RunConfig {
+            let mut cfg = pirate_world_cfg();
+            cfg.contracts = vec![];
+            cfg.craft = vec![pirate_init(Vec3::ZERO)];
+            cfg.trophic.relocate_period = 1; // eligible every tick
+            cfg.trophic.stay_milli = 0; // never sticky: every slot redraws
+            cfg.trophic.upkeep_per_tick = 0; // hold hunger constant
+            cfg.trophic.pirate_max_reach_au = 10.0; // both stations in reach
+            // Out-of-range hideout: no haven exclusion (degrades to skip per
+            // spec §8 totality) — this test isolates the HUNGER gate.
+            cfg.trophic.hideout_body_index = 99;
+            cfg
+        }
+        // FED: the lurk must never change.
+        let c = cfg();
+        let grubstake = c.trophic.grubstake_micros;
+        let (mut world, _) = World::reset(c).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().food_micros = grubstake;
+        world.step(&mut Vec::new());
+        let home = lurk_of(&world, 0).expect("settled on a lurk");
+        for _ in 0..64 {
+            world.step(&mut Vec::new());
+            assert_eq!(lurk_of(&world, 0), Some(home), "a fed pirate camps");
+        }
+        // HUNGRY: the seeded draw changes the lurk within the probe window
+        // (P(no change) = 2^-64 under the uniform 2-station draw;
+        // deterministic for this seed).
+        let (mut world, _) = World::reset(cfg()).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().food_micros = 1;
+        world.step(&mut Vec::new());
+        let start = lurk_of(&world, 0).expect("settled on a lurk");
+        let mut moved = false;
+        for _ in 0..64 {
+            world.step(&mut Vec::new());
+            if lurk_of(&world, 0) != Some(start) {
+                moved = true;
+                break;
+            }
+        }
+        assert!(moved, "a hungry pirate roams (relocation re-enabled by hunger)");
     }
 
     #[test]
