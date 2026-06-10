@@ -325,8 +325,14 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         // Task-1/6: read the Yard corp treasury (ShipyardCfg.corp_index) here.
         yard_treasury_micros: 0,
         per_craft_credits: world.ships.credits_micros.clone(),
-        // Task-4: the 3b2 emitters push trip-phase milli into the window accumulator.
-        engagement_phase_milli: Vec::new(),
+        // The stage-3b2 emission sites push one kinematic snapshot per
+        // engagement (pirate.rs); this window reads the trip-phase channel.
+        engagement_phase_milli: world
+            .engagement_diag
+            .iter()
+            .filter(|s| s.tick.0 > window_start.0 && s.tick.0 <= tick.0)
+            .map(|s| s.phase_milli)
+            .collect(),
     }
 }
 

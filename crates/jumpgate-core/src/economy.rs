@@ -919,30 +919,85 @@ pub fn resolve_failures(
         if !failed_craft.contains(&hauler) {
             continue;
         }
-        // Refund escrow -> owning corp treasury (credit TRANSFER; identity invariant).
-        // A stale corp row -> skip the refund leg but still fail the contract; the
-        // escrow stays put so Σtreasury+Σcredits+Σescrow remains invariant.
-        let corp = contracts.corp[kidx];
-        if let Some(corp_row) = corporations.ids.dense_index(corp.slot, corp.generation) {
-            corporations.treasury_micros[corp_row] += contracts.escrow_micros[kidx];
-            contracts.escrow_micros[kidx] = 0;
-        }
-        // Cargo loss: account the lost cargo as a SINK leg, then clear it.
-        if let Some(crow) = ships.index_of(hauler) {
-            if let Some((resource, qty)) = ships.cargo[crow] {
-                counters.consumed[resource.index()] += qty as i64;
-                ships.cargo[crow] = None;
-            }
-            ships.contract[crow] = None;
-            ships.role[crow] = CraftRole::Idle;
-        }
-        // Terminal status. No dedicated failure event YET: the FuelEmpty event
-        // already fired this tick and carries the cause. (The pirates rung
-        // retired the old exhaustive-match concern — EventKind variants are
-        // additive and jumpgate-py matches non-exhaustively; Task 4 generalizes
-        // this settle body to take a cause when `Robbed` becomes a second one.)
-        contracts.status[kidx] = ContractStatus::Failed;
+        // No dedicated failure event: the FuelEmpty event already fired this
+        // tick and carries the cause (the robbery path emits `Robbed` at its
+        // own emission site in stage 3b2).
+        settle_contract_failure(
+            contracts,
+            corporations,
+            ships,
+            counters,
+            kidx,
+            FailureCause::FuelEmpty,
+        );
     }
+}
+
+/// Why a contract-failure settlement fired (pirates rung Task 4: the
+/// `resolve_failures` settle body generalized to take a cause). The legs are
+/// cause-INDEPENDENT — the cause names the caller's stage and pins which
+/// source statuses are legal there.
+pub enum FailureCause {
+    /// Propellant exhaustion (stage 3c): only an `InTransit` contract can fail.
+    FuelEmpty,
+    /// Robbery (stage 3b2, spec §3): both escrow-holding laden statuses
+    /// (`CargoLoaded` — the one-tick load window — and `InTransit`) are robbable.
+    Robbed,
+}
+
+/// One contract's failure settlement — the SHARED settle body of stage 3c
+/// (`resolve_failures`, FuelEmpty) and stage 3b2 (the robbery settle, spec §3):
+///
+///   * refund `escrow_micros` -> the owning corp treasury (a credit TRANSFER:
+///     Σtreasury+Σcredits+Σescrow invariant; a stale corp row skips the refund
+///     leg but still fails the contract — the escrow stays put so the identity
+///     holds),
+///   * account the loaded cargo as a SINK leg (`consumed[r] += qty`, the
+///     resource-identity leg) and clear it,
+///   * release the hauler (`contract`/`role` cleared, `Hauler -> Idle` — the
+///     robbed-hauler exit the no-abandonment gap otherwise denies),
+///   * status -> `Failed`.
+///
+/// The ransom leg of a robbery is NOT here — it is pirate-side state, settled
+/// by the 3b2 caller. Saturating arithmetic per the spec §8 totality discipline.
+pub(crate) fn settle_contract_failure(
+    contracts: &mut ContractStore,
+    corporations: &mut CorporationStore,
+    ships: &mut CraftStore,
+    counters: &mut EconCounters,
+    kidx: usize,
+    cause: FailureCause,
+) {
+    debug_assert!(
+        match cause {
+            FailureCause::FuelEmpty => contracts.status[kidx] == ContractStatus::InTransit,
+            FailureCause::Robbed => matches!(
+                contracts.status[kidx],
+                ContractStatus::CargoLoaded | ContractStatus::InTransit
+            ),
+        },
+        "settle_contract_failure: source status inconsistent with the cause"
+    );
+    // Refund escrow -> owning corp treasury (credit TRANSFER; identity invariant).
+    let corp = contracts.corp[kidx];
+    if let Some(corp_row) = corporations.ids.dense_index(corp.slot, corp.generation) {
+        corporations.treasury_micros[corp_row] =
+            corporations.treasury_micros[corp_row].saturating_add(contracts.escrow_micros[kidx]);
+        contracts.escrow_micros[kidx] = 0;
+    }
+    // Cargo loss: account the lost cargo as a SINK leg, then release the hauler.
+    if let Some(hauler) = contracts.hauler[kidx]
+        && let Some(crow) = ships.index_of(hauler)
+    {
+        if let Some((resource, qty)) = ships.cargo[crow] {
+            counters.consumed[resource.index()] =
+                counters.consumed[resource.index()].saturating_add(qty as i64);
+            ships.cargo[crow] = None;
+        }
+        ships.contract[crow] = None;
+        ships.role[crow] = CraftRole::Idle;
+    }
+    contracts.status[kidx] = ContractStatus::Failed;
 }
 
 #[cfg(test)]

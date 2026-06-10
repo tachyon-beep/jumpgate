@@ -47,8 +47,12 @@ pub struct World {
     /// World-level robbery-evidence rings (pub(crate) so the per-tick state
     /// hash folds them directly, like the stores above).
     pub(crate) route_evidence: RouteEvidence,
+    /// Per-engagement kinematic snapshots, pushed by the stage-3b2 emission
+    /// sites and read ONLY by the diagnostics sampler (`sample_window`).
+    /// UNHASHED diagnostics-only state — never an input to any behavior stage
+    /// (see `pirate::EngagementSnapshot`).
+    pub(crate) engagement_diag: Vec<crate::pirate::EngagementSnapshot>,
     eph: Ephemeris,
-    #[allow(dead_code)]
     rng: RngStreams,
     log: ActionLog,
     events: EventStream,
@@ -320,6 +324,7 @@ impl World {
             contracts,
             econ: crate::economy::EconCounters::zero(),
             route_evidence,
+            engagement_diag: Vec::new(),
             eph,
             rng,
             log: ActionLog {
@@ -624,6 +629,54 @@ impl World {
             next,
             &mut self.events,
         );
+
+        // (3b2) encounter stage (pirates rung spec §2): choke-point engagements
+        //       over the POST-physics current-tick state. Stage order is
+        //       load-bearing: AFTER 3b — a same-tick Arrival settles the
+        //       delivery first, so the DESTINATION dock is sanctuary by
+        //       ordering — and BEFORE 3c (extending the proven 3b-before-3c
+        //       precedent). First runtime RngStream::Piracy consumer: draws at
+        //       exactly this stage, dense pirate-row order, one per engagement.
+        // (3b3) pirate population stage (spec §4): upkeep/starvation/heat/decay
+        //       per pirate, dense order — AFTER 3b2 so this tick's robberies
+        //       feed food/notoriety before the lifecycle reads them.
+        //       Both stages share the spec-§8 inert lever (engage_radius 0.0 =
+        //       default = the whole trophic machinery off); the outer guard
+        //       also skips the station-position resolve on inert worlds.
+        if self.config.trophic.engage_radius_au > 0.0 {
+            // Station body positions at `next` (post-physics frame), dense
+            // station-row order — the trip-phase diagnostic's input only; the
+            // engagement predicate itself is craft-craft and needs no body frame.
+            let station_pos: Vec<Vec3> = (0..self.stations.ids.len())
+                .map(|srow| {
+                    let body = self.stations.body[srow];
+                    self.bodies
+                        .ids
+                        .dense_index(body.slot, body.generation)
+                        .map(|brow| self.eph.body_pos(self.bodies.eph_index[brow], next))
+                        .unwrap_or(Vec3::ZERO)
+                })
+                .collect();
+            crate::pirate::resolve_encounters(
+                &mut self.ships,
+                &mut self.contracts,
+                &mut self.corporations,
+                &mut self.econ,
+                &self.stations,
+                &station_pos,
+                &self.config.trophic,
+                &mut self.rng,
+                next,
+                &mut self.events,
+                &mut self.engagement_diag,
+            );
+            crate::pirate::update_pirate_population(
+                &mut self.ships,
+                &self.config.trophic,
+                next,
+                &mut self.events,
+            );
+        }
 
         // (3c) economy failure stage: fail any InTransit contract whose hauler ran out
         //      of propellant this tick. Lift this tick's FuelEmpty craft-ids out of the
