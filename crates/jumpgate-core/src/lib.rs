@@ -18,6 +18,7 @@
 pub mod autopilot;
 pub mod config;
 pub mod contract;
+pub mod diagnostics;
 pub mod economy;
 pub mod ephemeris;
 pub mod events;
@@ -47,6 +48,7 @@ pub use config::{
     GuidanceParams, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit, SubstepCfg,
 };
 pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
+pub use diagnostics::{Diagnosis, TrophicSample, Verdict, classify, sample_window};
 pub use ephemeris::Ephemeris;
 pub use events::{EventStream, FUEL_EMPTY_EPS, detect_boundary_events};
 pub use hash::{FnvHasher, HASH_FORMAT_VERSION, HASH_MAGIC, state_hash, write_store_cursor};
