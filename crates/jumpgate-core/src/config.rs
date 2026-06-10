@@ -159,6 +159,8 @@ pub struct DispatchCfg {
     pub demand_high: i64,
     /// Staggered dispatch period: an Idle hauler in dense row `s` may accept only on
     /// ticks where `tick % stagger_period == s % stagger_period`. `1` == no stagger.
+    /// `0` disables scripted acceptance entirely (manual / RL `AcceptContract` only);
+    /// REPOST is unaffected.
     pub stagger_period: u32,
     /// Microcredits the corp escrows per posted contract (Stage-1 fixed reward).
     pub contract_reward_micros: i64,

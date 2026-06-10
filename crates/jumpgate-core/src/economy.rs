@@ -355,7 +355,8 @@ use crate::types::{EntityRef, NavDest};
 ///       and emit `ContractOffered`. The seeded `ContractInit` is the first template.
 ///   (b) ASSIGN: each Idle hauler (sorted dense row) takes the lowest-`ContractId`
 ///       `Offered` contract not already claimed this stage. One hauler -> one contract.
-///       `resolve_contracts` settles the accept next.
+///       `resolve_contracts` settles the accept next. `stagger_period == 0` disables
+///       ASSIGN entirely (manual / RL `AcceptContract` only); REPOST is unaffected.
 pub fn run_scripted_dispatch(
     contracts: &mut ContractStore,
     stations: &StationStore,
@@ -459,6 +460,13 @@ pub fn run_scripted_dispatch(
             projected += qty as i64;
             posts += 1;
         }
+    }
+
+    // ASSIGN GATE (trader rung 1): `stagger_period == 0` turns scripted acceptance
+    // OFF entirely — manual / RL-issued `AcceptContract` only. REPOST above is
+    // unaffected: the board keeps flowing; nothing scripted claims it.
+    if dispatch.stagger_period == 0 {
+        return;
     }
 
     // (b) ASSIGN — STAGGERED (Task 21). Each Idle hauler (sorted dense row) claims the
@@ -1032,5 +1040,76 @@ mod tests {
         assert_eq!(p.station.len(), 0);
         assert_eq!(p.recipe.len(), 0);
         assert_eq!(p.last_fired.len(), 0);
+    }
+
+    #[test]
+    fn stagger_period_zero_disables_assign_but_not_repost() {
+        // ASSIGN gate (trader rung 1): `stagger_period == 0` turns scripted
+        // acceptance OFF entirely (manual / RL-issued `AcceptContract` only) while
+        // REPOST keeps the board flowing. Fixture: 1 corp, 2 stations, 1 TERMINAL
+        // route template whose destination stock sits below `demand_low` (so REPOST
+        // fires), 1 Idle craft (which ASSIGN must NOT claim).
+        use crate::config::{BaseSpec, DispatchCfg};
+        use crate::math::Vec3;
+
+        let mut stations = StationStore::empty();
+        let from = stations.push(BodyId { slot: 0, generation: 0 }, [0, 100], [0; N_RESOURCES]);
+        let to = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let mut corporations = CorporationStore::empty();
+        let corp = corporations.push(1_000_000, from);
+        let mut contracts = ContractStore::empty();
+        let seed = contracts.push(corp, Resource::Fuel, 5, from, to, 1_000);
+        let srow = contracts.ids.dense_index(seed.slot, seed.generation).unwrap();
+        contracts.status[srow] = ContractStatus::Completed;
+        let mut ships = CraftStore::empty();
+        ships.push(
+            BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 0.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+            },
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.0,
+        );
+        // demand_low == demand_high == 5 (== qty): destination stock 0 < 5 starts a
+        // burst, ONE post brings projected to the ceiling -> exactly one repost.
+        let dispatch = DispatchCfg {
+            demand_low: 5,
+            demand_high: 5,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut events = EventStream::new();
+        let n_before = contracts.ids.len();
+
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &dispatch,
+            Tick(1),
+            &mut events,
+        );
+
+        // REPOST is UNAFFECTED: exactly one fresh Offered clone of the terminal route.
+        assert_eq!(
+            contracts.ids.len(),
+            n_before + 1,
+            "REPOST still posts with stagger_period == 0"
+        );
+        assert_eq!(contracts.status[n_before], ContractStatus::Offered);
+        assert!(
+            events
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ContractOffered { .. })),
+            "ContractOffered emitted by the repost"
+        );
+        // ASSIGN is OFF: the Idle craft is untouched (no scripted claim).
+        assert_eq!(ships.role[0], CraftRole::Idle, "craft stays Idle");
+        assert_eq!(ships.contract[0], None, "no contract bound to the craft");
     }
 }
