@@ -113,8 +113,10 @@ class JumpgateGymEnv(gym.Env):
         # Flatten the per-craft action into the flat caller buffer.
         if self.mode == "trader":
             # Discrete int -> f32 index (the native buffer stays f32;
-            # the native step decodes it with round()).
-            self._action_buf[0] = float(int(action))
+            # the native step decodes it with round()). asarray+flatten accepts
+            # ints, np scalars, AND shape-(1,) arrays (a batch dim kept from
+            # model.predict) — int(np.array([3])) is a numpy hard error soon.
+            self._action_buf[0] = float(np.asarray(action).reshape(-1)[0])
         else:
             self._action_buf[:] = np.asarray(action, dtype=np.float32).reshape(-1)
         self._native.step(
