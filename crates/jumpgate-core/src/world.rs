@@ -18,15 +18,32 @@ use crate::types::{EntityRef, Lod, NavDest};
 /// spec §7): for each directed station route (dense row-major `n_stations²`,
 /// route index = `from_row * n_stations + to_row`), the last 8 rob ticks and a
 /// ring cursor. World-level HASHED state (HASH_FIELD_ORDER word 29, format v4):
-/// written at robbery settlement (Task 4), read dock-gated through `info_tick`
-/// (Task 5). Sized ONCE at reset from the station count (no mid-run station
-/// spawn in v1), so the length is transitively pinned by config_hash.
+/// written at robbery settlement (`pirate::resolve_encounters`), read
+/// dock-gated through `info_tick` (`World::route_evidence`). Sized ONCE at
+/// reset from the station count (no mid-run station spawn in v1), so the
+/// length is transitively pinned by config_hash.
 pub struct RouteEvidence {
     /// Ring of the last 8 rob ticks per directed route. Zero-init `Tick(0)` ==
     /// "no recorded rob" (older than any evidence window once past warm-up).
     pub robs: Vec<[Tick; 8]>,
     /// Next write slot per ring (0..8), length-parallel with `robs`.
     pub cursor: Vec<u8>,
+}
+
+impl RouteEvidence {
+    /// Count of ring entries on `route` inside the half-open read window
+    /// `(info_tick - window, info_tick]` — EVIDENCE ONLY, no decay arithmetic:
+    /// staleness is a property of the READ, not the store (spec §7). The
+    /// zero-init `Tick(0)` sentinel can never match (robs settle at tick >= 1
+    /// and the lower bound is exclusive with a saturating subtraction).
+    /// Out-of-range routes read 0 (spec §8 totality).
+    pub fn count_recent(&self, route: usize, info_tick: Tick, window: u64) -> u32 {
+        let Some(ring) = self.robs.get(route) else {
+            return 0;
+        };
+        let lo = info_tick.0.saturating_sub(window);
+        ring.iter().filter(|t| t.0 > lo && t.0 <= info_tick.0).count() as u32
+    }
 }
 
 /// The authoritative simulation aggregate. Single writer; all facades read via `StateView`.
@@ -313,7 +330,40 @@ impl World {
             cursor: vec![0u8; n_routes],
         };
 
-        let rng = RngStreams::from_master(cfg.master_seed);
+        let mut rng = RngStreams::from_master(cfg.master_seed);
+        // Initial lurk assignment (spec §5): drawn from the Piracy stream AT
+        // RESET — never config-fixed (a fixed pirate→station map would let a
+        // gym policy memorize geography instead of reading contacts). Dense
+        // pirate-row order, uniform over ALL stations (the initial scatter;
+        // later relocation is reach-bounded). Scripted stage: skips
+        // `!scripted` craft. Gated by the spec-§8 inert lever, so existing
+        // pirate-free / inert worlds consume no draws and stay bit-identical.
+        // The advanced stream cursor is Class-3 transitively-pinned state
+        // (replay rebuilds from reset + log; see hash.rs).
+        if cfg.trophic.engage_radius_au > 0.0 && !station_ids.is_empty() {
+            use rand_core::Rng;
+            for row in 0..ships.ids.len() {
+                if ships.role[row] != crate::stores::CraftRole::Pirate {
+                    continue;
+                }
+                if cfg.craft.get(row).is_some_and(|c| !c.scripted) {
+                    continue;
+                }
+                let u = rng.stream(crate::rng::RngStream::Piracy).next_u64();
+                let srow = (u % station_ids.len() as u64) as usize;
+                let body = stations.body[srow];
+                let eff = effective_params(&ships.spec[row], &ships.mods[row]);
+                let dv = crate::math::tsiolkovsky_dv(
+                    eff.exhaust_velocity,
+                    eff.dry_mass,
+                    ships.fuel_mass[row],
+                );
+                ships.nav[row] = NavState::Seeking {
+                    dest: NavDest::Entity(EntityRef::Body(body)),
+                    dv_remaining: dv,
+                };
+            }
+        }
         let dt = cfg.dt;
         let world = World {
             ships,
@@ -427,6 +477,28 @@ impl World {
         self.ship_index(id).map(|i| self.ships.credits_micros[i])
     }
 
+    /// Dock-gated route-evidence read (spec §7) — **the degenerate
+    /// proto-channel**: replace the propagation model BEHIND this signature.
+    /// The accessor takes the READER, not a timestamp, precisely so the media
+    /// layer can later swap "your own last dock" for a real propagation model
+    /// (lag, locality, loss) without touching a single call site.
+    ///
+    /// Returns the count of recorded robs on the directed `route` (dense
+    /// row-major `from_row * n_stations + to_row`) inside
+    /// `(info_tick - evidence_window, info_tick]`, where `info_tick` is the
+    /// READER's own last-dock tick — a hauler acts on the world as of its own
+    /// last dock. Stale readers and out-of-range routes read 0 (spec §8).
+    pub fn route_evidence(&self, reader: CraftId, route: usize) -> u32 {
+        let Some(crow) = self.ship_index(reader) else {
+            return 0;
+        };
+        self.route_evidence.count_recent(
+            route,
+            self.ships.info_tick[crow],
+            self.config.trophic.evidence_window,
+        )
+    }
+
     /// Idle == available for a strategic decision: role `Idle` AND no bound (or
     /// intended) contract. `None` for a stale id.
     pub fn craft_is_idle(&self, id: CraftId) -> Option<bool> {
@@ -469,8 +541,11 @@ impl World {
             &mut self.contracts,
             &self.stations,
             &mut self.ships,
+            &self.config.craft,
+            &self.route_evidence,
             &self.config.dispatch_cfg,
             &self.config.shipyard,
+            &self.config.trophic,
             next,
             &mut self.events,
         );
@@ -494,9 +569,48 @@ impl World {
             &mut self.events,
         );
 
+        // (1c2) pirate-brain stage (pirates rung spec §5): bounded DUMB lurkers
+        //       — lie-low routing to the hideout, staggered reach-bounded
+        //       relocation (uniform-in-reach, NEVER traffic-weighted), loiter
+        //       re-seek strictly inside the engagement envelope. PRE-physics:
+        //       ships.pos is the tick-`cur` state, body_pos sampled at
+        //       `next - 1 == cur` (the try_load frame precedent). Scripted
+        //       stage: skips !scripted craft. Shares the spec-§8 inert lever.
+        if self.config.trophic.engage_radius_au > 0.0 {
+            crate::pirate::run_pirate_brains(
+                &mut self.ships,
+                &self.config.craft,
+                &self.stations,
+                &self.bodies,
+                &self.eph,
+                &self.config.trophic,
+                &mut self.rng,
+                next,
+            );
+        }
+
+        // (1c3) scripted purchase policies (pirates rung §6): write the
+        //       `pending_upgrade` INTENT (haulers: the BuyPolicy ladder with
+        //       working-capital headroom at a vendor dock; pirates: Escort
+        //       while lying low at the hideout), consumed by stage 1d below
+        //       the SAME tick — the column stays None at every hash point.
+        //       Scripted stage: skips !scripted craft. Inert by default
+        //       (BuyPolicy::Off + engage_radius 0.0).
+        crate::economy::run_purchase_policies(
+            &mut self.ships,
+            &self.config.craft,
+            &self.stations,
+            &self.config.stations,
+            &self.bodies,
+            &self.eph,
+            &self.config.trophic,
+            &self.config.shipyard,
+            next,
+        );
+
         // (1d) upgrade-purchase settle stage (pirates rung §6): consume every
-        //      BuyUpgrade intent written by this tick's ingest (and, from Task 5,
-        //      the scripted purchase policies). AFTER resolve_contracts, PRE-
+        //      BuyUpgrade intent written by this tick's ingest and the stage-1c3
+        //      scripted purchase policies. AFTER resolve_contracts, PRE-
         //      physics: ships.pos is still the tick-`cur` state, so the vendor
         //      dock predicate samples body_pos at `next - 1 == cur` — the same
         //      frame (the try_load precedent). Settle is a pure wallet -> Yard
@@ -657,6 +771,19 @@ impl World {
                         .unwrap_or(Vec3::ZERO)
                 })
                 .collect();
+            // Dock-gated info refresh (spec §7): a craft within ARRIVAL_RADIUS
+            // of ANY station body refreshes `info_tick` to the current tick —
+            // information is a POSITIONED resource; the population's beliefs
+            // desynchronize by lived docking rhythms, not a global lag. Hashed
+            // state, so it rides the same inert lever as the rest of the rung.
+            for crow in 0..self.ships.ids.len() {
+                let docked = station_pos.iter().any(|sp| {
+                    self.ships.pos[crow].sub(*sp).length() <= crate::autopilot::ARRIVAL_RADIUS
+                });
+                if docked {
+                    self.ships.info_tick[crow] = next;
+                }
+            }
             crate::pirate::resolve_encounters(
                 &mut self.ships,
                 &mut self.contracts,
@@ -664,6 +791,7 @@ impl World {
                 &mut self.econ,
                 &self.stations,
                 &station_pos,
+                &mut self.route_evidence,
                 &self.config.trophic,
                 &mut self.rng,
                 next,

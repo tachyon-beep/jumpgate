@@ -57,7 +57,10 @@ pub use ids::{BodyId, ContractId, CraftId, SlotMap, StationId};
 pub use ingest::{ActionLog, ingest_into};
 pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
 pub use math::{G_CANONICAL, Vec3, tsiolkovsky_dv};
-pub use pirate::{EngagementSnapshot, resolve_encounters, strength, update_pirate_population};
+pub use pirate::{
+    EngagementSnapshot, relocate_lurk_target, resolve_encounters, run_pirate_brains, strength,
+    update_pirate_population,
+};
 pub use provenance::{PROVENANCE, Provenance};
 pub use replay::{Recording, record_run, replay_run};
 pub use rng::{RngStream, RngStreams};

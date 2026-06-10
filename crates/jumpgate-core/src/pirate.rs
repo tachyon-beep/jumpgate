@@ -1,7 +1,13 @@
-//! Pirate predation systems (pirates rung 1, Commit D — spec §§2-4).
+//! Pirate predation systems (pirates rung 1, Commits D + E — spec §§2-5, §7).
 //!
-//! Two deterministic post-physics tick stages over hashed integer state:
+//! One pre-physics brain stage and two deterministic post-physics tick stages
+//! over hashed integer state:
 //!
+//! * **Stage 1c2 `run_pirate_brains`** — the bounded DUMB lurker (spec §5):
+//!   lie-low routing to the hideout, staggered reach-bounded relocation
+//!   (uniform-in-reach, NEVER traffic-weighted — `relocate_lurk_target`'s
+//!   signature admits geometry only), and a loiter re-seek strictly inside the
+//!   engagement envelope. Scripted stage: skips `!scripted` craft.
 //! * **Stage 3b2 `resolve_encounters`** — choke-point engagements (NOT chase):
 //!   each active pirate engages the NEAREST eligible laden hauler inside the
 //!   `(engage_radius_au, engage_speed)` envelope, resolved by ONE seeded roll on
@@ -23,17 +29,22 @@
 //! invariant). All new strength/credit arithmetic is saturating (spec §8
 //! totality discipline).
 
-use crate::config::TrophicCfg;
+use crate::autopilot::ARRIVAL_RADIUS;
+use crate::config::{CraftInit, TrophicCfg};
 use crate::contract::{Event, EventKind};
 use crate::economy::{
     ContractStatus, ContractStore, CorporationStore, EconCounters, FailureCause, StationStore,
     settle_contract_failure,
 };
+use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
+use crate::ids::BodyId;
 use crate::math::Vec3;
 use crate::rng::{RngStream, RngStreams};
-use crate::stores::{CraftRole, CraftStore, UpgradeLevels};
+use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, UpgradeLevels, effective_params};
 use crate::time::Tick;
+use crate::types::{EntityRef, NavDest};
+use crate::world::RouteEvidence;
 use rand_core::Rng;
 
 /// Per-engagement kinematic snapshot, pushed by BOTH outcome emission sites in
@@ -80,6 +91,10 @@ pub fn strength(role: CraftRole, upgrades: UpgradeLevels, trophic: &TrophicCfg) 
 /// diagnostic, never for the engagement predicate — craft-craft distance needs
 /// no body frame).
 ///
+/// `route_evidence` is the spec-§7 evidence store: each Robbed settlement
+/// bumps the contract's directed-route ring with the rob tick (the WRITE half
+/// of the media seam; the dock-gated READ is `World::route_evidence`).
+///
 /// Inert lever (spec §8): `engage_radius_au <= 0.0` (the default) returns
 /// immediately — no scan, no Piracy draw, existing scenarios bit-identical.
 #[allow(clippy::too_many_arguments)]
@@ -90,6 +105,7 @@ pub fn resolve_encounters(
     counters: &mut EconCounters,
     stations: &StationStore,
     station_pos: &[Vec3],
+    route_evidence: &mut RouteEvidence,
     trophic: &TrophicCfg,
     rng: &mut RngStreams,
     tick: Tick,
@@ -169,6 +185,28 @@ pub fn resolve_encounters(
         let u = (rng.stream(RngStream::Piracy).next_u64() % 1000) as u32;
         let robbed = u < trophic.p_rob_milli;
         if robbed {
+            // Evidence-ring bump (spec §7, the WRITE half of the media seam):
+            // record the rob tick on the contract's directed-route ring
+            // (dense row-major `from_row * n_stations + to_row`). Bounded +
+            // saturating — an unresolvable station row degrades to a no-write
+            // (spec §8 totality), never a panic.
+            let n_stations = stations.ids.len();
+            let from = contracts.from_station[kidx];
+            let to = contracts.to_station[kidx];
+            if let (Some(f), Some(t)) = (
+                stations.ids.dense_index(from.slot, from.generation),
+                stations.ids.dense_index(to.slot, to.generation),
+            ) {
+                let route = f.saturating_mul(n_stations).saturating_add(t);
+                if let (Some(ring), Some(cur)) = (
+                    route_evidence.robs.get_mut(route),
+                    route_evidence.cursor.get_mut(route),
+                ) {
+                    let slot = (*cur as usize) % ring.len();
+                    ring[slot] = tick;
+                    *cur = ((slot + 1) % ring.len()) as u8;
+                }
+            }
             // Contract teardown: the generalized resolve_failures settle body
             // (escrow refund TRANSFER, cargo→consumed SINK, hauler released).
             settle_contract_failure(
@@ -293,6 +331,189 @@ fn rel_bearing_millirad(hauler_pos: Vec3, hauler_vel: Vec3, pirate_pos: Vec3) ->
     (cos.acos() * 1000.0) as u32
 }
 
+/// Relocation target draw (spec §5): uniform among stations within
+/// `max_reach_au` of `anchor` (the PRIMARY locality lever — 1-2 neighbors,
+/// never the whole map); none in reach -> the NEAREST station (ties to the
+/// lowest dense row); `None` only when there are no stations at all (spec §8
+/// totality).
+///
+/// **DUMB BY CONSTRUCTION** (the interdiction-equalizer lesson): the signature
+/// admits GEOMETRY ONLY — no contracts, no stock, no traffic, no evidence — so
+/// a traffic-weighted relocation attractor cannot be introduced without
+/// changing this fn's type. `u` is the caller's pre-drawn Piracy word; the
+/// in-reach pick is `u % candidates.len()` (uniform).
+pub fn relocate_lurk_target(
+    anchor: Vec3,
+    station_pos: &[Vec3],
+    max_reach_au: f64,
+    u: u64,
+) -> Option<usize> {
+    if station_pos.is_empty() {
+        return None;
+    }
+    let in_reach: Vec<usize> = (0..station_pos.len())
+        .filter(|&s| station_pos[s].sub(anchor).length() <= max_reach_au)
+        .collect();
+    if !in_reach.is_empty() {
+        return Some(in_reach[(u % in_reach.len() as u64) as usize]);
+    }
+    // None in reach: the nearest station, deterministically (strict `<` keeps
+    // the lowest dense row on ties).
+    let mut best = 0usize;
+    for s in 1..station_pos.len() {
+        if station_pos[s].sub(anchor).length() < station_pos[best].sub(anchor).length() {
+            best = s;
+        }
+    }
+    Some(best)
+}
+
+/// Issue a fuel-derived-budget Seek of `body` (the ingest/try_load dv rule:
+/// never INFINITY into `dv_remaining`).
+fn seek_body(ships: &mut CraftStore, row: usize, body: BodyId) {
+    let eff = effective_params(&ships.spec[row], &ships.mods[row]);
+    let dv = crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ships.fuel_mass[row]);
+    ships.nav[row] =
+        NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(body)), dv_remaining: dv };
+}
+
+/// Stage 1c2 — the pirate brain: a bounded DUMB lurker (spec §5). Pre-physics
+/// (`body_pos(t-1)` frame, the try_load precedent), dense pirate-row order:
+///
+/// * **Lying low** and not at the hideout body: `Seeking{Body(hideout)}` — the
+///   refuge OFF the predation field.
+/// * **Lurk identity**: the pirate's lurk IS its nav destination (a station
+///   body) — no extra hashed column. A pirate whose nav holds no station body
+///   (post-refuge re-emergence) draws a fresh lurk via `relocate_lurk_target`
+///   from its current position.
+/// * **Relocation** — staggered (`tick % relocate_period == row %
+///   relocate_period`, sticky on the prey timescale): one Piracy draw keeps
+///   the station with `stay_milli`; otherwise one more draw picks
+///   uniform-in-reach around the CURRENT lurk (never traffic-weighted; the
+///   relocation attractor is deliberately decorrelated from traffic).
+/// * **Loiter**: re-issue the lurk seek when drift > `engage_radius / 2` —
+///   strictly inside the engagement envelope, so a settled lurker is
+///   geometrically guaranteed to cover a body-docked hauler.
+///
+/// Deliberately NO value-seeking target scoring: dumbness + locality +
+/// persistence is the antidote, not a placeholder (spec §5). Scripted stage:
+/// skips `!scripted` craft (`craft_cfg` is the config row set; craft are
+/// config-minted dense, `slot == row`). Shares the spec-§8 inert lever.
+#[allow(clippy::too_many_arguments)]
+pub fn run_pirate_brains(
+    ships: &mut CraftStore,
+    craft_cfg: &[CraftInit],
+    stations: &StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    trophic: &TrophicCfg,
+    rng: &mut RngStreams,
+    tick: Tick,
+) {
+    if trophic.engage_radius_au <= 0.0 || stations.ids.is_empty() {
+        return;
+    }
+    let prev = Tick(tick.0.saturating_sub(1));
+    // Station body positions at `prev` (the pre-physics craft frame), dense
+    // station-row order.
+    let station_pos: Vec<Vec3> = (0..stations.ids.len())
+        .map(|srow| {
+            let body = stations.body[srow];
+            bodies
+                .ids
+                .dense_index(body.slot, body.generation)
+                .map(|brow| eph.body_pos(bodies.eph_index[brow], prev))
+                .unwrap_or(Vec3::ZERO)
+        })
+        .collect();
+    for row in 0..ships.ids.len() {
+        if ships.role[row] != CraftRole::Pirate {
+            continue;
+        }
+        let Some(p) = ships.pirate[row] else {
+            continue;
+        };
+        // Scripted stages skip gym-controlled craft (spec §5).
+        if craft_cfg.get(row).is_some_and(|c| !c.scripted) {
+            continue;
+        }
+        if tick < p.lie_low_until {
+            // Off the predation field: route to the hideout body (a stale
+            // hideout index degrades to a deterministic skip, spec §8).
+            let hrow = trophic.hideout_body_index as usize;
+            let Some((slot, generation)) = bodies.ids.id_at(hrow) else {
+                continue;
+            };
+            let hideout = BodyId { slot, generation };
+            let hpos = eph.body_pos(bodies.eph_index[hrow], prev);
+            let at_hideout = ships.pos[row].sub(hpos).length() <= ARRIVAL_RADIUS;
+            let seeking_hideout = matches!(
+                ships.nav[row],
+                NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } if b == hideout
+            );
+            if !at_hideout && !seeking_hideout {
+                seek_body(ships, row, hideout);
+            }
+            continue;
+        }
+        // Current lurk = the station whose body this pirate is Seeking. None
+        // (Idle / seeking the hideout / a non-station body) -> draw a fresh
+        // lurk from the pirate's current position.
+        let nav_lurk: Option<usize> = match ships.nav[row] {
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
+                (0..stations.ids.len()).find(|&s| stations.body[s] == b)
+            }
+            _ => None,
+        };
+        let mut lurk = match nav_lurk {
+            Some(s) => s,
+            None => {
+                let u = rng.stream(RngStream::Piracy).next_u64();
+                match relocate_lurk_target(
+                    ships.pos[row],
+                    &station_pos,
+                    trophic.pirate_max_reach_au,
+                    u,
+                ) {
+                    Some(s) => s,
+                    None => continue,
+                }
+            }
+        };
+        // Staggered relocation: sticky (stay_milli), reach-bounded, uniform.
+        if trophic.relocate_period > 0
+            && tick.0 % trophic.relocate_period == (row as u64) % trophic.relocate_period
+        {
+            let stay = (rng.stream(RngStream::Piracy).next_u64() % 1000) as u32;
+            if stay >= trophic.stay_milli {
+                let u = rng.stream(RngStream::Piracy).next_u64();
+                if let Some(s) = relocate_lurk_target(
+                    station_pos[lurk],
+                    &station_pos,
+                    trophic.pirate_max_reach_au,
+                    u,
+                ) {
+                    lurk = s;
+                }
+            }
+        }
+        // Loiter / (re-)seek: issue the lurk seek when the destination changed
+        // or the pirate drifted past engage_radius/2 (the dv-refresh nudge —
+        // the threshold is strictly inside the envelope, so a SETTLED lurker
+        // covers a docked hauler and is never churned).
+        let lurk_body = stations.body[lurk];
+        let seeking_lurk = matches!(
+            ships.nav[row],
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } if b == lurk_body
+        );
+        let drifted =
+            ships.pos[row].sub(station_pos[lurk]).length() > trophic.engage_radius_au / 2.0;
+        if !seeking_lurk || drifted {
+            seek_body(ships, row, lurk_body);
+        }
+    }
+}
+
 /// Stage 3b3 — pirate lifecycle (spec §4): population without spawn/despawn.
 /// Per pirate, dense order:
 ///
@@ -402,6 +623,7 @@ mod tests {
         counters: EconCounters,
         stations: StationStore,
         station_pos: Vec<Vec3>,
+        route_evidence: RouteEvidence,
         events: EventStream,
         diag: Vec<EngagementSnapshot>,
         rng: RngStreams,
@@ -440,6 +662,7 @@ mod tests {
             counters: EconCounters::zero(),
             stations,
             station_pos,
+            route_evidence: RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] },
             events: EventStream::new(),
             diag: Vec::new(),
             rng: RngStreams::from_master(42),
@@ -455,6 +678,7 @@ mod tests {
             &mut f.counters,
             &f.stations,
             &f.station_pos,
+            &mut f.route_evidence,
             cfg,
             &mut f.rng,
             tick,
@@ -994,6 +1218,277 @@ mod tests {
             .count();
         assert!(robs >= 1, "no robbery in 5k ticks — the replay claim is vacuous");
         assert!(robs + driveoffs >= 2, "expected repeated engagements, got {robs}+{driveoffs}");
+    }
+
+    // ---- Task 5 (Commit E): brains, evidence, scripted policies --------------
+
+    #[test]
+    fn initial_lurks_are_seed_drawn() {
+        // Spec §5: initial lurk stations are drawn from the Piracy stream AT
+        // RESET — never config-fixed (a fixed pirate→station map would let a
+        // gym policy memorize geography instead of reading contacts).
+        fn cfg(seed: u64) -> RunConfig {
+            let mut c = pirate_world_cfg();
+            c.master_seed = seed;
+            // 4 station bodies, 3 pirates -> 64 possible lurk maps.
+            c.bodies = (0..4)
+                .map(|i| BodyInit {
+                    mass: 1e-12,
+                    elements: OrbitalElements {
+                        a: 0.1 + 0.2 * i as f64,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                })
+                .collect();
+            c.stations = (0..4)
+                .map(|i| StationInit {
+                    body_index: i,
+                    initial_stock: [0, 0],
+                    initial_price_micros: [0, 0],
+                    sells_upgrades: false,
+                })
+                .collect();
+            c.corporations =
+                vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }];
+            c.contracts = vec![];
+            c.craft =
+                vec![pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO)];
+            c
+        }
+        fn lurk_map(world: &World) -> Vec<u32> {
+            (0..world.ships.ids.len())
+                .map(|row| match world.ships.nav[row] {
+                    NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => b.slot,
+                    ref other => panic!("pirate row {row} not Seeking a body at reset: {other:?}"),
+                })
+                .collect()
+        }
+        let (wa, _) = World::reset(cfg(11)).expect("resolvable cfg");
+        let (wb, _) = World::reset(cfg(12)).expect("resolvable cfg");
+        let (ma, mb) = (lurk_map(&wa), lurk_map(&wb));
+        for m in ma.iter().chain(mb.iter()) {
+            assert!(*m < 4, "lurk body slot {m} must be a station body");
+        }
+        assert_ne!(ma, mb, "different master seeds must draw different lurk maps");
+    }
+
+    #[test]
+    fn relocation_respects_reach() {
+        // Spec §5: relocation is uniform-in-reach and NEVER traffic-weighted —
+        // enforced BY CONSTRUCTION: `relocate_lurk_target`'s signature admits
+        // GEOMETRY ONLY (anchor, station positions, reach, a pre-drawn word).
+        // No contract / stock / traffic input exists to weight by.
+        let station_pos = vec![
+            Vec3::new(0.1, 0.0, 0.0),  // 0: in reach
+            Vec3::new(0.0, 0.3, 0.0),  // 1: in reach
+            Vec3::new(0.9, 0.0, 0.0),  // 2: out of reach
+            Vec3::new(0.5, 0.0, 0.0),  // 3: in reach
+            Vec3::new(0.0, 0.0, 2.0),  // 4: out of reach
+            Vec3::new(0.0, 0.59, 0.0), // 5: in reach (just inside 0.6)
+        ];
+        let anchor = Vec3::ZERO;
+        let reach = 0.6;
+        let in_reach = [0usize, 1, 3, 5];
+        // 64 staggered draws through a REAL Piracy stream: never beyond reach,
+        // and every in-reach station gets drawn.
+        let mut rng = RngStreams::from_master(99);
+        let mut hits = [0u32; 6];
+        for _ in 0..64 {
+            let u = rng.stream(RngStream::Piracy).next_u64();
+            let s = relocate_lurk_target(anchor, &station_pos, reach, u).expect("stations exist");
+            assert!(in_reach.contains(&s), "target {s} is beyond reach");
+            hits[s] += 1;
+        }
+        for &s in &in_reach {
+            assert!(hits[s] > 0, "uniform-in-reach: station {s} never drawn in 64");
+        }
+        // Exact uniformity of the draw map: u = 0..64 cycles the 4 candidates
+        // evenly (16 each) — no weighting of any kind.
+        let mut exact = [0u32; 6];
+        for u in 0..64u64 {
+            exact[relocate_lurk_target(anchor, &station_pos, reach, u).unwrap()] += 1;
+        }
+        for &s in &in_reach {
+            assert_eq!(exact[s], 16, "u %% n_candidates must map uniformly");
+        }
+        // None in reach -> the NEAREST station, deterministically.
+        let far = Vec3::new(50.0, 0.0, 0.0);
+        assert_eq!(
+            relocate_lurk_target(far, &station_pos, reach, 7).unwrap(),
+            2,
+            "no candidate in reach falls back to the nearest station"
+        );
+        // No stations at all -> None (totality, spec §8).
+        assert_eq!(relocate_lurk_target(anchor, &[], reach, 7), None);
+    }
+
+    #[test]
+    fn reseek_threshold_covers_dock() {
+        // Spec §5 loiter: re-seek strictly INSIDE the engagement envelope
+        // (engage_radius / 2) so a settled lurker geometrically covers a
+        // body-docked hauler: engage_radius/2 + ARRIVAL_RADIUS <= engage_radius.
+        let radius = pirate_world_cfg().trophic.engage_radius_au;
+        assert!(
+            crate::autopilot::ARRIVAL_RADIUS <= radius / 2.0,
+            "a settled lurker (within engage_radius/2) plus a docked hauler \
+             (within ARRIVAL_RADIUS) must stay inside the engagement envelope"
+        );
+        let mk = || {
+            let mut c = pirate_world_cfg();
+            c.craft = vec![pirate_init(Vec3::ZERO)]; // lone pirate
+            c.contracts = vec![];
+            World::reset(c).expect("resolvable cfg").0
+        };
+        let body0 = |w: &World| {
+            w.bodies
+                .ids
+                .id_at(0)
+                .map(|(slot, generation)| BodyId { slot, generation })
+                .unwrap()
+        };
+
+        // (a) DRIFTED past engage_radius/2: the brain re-issues the lurk seek
+        // with a fresh fuel-derived dv budget.
+        let mut world = mk();
+        let b0 = body0(&world);
+        world.ships.nav[0] =
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b0)), dv_remaining: 0.0 };
+        world.ships.pos[0] = Vec3::new(radius * 0.6, 0.0, 0.0); // > radius/2 from the lurk body
+        world.ships.prev_pos[0] = world.ships.pos[0];
+        world.step(&mut Vec::new());
+        match world.ships.nav[0] {
+            NavState::Seeking { dest, dv_remaining } => {
+                assert_eq!(dest, NavDest::Entity(EntityRef::Body(b0)), "still seeking the lurk");
+                assert!(
+                    dv_remaining > 1.0e-3,
+                    "drifted lurker re-seeks with a refreshed dv, got {dv_remaining}"
+                );
+            }
+            ref other => panic!("expected Seeking, got {other:?}"),
+        }
+
+        // (b) SETTLED inside engage_radius/2: NO re-issue (budget not refreshed).
+        let mut world = mk();
+        let b0 = body0(&world);
+        world.ships.nav[0] =
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b0)), dv_remaining: 0.0 };
+        world.ships.pos[0] = Vec3::ZERO; // exactly at the lurk body
+        world.ships.prev_pos[0] = world.ships.pos[0];
+        world.step(&mut Vec::new());
+        match world.ships.nav[0] {
+            NavState::Seeking { dv_remaining, .. } => {
+                assert!(
+                    dv_remaining < 1.0e-3,
+                    "settled lurker keeps its depleted budget, got {dv_remaining}"
+                );
+            }
+            ref other => panic!("expected Seeking, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lying_low_pirate_seeks_hideout() {
+        // Spec §5: lying low and not at the hideout -> Seeking{Body(hideout)}
+        // (the refuge OFF the predation field).
+        let mut cfg = pirate_world_cfg();
+        cfg.contracts = vec![];
+        cfg.craft = vec![pirate_init(Vec3::ZERO)];
+        cfg.trophic.hideout_body_index = 1; // the outer body
+        let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().lie_low_until = Tick(10_000);
+        world.step(&mut Vec::new());
+        let hideout = world
+            .bodies
+            .ids
+            .id_at(1)
+            .map(|(slot, generation)| BodyId { slot, generation })
+            .unwrap();
+        assert!(
+            matches!(
+                world.ships.nav[0],
+                NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } if b == hideout
+            ),
+            "lying-low pirate routes to the hideout body"
+        );
+    }
+
+    #[test]
+    fn unscripted_pirate_is_skipped_by_brain_stages() {
+        // Spec §5: scripted stages skip gym-controlled craft. An unscripted
+        // pirate gets NO reset lurk draw and NO brain nav writes.
+        let mut cfg = pirate_world_cfg();
+        cfg.contracts = vec![];
+        cfg.craft = vec![CraftInit { scripted: false, ..pirate_init(Vec3::new(0.01, 0.0, 0.0)) }];
+        let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
+        assert!(
+            matches!(world.ships.nav[0], NavState::Idle),
+            "no reset lurk draw for a !scripted pirate"
+        );
+        world.step(&mut Vec::new());
+        assert!(
+            matches!(world.ships.nav[0], NavState::Idle),
+            "brains never steer a !scripted pirate"
+        );
+    }
+
+    #[test]
+    fn info_tick_refreshes_only_docked() {
+        // Spec §7: information refreshes by DOCKING (within ARRIVAL_RADIUS of
+        // any station body); an in-flight craft keeps its stale info_tick.
+        let mut cfg = pirate_world_cfg();
+        cfg.contracts = vec![];
+        cfg.craft = vec![hauler_init(Vec3::ZERO), hauler_init(Vec3::new(0.15, 0.0, 0.0))];
+        let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
+        world.step(&mut Vec::new());
+        assert_eq!(world.ships.info_tick[0], Tick(1), "docked craft refreshes to current tick");
+        assert_eq!(world.ships.info_tick[1], Tick(0), "in-flight craft keeps stale info_tick");
+        world.step(&mut Vec::new());
+        assert_eq!(world.ships.info_tick[0], Tick(2), "refresh repeats every docked tick");
+        assert_eq!(world.ships.info_tick[1], Tick(0));
+    }
+
+    #[test]
+    fn route_evidence_read_is_dock_gated() {
+        // Spec §7: the store holds EVIDENCE ONLY (rob-tick rings); staleness is
+        // a property of the READ — a reader sees the world as of its OWN last
+        // dock, and entries age out past evidence_window.
+        let (mut world, _h) = World::reset(pirate_world_cfg()).expect("resolvable cfg");
+        let hauler = world.ships.ids_at(0);
+        let contract = contract_id_row0(&world);
+        world.step(&mut vec![Command {
+            target: Target::Entity(EntityRef::Craft(hauler)),
+            kind: CommandKind::AcceptContract { contract },
+        }]);
+        // The rob landed at tick 1 on directed route A->B (rows 0 -> 1, n=2).
+        assert_eq!(
+            world.contracts.status[0],
+            crate::economy::ContractStatus::Failed,
+            "precondition: the load-tick robbery settled"
+        );
+        let route_ab = 1usize; // 0 * n_stations + 1
+        // Reader last docked BEFORE the rob -> evidence invisible.
+        world.ships.info_tick[0] = Tick(0);
+        assert_eq!(world.route_evidence(hauler, route_ab), 0, "docked at T-1 sees count 0");
+        // Reader docked AFTER the rob -> evidence visible.
+        world.ships.info_tick[0] = Tick(2);
+        assert_eq!(world.route_evidence(hauler, route_ab), 1, "docked at T+1 sees the rob");
+        // Ageing (default evidence_window 4000): the window is
+        // (info_tick - window, info_tick] — at rob_tick + window the entry
+        // sits exactly on the excluded lower edge.
+        world.ships.info_tick[0] = Tick(1 + 4000 - 1);
+        assert_eq!(world.route_evidence(hauler, route_ab), 1, "still inside the window");
+        world.ships.info_tick[0] = Tick(1 + 4000);
+        assert_eq!(world.route_evidence(hauler, route_ab), 0, "aged out past evidence_window");
+        // Other routes / stale readers read 0 (totality, spec §8).
+        world.ships.info_tick[0] = Tick(2);
+        assert_eq!(world.route_evidence(hauler, 0), 0, "untouched route reads 0");
+        assert_eq!(world.route_evidence(hauler, 99), 0, "out-of-range route reads 0");
+        let stale = crate::ids::CraftId { slot: 0, generation: 99 };
+        assert_eq!(world.route_evidence(stale, route_ab), 0, "stale reader reads 0");
     }
 
     #[test]

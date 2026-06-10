@@ -366,18 +366,27 @@ pub fn cargo_capacity(
 ///       push a NEW Offered contract CLONING the latest contract's route fields
 ///       (corp/resource/qty/from/to/reward — never inferred from producer topology),
 ///       and emit `ContractOffered`. The seeded `ContractInit` is the first template.
-///   (b) ASSIGN: each Idle hauler (sorted dense row) takes the lowest-`ContractId`
-///       `Offered` contract not already claimed this stage that FITS its derived
-///       cargo capacity (the pirates-rung §6 filter-at-choice — scripted roles
-///       never claim-and-revert). One hauler -> one contract.
-///       `resolve_contracts` settles the accept next. `stagger_period == 0` disables
-///       ASSIGN entirely (manual / RL `AcceptContract` only); REPOST is unaffected.
+///   (b) ASSIGN: each Idle SCRIPTED hauler (sorted dense row; `!scripted` craft
+///       are skipped — the spec-§5 gym-exclusion law) takes an `Offered` contract
+///       not already claimed this stage that FITS its derived cargo capacity (the
+///       pirates-rung §6 filter-at-choice — scripted roles never claim-and-revert).
+///       With `trophic.hauler_belief_scoring` OFF (default) the pick is the
+///       lowest-`ContractId`; ON, it is the spec-§7 evidence-scored argmax
+///       `reward_micros * (1000 - min(route_evidence * evidence_penalty_milli, 900)) / 1000`
+///       read through the hauler's OWN dock-gated `info_tick` (ties -> lowest
+///       `ContractId`). One hauler -> one contract. `resolve_contracts` settles the
+///       accept next. `stagger_period == 0` disables ASSIGN entirely (manual / RL
+///       `AcceptContract` only); REPOST is unaffected.
+#[allow(clippy::too_many_arguments)]
 pub fn run_scripted_dispatch(
     contracts: &mut ContractStore,
     stations: &StationStore,
     ships: &mut CraftStore,
+    craft_cfg: &[crate::config::CraftInit],
+    route_evidence: &crate::world::RouteEvidence,
     dispatch: &crate::config::DispatchCfg,
     shipyard: &crate::config::ShipyardCfg,
+    trophic: &crate::config::TrophicCfg,
     tick: Tick,
     events: &mut EventStream,
 ) {
@@ -496,10 +505,21 @@ pub fn run_scripted_dispatch(
         if ships.role[crow] != CraftRole::Idle {
             continue;
         }
+        // Scripted stages skip gym-controlled craft (spec §5; craft are
+        // config-minted dense, `slot == row`, so `craft_cfg[crow]` is the row's
+        // init — the resolve_purchases `stations_cfg` precedent).
+        if craft_cfg.get(crow).is_some_and(|c| !c.scripted) {
+            continue;
+        }
         if tick.0 % stagger != crow as u64 % stagger {
             continue;
         }
         let capacity = cargo_capacity(&ships.spec[crow], ships.upgrades[crow], shipyard);
+        // One pass, ascending dense row == ascending ContractId: with scoring
+        // OFF the FIRST eligible row wins (lowest ContractId, the original
+        // behavior); with scoring ON the strictly-greatest score wins, so ties
+        // keep the lowest ContractId.
+        let mut pick: Option<(usize, i64)> = None;
         for kidx in 0..contracts.ids.len() {
             if contracts.status[kidx] != ContractStatus::Offered {
                 continue;
@@ -514,9 +534,40 @@ pub fn run_scripted_dispatch(
             if (0..ships.ids.len()).any(|r| ships.contract[r] == Some(cid)) {
                 continue;
             }
-            ships.contract[crow] = Some(cid);
+            if !trophic.hauler_belief_scoring {
+                pick = Some((kidx, 0));
+                break;
+            }
+            // Evidence-scored pick (spec §7): the route's recent-rob count read
+            // through the hauler's OWN info_tick (dock-gated staleness), penalty
+            // milli per rob clamped at 900 — the score never hits zero, so a
+            // hot route is avoided, not erased. Saturating integer arithmetic
+            // throughout (spec §8).
+            let from = contracts.from_station[kidx];
+            let to = contracts.to_station[kidx];
+            let count = stations
+                .ids
+                .dense_index(from.slot, from.generation)
+                .zip(stations.ids.dense_index(to.slot, to.generation))
+                .map_or(0, |(f, t)| {
+                    let route = f.saturating_mul(stations.ids.len()).saturating_add(t);
+                    route_evidence.count_recent(
+                        route,
+                        ships.info_tick[crow],
+                        trophic.evidence_window,
+                    )
+                });
+            let penalty =
+                (count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
+            let score =
+                contracts.reward_micros[kidx].saturating_mul(1000 - penalty) / 1000;
+            if pick.is_none_or(|(_, best)| score > best) {
+                pick = Some((kidx, score));
+            }
+        }
+        if let Some((kidx, _)) = pick {
+            ships.contract[crow] = Some(contract_id(contracts, kidx));
             ships.role[crow] = CraftRole::Hauler;
-            break;
         }
     }
 }
@@ -749,21 +800,7 @@ pub fn resolve_purchases(
         // ALWAYS consume the intent this stage, settle or skip (the transient-
         // column invariant: `pending_upgrade` is None at every hash point).
         ships.pending_upgrade[crow] = None;
-        // Dock predicate: within ARRIVAL_RADIUS of ANY vendor station's body,
-        // compared in the craft's frame (body_pos at t-1; see the stage doc).
-        let docked_at_vendor = (0..stations.ids.len()).any(|srow| {
-            stations_cfg.get(srow).is_some_and(|s| s.sells_upgrades) && {
-                let body = stations.body[srow];
-                bodies
-                    .ids
-                    .dense_index(body.slot, body.generation)
-                    .is_some_and(|brow| {
-                        let bpos = eph.body_pos(bodies.eph_index[brow], prev);
-                        ships.pos[crow].sub(bpos).length() <= crate::autopilot::ARRIVAL_RADIUS
-                    })
-            }
-        });
-        if !docked_at_vendor {
+        if !docked_at_vendor(ships, crow, stations, stations_cfg, bodies, eph, prev) {
             continue;
         }
         // Per-arm catalog row: current count, structural cap, price ladder.
@@ -811,6 +848,187 @@ pub fn resolve_purchases(
             tick,
             kind: EventKind::UpgradePurchased { craft, kind, level: new_level, price_micros: price },
         });
+    }
+}
+
+/// Vendor dock predicate (pirates rung §6): within `ARRIVAL_RADIUS` of ANY
+/// `sells_upgrades` station's body, compared in the craft's frame (`body_pos`
+/// at `prev == t-1`; the try_load precedent). Shared by `resolve_purchases`
+/// (the settle gate) and `run_purchase_policies` (the scripted intent writer),
+/// so policy intent and same-tick settle agree on what "docked" means.
+/// `stations_cfg` is the config row set (stations are config-minted dense,
+/// `slot == row`, no despawn).
+fn docked_at_vendor(
+    ships: &CraftStore,
+    crow: usize,
+    stations: &StationStore,
+    stations_cfg: &[crate::config::StationInit],
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    prev: Tick,
+) -> bool {
+    (0..stations.ids.len()).any(|srow| {
+        stations_cfg.get(srow).is_some_and(|s| s.sells_upgrades) && {
+            let body = stations.body[srow];
+            bodies
+                .ids
+                .dense_index(body.slot, body.generation)
+                .is_some_and(|brow| {
+                    let bpos = eph.body_pos(bodies.eph_index[brow], prev);
+                    ships.pos[crow].sub(bpos).length() <= crate::autopilot::ARRIVAL_RADIUS
+                })
+        }
+    })
+}
+
+/// The next rung of the scripted hauler purchase ladder (spec §6): the FIRST
+/// un-met `(kind, target_level)` in policy order, skipping rungs at/above the
+/// structural cap. `EscortFirst`: Escort L1 -> Hull L1 -> Escort L2 -> Hull L2;
+/// `HullFirst` swaps the pairs. `None` when the ladder is complete (or
+/// `BuyPolicy::Off`).
+fn next_ladder_rung(
+    upgrades: crate::stores::UpgradeLevels,
+    policy: crate::config::BuyPolicy,
+    shipyard: &crate::config::ShipyardCfg,
+) -> Option<crate::stores::UpgradeKind> {
+    use crate::config::BuyPolicy;
+    use crate::stores::UpgradeKind;
+    let ladder: [(UpgradeKind, u8); 4] = match policy {
+        BuyPolicy::Off => return None,
+        BuyPolicy::EscortFirst => [
+            (UpgradeKind::Escort, 1),
+            (UpgradeKind::Hull, 1),
+            (UpgradeKind::Escort, 2),
+            (UpgradeKind::Hull, 2),
+        ],
+        BuyPolicy::HullFirst => [
+            (UpgradeKind::Hull, 1),
+            (UpgradeKind::Escort, 1),
+            (UpgradeKind::Hull, 2),
+            (UpgradeKind::Escort, 2),
+        ],
+    };
+    for (kind, level) in ladder {
+        let (current, cap) = match kind {
+            UpgradeKind::Hull => (upgrades.hulls, shipyard.max_hulls),
+            UpgradeKind::Escort => (upgrades.escorts, shipyard.max_escorts),
+        };
+        if current < level && level <= cap {
+            return Some(kind);
+        }
+    }
+    None
+}
+
+/// Scripted purchase policies — stage 1c3 (pirates rung §6): write
+/// `pending_upgrade` INTENT only (the ASSIGN precedent — the same transient
+/// column the `BuyUpgrade` ingest arm writes), consumed by `resolve_purchases`
+/// (stage 1d) the SAME tick, so the column stays `None` at every hash point.
+/// Deterministic, dense craft-row order, desynchronized BY CONSTRUCTION (no
+/// taste scalars — timing varies per craft through wealth and docking history):
+///
+/// * **Hauler** (role Idle, no contract, docked at a vendor): the next
+///   `BuyPolicy` ladder rung, gated by the working-capital headroom
+///   `credits >= price * buy_headroom_milli / 1000`.
+/// * **Pirate** (lying low AT the hideout body): Escort to cap at full price —
+///   pirates shop while hiding, which phase-lags the pirate ladder behind the
+///   hauler ladder (the settle still requires a vendor at the dock; a
+///   vendor-less hideout is a deterministic 1d no-op).
+///
+/// Scripted stage: skips `!scripted` craft; never clobbers an already-written
+/// (ingest) intent. Inert by default: `BuyPolicy::Off` disables the hauler arm
+/// and the spec-§8 lever (`engage_radius_au <= 0`) the pirate arm.
+#[allow(clippy::too_many_arguments)]
+pub fn run_purchase_policies(
+    ships: &mut CraftStore,
+    craft_cfg: &[crate::config::CraftInit],
+    stations: &StationStore,
+    stations_cfg: &[crate::config::StationInit],
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    trophic: &crate::config::TrophicCfg,
+    shipyard: &crate::config::ShipyardCfg,
+    tick: Tick,
+) {
+    use crate::config::BuyPolicy;
+    use crate::stores::UpgradeKind;
+    let hauler_arm = trophic.hauler_buy_policy != BuyPolicy::Off;
+    let pirate_arm = trophic.engage_radius_au > 0.0;
+    if !hauler_arm && !pirate_arm {
+        return;
+    }
+    let prev = Tick(tick.0.saturating_sub(1));
+    for crow in 0..ships.ids.len() {
+        // Scripted stages skip gym-controlled craft (spec §5).
+        if craft_cfg.get(crow).is_some_and(|c| !c.scripted) {
+            continue;
+        }
+        // Never clobber an intent already written by this tick's ingest.
+        if ships.pending_upgrade[crow].is_some() {
+            continue;
+        }
+        match ships.role[crow] {
+            CraftRole::Pirate if pirate_arm => {
+                let Some(p) = ships.pirate[crow] else {
+                    continue;
+                };
+                if tick >= p.lie_low_until {
+                    continue; // shops only WHILE HIDING
+                }
+                let hrow = trophic.hideout_body_index as usize;
+                if bodies.ids.id_at(hrow).is_none() {
+                    continue;
+                }
+                let hpos = eph.body_pos(bodies.eph_index[hrow], prev);
+                if ships.pos[crow].sub(hpos).length() > crate::autopilot::ARRIVAL_RADIUS {
+                    continue; // not at the hideout yet
+                }
+                let level = ships.upgrades[crow].escorts;
+                if level >= shipyard.max_escorts {
+                    continue;
+                }
+                let Some(&price) = shipyard.escort_price_micros.get(level as usize) else {
+                    continue;
+                };
+                if ships.credits_micros[crow] < price {
+                    continue; // full price, NO headroom (ransom money is all working capital)
+                }
+                ships.pending_upgrade[crow] = Some(UpgradeKind::Escort);
+            }
+            CraftRole::Idle if hauler_arm => {
+                if ships.contract[crow].is_some() {
+                    continue; // intent-bound: not idle for a strategic decision
+                }
+                if !docked_at_vendor(ships, crow, stations, stations_cfg, bodies, eph, prev) {
+                    continue;
+                }
+                let Some(kind) = next_ladder_rung(
+                    ships.upgrades[crow],
+                    trophic.hauler_buy_policy,
+                    shipyard,
+                ) else {
+                    continue;
+                };
+                let (level, ladder) = match kind {
+                    UpgradeKind::Hull => (ships.upgrades[crow].hulls, &shipyard.hull_price_micros),
+                    UpgradeKind::Escort => {
+                        (ships.upgrades[crow].escorts, &shipyard.escort_price_micros)
+                    }
+                };
+                let Some(&price) = ladder.get(level as usize) else {
+                    continue;
+                };
+                // Working-capital headroom (spec §6): buy only when the wallet
+                // clears price * headroom — purchase timing then varies per
+                // hauler through earned wealth, never a taste scalar.
+                let need = price.saturating_mul(shipyard.buy_headroom_milli as i64) / 1000;
+                if ships.credits_micros[crow] < need {
+                    continue;
+                }
+                ships.pending_upgrade[crow] = Some(kind);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1552,13 +1770,18 @@ mod tests {
         let shipyard = ShipyardCfg::default();
         let mut events = EventStream::new();
 
+        let no_evidence =
+            crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
         // hulls 0 -> capacity 5 < qty 10: ASSIGN must NOT claim.
         run_scripted_dispatch(
             &mut contracts,
             &stations,
             &mut ships,
+            &[],
+            &no_evidence,
             &dispatch,
             &shipyard,
+            &crate::config::TrophicCfg::default(),
             Tick(1),
             &mut events,
         );
@@ -1571,13 +1794,248 @@ mod tests {
             &mut contracts,
             &stations,
             &mut ships,
+            &[],
+            &no_evidence,
             &dispatch,
             &shipyard,
+            &crate::config::TrophicCfg::default(),
             Tick(2),
             &mut events,
         );
         assert_eq!(ships.contract[0], Some(cid), "fitting lot claimed");
         assert_eq!(ships.role[0], CraftRole::Hauler);
+    }
+
+    // ---- Pirates rung Commit E: evidence-scored ASSIGN + scripted purchases ----
+
+    /// ASSIGN-scoring fixture: stations A/B/C (rows 0/1/2), two same-reward
+    /// Offered contracts A->B (c0, the lower ContractId) and A->C (c1), one
+    /// Idle craft, empty route-evidence rings (dense 3x3 = 9 directed routes).
+    #[allow(clippy::type_complexity)]
+    fn scoring_fix() -> (
+        ContractStore,
+        StationStore,
+        CraftStore,
+        crate::world::RouteEvidence,
+        ContractId,
+        ContractId,
+    ) {
+        use crate::config::BaseSpec;
+        use crate::math::Vec3;
+        let mut stations = StationStore::empty();
+        let a = stations.push(BodyId { slot: 0, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
+        let b = stations.push(BodyId { slot: 1, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
+        let c = stations.push(BodyId { slot: 2, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
+        let mut corporations = CorporationStore::empty();
+        let corp = corporations.push(0, a);
+        let mut contracts = ContractStore::empty();
+        let c0 = contracts.push(corp, Resource::Fuel, 5, a, b, 1_000_000);
+        let c1 = contracts.push(corp, Resource::Fuel, 5, a, c, 1_000_000);
+        let mut ships = CraftStore::empty();
+        ships.push(
+            BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 0.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
+            },
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.0,
+        );
+        let route_evidence = crate::world::RouteEvidence {
+            robs: vec![[Tick(0); 8]; 9],
+            cursor: vec![0; 9],
+        };
+        (contracts, stations, ships, route_evidence, c0, c1)
+    }
+
+    #[test]
+    fn evidence_scored_assign_avoids_hot_routes() {
+        // Spec §7: with `hauler_belief_scoring` on, scripted ASSIGN picks
+        // argmax reward * (1000 - evidence * penalty) / 1000 (clamped), ties to
+        // the lowest ContractId — and the avoidance DECAYS as the evidence ages
+        // out of the reader's dock-gated window.
+        use crate::config::{DispatchCfg, ShipyardCfg, TrophicCfg};
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let shipyard = ShipyardCfg::default();
+        let scoring = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
+
+        // CONTROL (scoring OFF): hot evidence is ignored; lowest ContractId wins.
+        let (mut contracts, stations, mut ships, mut re, c0, _c1) = scoring_fix();
+        re.robs[1][0] = Tick(50); // a rob on directed route A->B (0*3 + 1)
+        ships.info_tick[0] = Tick(60);
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &re,
+            &dispatch,
+            &shipyard,
+            &TrophicCfg::default(),
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(ships.contract[0], Some(c0), "scoring off: lowest ContractId, evidence ignored");
+
+        // SCORING ON: a fresh rob on A->B flips the scripted claim to A->C.
+        let (mut contracts, stations, mut ships, mut re, _c0, c1) = scoring_fix();
+        re.robs[1][0] = Tick(50);
+        ships.info_tick[0] = Tick(60); // docked after the rob: evidence visible
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &re,
+            &dispatch,
+            &shipyard,
+            &scoring,
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(ships.contract[0], Some(c1), "scoring on: the hot route is avoided");
+        assert_eq!(ships.role[0], CraftRole::Hauler);
+
+        // DECAYS BACK: far past the evidence window the route reads cold again;
+        // equal scores tie to the lowest ContractId.
+        let (mut contracts, stations, mut ships, mut re, c0, _c1) = scoring_fix();
+        re.robs[1][0] = Tick(50);
+        ships.info_tick[0] = Tick(50 + 4000); // aged exactly out of the window
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &re,
+            &dispatch,
+            &shipyard,
+            &scoring,
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(ships.contract[0], Some(c0), "aged evidence decays the avoidance away");
+    }
+
+    #[test]
+    fn assign_skips_unscripted_craft() {
+        // Spec §5: scripted stages skip gym-controlled craft — ASSIGN never
+        // claims for a `!scripted` row.
+        use crate::config::{BaseSpec, CraftInit, DispatchCfg, ShipyardCfg, TrophicCfg};
+        use crate::math::Vec3;
+        let (mut contracts, stations, mut ships, re, _c0, _c1) = scoring_fix();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let unscripted = vec![CraftInit {
+            spec: BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 0.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
+            },
+            pos: Vec3::ZERO,
+            vel: Vec3::ZERO,
+            fuel_mass: 0.0,
+            role: CraftRole::Idle,
+            scripted: false,
+        }];
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &unscripted,
+            &re,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(ships.contract[0], None, "ASSIGN never claims for a !scripted craft");
+        assert_eq!(ships.role[0], CraftRole::Idle);
+    }
+
+    #[test]
+    fn purchases_desynchronize() {
+        // Spec §6: purchase timing varies per hauler through wealth/docking
+        // history — no taste scalars, no synchronized buy tick (the
+        // synchronization-death guard). Four docked haulers on distinct income
+        // rates cross the working-capital headroom at different ticks.
+        use crate::config::BuyPolicy;
+        use crate::stores::UpgradeKind;
+        use crate::world::World;
+        let mut cfg = vendor_world_fixture(true);
+        cfg.craft = vec![
+            cfg.craft[0].clone(),
+            cfg.craft[0].clone(),
+            cfg.craft[0].clone(),
+            cfg.craft[0].clone(),
+        ];
+        cfg.trophic.hauler_buy_policy = BuyPolicy::EscortFirst;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        for _t in 1..=60u64 {
+            for r in 0..4 {
+                // Distinct income rates stand in for distinct contract histories.
+                world.ships.credits_micros[r] += (r as i64 + 1) * 250_000;
+            }
+            world.step(&mut Vec::new());
+        }
+        let buys: Vec<(crate::ids::CraftId, Tick)> = world
+            .events_mut()
+            .since(Tick(0))
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::UpgradePurchased { craft, kind: UpgradeKind::Escort, level: 1, .. } => {
+                    Some((craft, e.tick))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(buys.len(), 4, "every hauler bought Escort L1: {buys:?}");
+        let mut ticks: Vec<u64> = buys.iter().map(|(_, t)| t.0).collect();
+        ticks.sort_unstable();
+        ticks.dedup();
+        assert!(ticks.len() > 1, "purchase ticks must DISPERSE, got a synchronized buy at {ticks:?}");
+    }
+
+    #[test]
+    fn pirate_buys_escort_while_lying_low_at_hideout_vendor() {
+        // Spec §6: pirates shop WHILE HIDING (at the hideout, lying low, full
+        // price — no headroom), phase-lagging the pirate ladder behind the
+        // hauler ladder. An ACTIVE pirate never writes the intent.
+        use crate::world::World;
+        let mut cfg = vendor_world_fixture(true);
+        cfg.craft[0].role = CraftRole::Pirate;
+        cfg.trophic.engage_radius_au = 5.0e-4; // trophic live
+        cfg.trophic.hideout_body_index = 0; // the vendor body doubles as the refuge
+        let (mut world, _h) = World::reset(cfg.clone()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 5_000_000;
+        world.ships.pirate[0].as_mut().unwrap().lie_low_until = Tick(10_000);
+        world.step(&mut Vec::new());
+        assert_eq!(world.ships.upgrades[0].escorts, 1, "lying-low pirate bought the escort");
+        assert_eq!(world.ships.credits_micros[0], 0, "debited the full L1 price (no headroom)");
+        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "Yard credited");
+
+        // Control: an ACTIVE pirate does not shop.
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 5_000_000;
+        world.step(&mut Vec::new());
+        assert_eq!(world.ships.upgrades[0].escorts, 0, "active pirate does not shop");
+        assert_eq!(world.ships.credits_micros[0], 5_000_000, "wallet untouched");
     }
 
     #[test]
@@ -1675,8 +2133,11 @@ mod tests {
             &mut contracts,
             &stations,
             &mut ships,
+            &[],
+            &crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() },
             &dispatch,
             &crate::config::ShipyardCfg::default(),
+            &crate::config::TrophicCfg::default(),
             Tick(1),
             &mut events,
         );
