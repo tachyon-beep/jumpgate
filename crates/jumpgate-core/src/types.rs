@@ -68,6 +68,12 @@ pub enum CommandKind {
     /// |v| in [0,1] = throttle fraction (over-length clamps to 1 at the
     /// autopilot pass-through). Persists as NavState::DirectThrust until replaced.
     Thrust { throttle_vec: crate::math::Vec3 },
+    /// Intent to buy an upgrade SHIP (pirates rung §6 — the fleet ledger buys
+    /// ships, never stat levels): ingestion writes the transient
+    /// `pending_upgrade` column only; the settle (vendor dock check, price
+    /// debit, Yard credit, count bump) lives in `resolve_purchases` (stage 1d),
+    /// which consumes the intent the same tick.
+    BuyUpgrade { kind: crate::stores::UpgradeKind },
 }
 
 #[cfg(test)]

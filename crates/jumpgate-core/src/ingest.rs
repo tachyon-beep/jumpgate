@@ -190,6 +190,18 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
                 CommandKind::Thrust { throttle_vec } => {
                     world.set_nav(id, NavState::DirectThrust { throttle_vec });
                 }
+                CommandKind::BuyUpgrade { kind } => {
+                    // Record INTENT only (the AcceptContract template): write the
+                    // transient `pending_upgrade` column. The settle — vendor dock
+                    // check, price debit, Yard credit, count bump — is DEFERRED to
+                    // `resolve_purchases` (stage 1d), which consumes the intent the
+                    // SAME tick, so `pending_upgrade` is always None at hash points.
+                    // A stale craft id is a deterministic skip; the command is still
+                    // logged above and ActionIngested still fires below (the seam).
+                    if let Some(i) = world.ships.index_of(id) {
+                        world.ships.pending_upgrade[i] = Some(kind);
+                    }
+                }
             }
         }
         world.events_mut().emit(Event {
@@ -421,6 +433,38 @@ mod tests {
             }
             other => panic!("expected ActionIngested, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn buy_upgrade_writes_pending_intent_logs_and_emits_action_ingested() {
+        // The BuyUpgrade ingest arm is INTENT-ONLY (the AcceptContract template):
+        // it writes the transient `pending_upgrade` column and nothing else — the
+        // settle (dock/price/cap checks, debit, Yard credit, level bump) is
+        // deferred to `resolve_purchases` (stage 1d), which consumes the intent
+        // the same tick.
+        use crate::stores::{UpgradeKind, UpgradeLevels};
+        let (mut world, _h) = World::reset(one_body_one_craft_cfg()).expect("resolvable cfg");
+        let id0 = world.ships.ids_at(0);
+
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id0)),
+            kind: CommandKind::BuyUpgrade { kind: UpgradeKind::Escort },
+        }];
+        ingest_commands(&mut world, Tick(2), &mut cmds);
+
+        // Intent written; NO settle on the ingest path (single-ingestion-path lever).
+        assert_eq!(world.ships.pending_upgrade[0], Some(UpgradeKind::Escort), "intent column set");
+        assert_eq!(world.ships.upgrades[0], UpgradeLevels::default(), "no level change at ingest");
+        assert_eq!(world.ships.credits_micros[0], 0, "no credit movement at ingest");
+
+        // Logged + ActionIngested (the seam fires for every command).
+        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+        let emitted = world.events_mut().since(Tick(0));
+        assert_eq!(emitted.len(), 1);
+        assert!(matches!(
+            emitted[0].kind,
+            EventKind::ActionIngested { target } if target == Target::Entity(EntityRef::Craft(id0))
+        ));
     }
 
     #[test]

@@ -332,8 +332,21 @@ pub fn update_prices(
 }
 
 use crate::ephemeris::Ephemeris;
-use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, effective_params};
+use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, UpgradeLevels, effective_params};
 use crate::types::{EntityRef, NavDest};
+
+/// Effective cargo capacity (units) — DERIVED at the read site, never stored
+/// (the fleet-ledger discipline, spec §6): `base + hulls * hull_step_units`.
+/// Saturating throughout: absurd config values degrade deterministically
+/// instead of wrapping (the spec §8 totality discipline).
+pub fn cargo_capacity(
+    spec: &crate::config::BaseSpec,
+    upgrades: UpgradeLevels,
+    shipyard: &crate::config::ShipyardCfg,
+) -> u32 {
+    spec.base_cargo_capacity
+        .saturating_add((upgrades.hulls as u32).saturating_mul(shipyard.hull_step_units))
+}
 
 /// Scripted dispatch + repost stage (Stage-1 — Task 17). Makes the loop SELF-RUN
 /// with no external commands. DETERMINISTIC, sorted dense-id order, no RNG, no map
@@ -354,7 +367,9 @@ use crate::types::{EntityRef, NavDest};
 ///       (corp/resource/qty/from/to/reward — never inferred from producer topology),
 ///       and emit `ContractOffered`. The seeded `ContractInit` is the first template.
 ///   (b) ASSIGN: each Idle hauler (sorted dense row) takes the lowest-`ContractId`
-///       `Offered` contract not already claimed this stage. One hauler -> one contract.
+///       `Offered` contract not already claimed this stage that FITS its derived
+///       cargo capacity (the pirates-rung §6 filter-at-choice — scripted roles
+///       never claim-and-revert). One hauler -> one contract.
 ///       `resolve_contracts` settles the accept next. `stagger_period == 0` disables
 ///       ASSIGN entirely (manual / RL `AcceptContract` only); REPOST is unaffected.
 pub fn run_scripted_dispatch(
@@ -362,6 +377,7 @@ pub fn run_scripted_dispatch(
     stations: &StationStore,
     ships: &mut CraftStore,
     dispatch: &crate::config::DispatchCfg,
+    shipyard: &crate::config::ShipyardCfg,
     tick: Tick,
     events: &mut EventStream,
 ) {
@@ -483,8 +499,15 @@ pub fn run_scripted_dispatch(
         if tick.0 % stagger != crow as u64 % stagger {
             continue;
         }
+        let capacity = cargo_capacity(&ships.spec[crow], ships.upgrades[crow], shipyard);
         for kidx in 0..contracts.ids.len() {
             if contracts.status[kidx] != ContractStatus::Offered {
+                continue;
+            }
+            // Capacity filter (pirates rung §6): scripted choice skips a lot it
+            // cannot haul — filter-at-choice, never claim-and-revert (the
+            // accept-settle gate in `resolve_contracts` backstops manual/RL paths).
+            if contracts.qty[kidx] > capacity {
                 continue;
             }
             let cid = contract_id(contracts, kidx);
@@ -509,8 +532,9 @@ pub fn run_scripted_dispatch(
 ///     into `escrow_micros`, status `Offered->Accepted`, emit `ContractAccepted`;
 ///     then, if the hauler is co-located with `from_station`'s body AND the station
 ///     has the stock, LOAD in the same tick (status `Accepted->CargoLoaded`). If the
-///     corp treasury cannot cover the reward, REVERT the assignment (clear the
-///     craft's `contract`/`role`, leave the contract `Offered`, hauler `None`) —
+///     corp treasury cannot cover the reward, OR the lot exceeds the hauler's
+///     derived cargo capacity (pirates rung §6 gate), REVERT the assignment (clear
+///     the craft's `contract`/`role`, leave the contract `Offered`, hauler `None`) —
 ///     deterministic, no escrow movement.
 ///   * `Accepted` (escrowed but not yet loaded — e.g. accepted off-station): load
 ///     when co-located + stocked (status `Accepted->CargoLoaded`).
@@ -529,6 +553,7 @@ pub fn resolve_contracts(
     bodies: &BodyStore,
     eph: &Ephemeris,
     guidance: &crate::config::GuidanceParams,
+    shipyard: &crate::config::ShipyardCfg,
     tick: Tick,
     events: &mut EventStream,
 ) {
@@ -548,13 +573,19 @@ pub fn resolve_contracts(
                     continue;
                 };
                 let hauler = ships.ids_at(crow);
+                // CAPACITY GATE (pirates rung §6): a lot bigger than the hauler's
+                // DERIVED cargo capacity (base + hulls * step) reverts the accept —
+                // the underfunded-escrow precedent below. Scripted ASSIGN filters
+                // the same way at choice time; this gate backstops the manual/RL
+                // `AcceptContract` path.
+                let capacity = cargo_capacity(&ships.spec[crow], ships.upgrades[crow], shipyard);
                 // Escrow: debit the corp treasury by the reward. Insufficient
                 // treasury (or a stale corp row) -> REVERT the assignment.
                 let corp = contracts.corp[kidx];
                 let reward = contracts.reward_micros[kidx];
                 let corp_row = corporations.ids.dense_index(corp.slot, corp.generation);
                 let funded = matches!(corp_row, Some(r) if corporations.treasury_micros[r] >= reward);
-                if !funded {
+                if !funded || contracts.qty[kidx] > capacity {
                     // Deterministic revert: release the craft, leave the offer open.
                     ships.contract[crow] = None;
                     ships.role[crow] = CraftRole::Idle;
@@ -679,6 +710,110 @@ fn try_load(
     let _ = tick; // load itself emits no event in v1 (ContractAccepted already fired)
 }
 
+/// Upgrade-purchase settle stage — stage 1d, pirates rung §6 (deterministic,
+/// dense craft-row order). Runs AFTER `resolve_contracts`, PRE-physics, so
+/// `ships.pos` is still the tick-(t-1) state and the vendor dock predicate
+/// samples `body_pos(t-1)` — the same frame (the `try_load` precedent).
+///
+/// Consumes EVERY `pending_upgrade` intent THIS tick (the transient-column
+/// invariant `state_hash` debug_asserts): settle iff the craft is within
+/// `ARRIVAL_RADIUS` of a `sells_upgrades` station AND `credits >= price` AND
+/// `level < cap` (structural, settle no-op at cap) → debit the buyer EXACTLY
+/// the per-level catalog price, credit the Yard corp the same (a pure
+/// transfer — zero new identity legs), bump the fleet-ledger count, emit
+/// `UpgradePurchased`. Any failed check clears the intent as a deterministic
+/// no-op: no event, no credit movement. All arithmetic saturating (spec §8
+/// totality discipline).
+///
+/// `stations_cfg` is the config row set (`RunConfig.stations`): stations are
+/// config-minted dense (`slot == row`, no despawn), so row `srow`'s vendor bit
+/// is `stations_cfg[srow].sells_upgrades`.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_purchases(
+    ships: &mut CraftStore,
+    stations: &StationStore,
+    stations_cfg: &[crate::config::StationInit],
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    corporations: &mut CorporationStore,
+    shipyard: &crate::config::ShipyardCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    use crate::stores::UpgradeKind;
+    let prev = Tick(tick.0.saturating_sub(1));
+    for crow in 0..ships.ids.len() {
+        let Some(kind) = ships.pending_upgrade[crow] else {
+            continue;
+        };
+        // ALWAYS consume the intent this stage, settle or skip (the transient-
+        // column invariant: `pending_upgrade` is None at every hash point).
+        ships.pending_upgrade[crow] = None;
+        // Dock predicate: within ARRIVAL_RADIUS of ANY vendor station's body,
+        // compared in the craft's frame (body_pos at t-1; see the stage doc).
+        let docked_at_vendor = (0..stations.ids.len()).any(|srow| {
+            stations_cfg.get(srow).is_some_and(|s| s.sells_upgrades) && {
+                let body = stations.body[srow];
+                bodies
+                    .ids
+                    .dense_index(body.slot, body.generation)
+                    .is_some_and(|brow| {
+                        let bpos = eph.body_pos(bodies.eph_index[brow], prev);
+                        ships.pos[crow].sub(bpos).length() <= crate::autopilot::ARRIVAL_RADIUS
+                    })
+            }
+        });
+        if !docked_at_vendor {
+            continue;
+        }
+        // Per-arm catalog row: current count, structural cap, price ladder.
+        let (level, cap, ladder) = match kind {
+            UpgradeKind::Hull => (
+                ships.upgrades[crow].hulls,
+                shipyard.max_hulls,
+                &shipyard.hull_price_micros,
+            ),
+            UpgradeKind::Escort => (
+                ships.upgrades[crow].escorts,
+                shipyard.max_escorts,
+                &shipyard.escort_price_micros,
+            ),
+        };
+        if level >= cap {
+            continue;
+        }
+        // A cap configured beyond the priced ladder degrades to a deterministic
+        // skip (spec §8: no unwraps on "impossible" states).
+        let Some(&price) = ladder.get(level as usize) else {
+            continue;
+        };
+        if ships.credits_micros[crow] < price {
+            continue;
+        }
+        // The Yard (spec §6): the config-index corp receives every upgrade
+        // payment (dense slot == row). A stale/out-of-range index is a
+        // deterministic skip — never a one-legged debit.
+        let yard_row = shipyard.corp_index as usize;
+        if corporations.ids.id_at(yard_row).is_none() {
+            continue;
+        }
+        // Pure transfer: buyer wallet -> Yard treasury (zero new identity legs).
+        ships.credits_micros[crow] = ships.credits_micros[crow].saturating_sub(price);
+        corporations.treasury_micros[yard_row] =
+            corporations.treasury_micros[yard_row].saturating_add(price);
+        let new_level = level.saturating_add(1);
+        match kind {
+            UpgradeKind::Hull => ships.upgrades[crow].hulls = new_level,
+            UpgradeKind::Escort => ships.upgrades[crow].escorts = new_level,
+        }
+        let craft = ships.ids_at(crow);
+        events.emit(Event {
+            tick,
+            kind: EventKind::UpgradePurchased { craft, kind, level: new_level, price_micros: price },
+        });
+    }
+}
+
 /// Delivery-on-arrival settlement stage (deterministic, sorted-`ContractId` order).
 /// Runs in `World::step` AFTER boundary-event detection: `arrivals` is the list of
 /// `(craft, dest)` pairs lifted from this tick's just-detected `Arrival` events. For
@@ -801,10 +936,11 @@ pub fn resolve_failures(
             ships.contract[crow] = None;
             ships.role[crow] = CraftRole::Idle;
         }
-        // Terminal status. v1 emits no dedicated failure event (the FuelEmpty event
-        // already fired this tick and carries the cause); adding an EventKind variant
-        // is out of scope for Phase 1b (would force a jumpgate-py exhaustive-match
-        // update).
+        // Terminal status. No dedicated failure event YET: the FuelEmpty event
+        // already fired this tick and carries the cause. (The pirates rung
+        // retired the old exhaustive-match concern — EventKind variants are
+        // additive and jumpgate-py matches non-exhaustively; Task 4 generalizes
+        // this settle body to take a cause when `Robbed` becomes a second one.)
         contracts.status[kidx] = ContractStatus::Failed;
     }
 }
@@ -1050,6 +1186,392 @@ mod tests {
         assert_eq!(p.last_fired.len(), 0);
     }
 
+    // ---- Pirates rung Commit C: purchase verb + capacity gate ------------------
+    //
+    // Per-arm EXACT-INTEGER assertions are the point: the credit identity
+    // (Σtreasury+Σcredits+Σescrow) stays green under a wrong-price bug, so every
+    // settle arm pins its catalog literal (5/12/8/20 M micros) independently of
+    // the ShipyardCfg code under test.
+
+    /// Vendor fixture: one near-massless central body hosting a station (vendor
+    /// bit per arg), one craft docked at it (pos == body pos == origin), one Yard
+    /// corp at `ShipyardCfg::default().corp_index == 0` with an EMPTY treasury so
+    /// every credited micro is purchase money. Wallet/upgrade columns are mutated
+    /// per-test (CraftInit has no credits field; tests write the live store).
+    fn vendor_world_fixture(sells_upgrades: bool) -> crate::config::RunConfig {
+        use crate::config::{
+            BaseSpec, BodyInit, CorporationInit, CraftInit, GuidanceParams, OrbitalElements,
+            RunConfig, StationInit, SubstepCfg,
+        };
+        use crate::math::Vec3;
+        use crate::time::Dt;
+        RunConfig {
+            master_seed: 7,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 256,
+            bodies: vec![BodyInit {
+                mass: 1e-9, // near-massless: the docked craft is not gravity-trapped
+                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            }],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
+                },
+                pos: Vec3::ZERO, // docked at the vendor body
+                vel: Vec3::ZERO,
+                fuel_mass: 1e-9,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![StationInit {
+                body_index: 0,
+                initial_stock: [0, 0],
+                initial_price_micros: [0, 0],
+                sells_upgrades,
+            }],
+            producers: vec![],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            contracts: vec![],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
+        }
+    }
+
+    fn buy_cmd(craft: crate::ids::CraftId, kind: crate::stores::UpgradeKind) -> crate::contract::Command {
+        use crate::types::{EntityRef, Target};
+        crate::contract::Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: crate::types::CommandKind::BuyUpgrade { kind },
+        }
+    }
+
+    /// Skip-arm postcondition: zero credit movement anywhere, no level change,
+    /// intent consumed, NO UpgradePurchased event.
+    fn assert_purchase_skipped(
+        world: &mut crate::world::World,
+        credits_before: i64,
+        upgrades_before: crate::stores::UpgradeLevels,
+        arm: &str,
+    ) {
+        assert_eq!(world.ships.upgrades[0], upgrades_before, "{arm}: no level change");
+        assert_eq!(world.ships.credits_micros[0], credits_before, "{arm}: zero wallet movement");
+        assert_eq!(world.corporations.treasury_micros[0], 0, "{arm}: Yard treasury untouched");
+        assert_eq!(world.ships.pending_upgrade[0], None, "{arm}: intent cleared");
+        assert!(
+            !world
+                .events_mut()
+                .since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::UpgradePurchased { .. })),
+            "{arm}: NO UpgradePurchased event"
+        );
+    }
+
+    #[test]
+    fn purchase_settles_at_vendor() {
+        use crate::stores::UpgradeKind;
+        use crate::world::World;
+        let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+
+        // Arm: Escort L1 — debit EXACTLY escort_price_micros[0] == 5_000_000.
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_eq!(world.ships.upgrades[0].escorts, 1, "escort count bumped to 1");
+        assert_eq!(world.ships.upgrades[0].hulls, 0, "hull count untouched");
+        assert_eq!(world.ships.credits_micros[0], 45_000_000, "debited EXACTLY 5_000_000");
+        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "Yard credited the same");
+        assert_eq!(world.ships.pending_upgrade[0], None, "intent consumed");
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::UpgradePurchased {
+                    craft: c,
+                    kind: UpgradeKind::Escort,
+                    level: 1,
+                    price_micros: 5_000_000,
+                } if c == craft
+            )),
+            "UpgradePurchased emitted with exact payload"
+        );
+
+        // Arm: Escort L2 — EXACTLY escort_price_micros[1] == 12_000_000.
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_eq!(world.ships.upgrades[0].escorts, 2);
+        assert_eq!(world.ships.credits_micros[0], 33_000_000, "debited EXACTLY 12_000_000");
+        assert_eq!(world.corporations.treasury_micros[0], 17_000_000);
+
+        // Arm: Hull L1 — EXACTLY hull_price_micros[0] == 8_000_000.
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Hull)]);
+        assert_eq!(world.ships.upgrades[0].hulls, 1);
+        assert_eq!(world.ships.credits_micros[0], 25_000_000, "debited EXACTLY 8_000_000");
+        assert_eq!(world.corporations.treasury_micros[0], 25_000_000);
+
+        // Arm: Hull L2 — EXACTLY hull_price_micros[1] == 20_000_000.
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Hull)]);
+        assert_eq!(world.ships.upgrades[0].hulls, 2);
+        assert_eq!(world.ships.credits_micros[0], 5_000_000, "debited EXACTLY 20_000_000");
+        assert_eq!(world.corporations.treasury_micros[0], 45_000_000);
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::UpgradePurchased {
+                    kind: UpgradeKind::Hull,
+                    level: 2,
+                    price_micros: 20_000_000,
+                    ..
+                }
+            )),
+            "Hull L2 event carries the exact L2 price"
+        );
+    }
+
+    #[test]
+    fn purchase_skips_deterministically() {
+        use crate::math::Vec3;
+        use crate::stores::{UpgradeKind, UpgradeLevels};
+        use crate::world::World;
+
+        // (a) NOT DOCKED: ~10_000x ARRIVAL_RADIUS from the vendor body.
+        let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+        world.ships.pos[0] = Vec3::new(1.0, 0.0, 0.0);
+        world.ships.prev_pos[0] = world.ships.pos[0];
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_purchase_skipped(&mut world, 50_000_000, UpgradeLevels::default(), "not-docked");
+
+        // (b) UNDERFUNDED: docked, but one micro short of the Escort L1 price.
+        let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 4_999_999;
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_purchase_skipped(&mut world, 4_999_999, UpgradeLevels::default(), "underfunded");
+
+        // (c) AT CAP: escorts already at max_escorts == 2 (structural, spec §6).
+        let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+        world.ships.upgrades[0].escorts = 2;
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_purchase_skipped(
+            &mut world,
+            50_000_000,
+            UpgradeLevels { hulls: 0, escorts: 2 },
+            "at-cap",
+        );
+
+        // (d) NON-VENDOR: docked + funded, but the station does not sell upgrades.
+        let (mut world, _h) = World::reset(vendor_world_fixture(false)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+        world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
+        assert_purchase_skipped(&mut world, 50_000_000, UpgradeLevels::default(), "non-vendor");
+    }
+
+    /// Capacity-gate fixture: two bodies (origin star hosts station A, a 0.3 AU
+    /// body hosts station B), one craft docked at A, one funded corp, ONE seeded
+    /// qty-10 Fuel contract A->B. `stagger_period == 0` keeps scripted ASSIGN off
+    /// (this test drives the manual AcceptContract path the gate backstops).
+    fn capacity_world_fixture() -> crate::config::RunConfig {
+        use crate::config::{BodyInit, ContractInit, CorporationInit, OrbitalElements, StationInit};
+        let mut cfg = vendor_world_fixture(false);
+        cfg.bodies.push(BodyInit {
+            mass: 1e-12,
+            elements: OrbitalElements { a: 0.3, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+        });
+        cfg.stations = vec![
+            StationInit {
+                body_index: 0,
+                initial_stock: [0, 20], // covers the qty-10 Fuel load
+                initial_price_micros: [0, 0],
+                sells_upgrades: false,
+            },
+            StationInit {
+                body_index: 1,
+                initial_stock: [0, 0],
+                initial_price_micros: [0, 0],
+                sells_upgrades: false,
+            },
+        ];
+        cfg.corporations =
+            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
+        cfg.contracts = vec![ContractInit {
+            corp_index: 0,
+            resource: Resource::Fuel,
+            qty: 10,
+            from_station_index: 0,
+            to_station_index: 1,
+            reward_micros: 1_000_000,
+        }];
+        cfg.dispatch_cfg.stagger_period = 0;
+        cfg
+    }
+
+    #[test]
+    fn capacity_gate_reverts_oversized_accept() {
+        use crate::stores::CraftRole;
+        use crate::types::{EntityRef, Target};
+        use crate::world::World;
+        let (mut world, _h) = World::reset(capacity_world_fixture()).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let contract = world
+            .contracts
+            .ids
+            .id_at(0)
+            .map(|(slot, generation)| ContractId { slot, generation })
+            .unwrap();
+        let accept = crate::contract::Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: crate::types::CommandKind::AcceptContract { contract },
+        };
+
+        // qty 10 > capacity 5 (base, hulls 0): the accept-settle REVERTS — the
+        // underfunded-escrow precedent (craft released, offer left open, zero
+        // credit movement).
+        world.step(&mut vec![accept]);
+        assert_eq!(world.contracts.status[0], ContractStatus::Offered, "contract stays Offered");
+        assert_eq!(world.contracts.hauler[0], None, "no hauler bound");
+        assert_eq!(world.contracts.escrow_micros[0], 0, "no escrow movement");
+        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "treasury untouched");
+        assert_eq!(world.ships.contract[0], None, "craft released");
+        assert_eq!(world.ships.role[0], CraftRole::Idle, "craft Idle");
+        assert_eq!(world.ships.cargo[0], None, "nothing loaded");
+
+        // Hull L1 -> capacity 5 + 1*5 == 10: the SAME accept now settles
+        // (escrow + same-tick load at the stocked, co-located origin).
+        world.ships.upgrades[0].hulls = 1;
+        world.step(&mut vec![accept]);
+        assert_eq!(world.contracts.status[0], ContractStatus::CargoLoaded, "settles after hull L1");
+        assert_eq!(world.contracts.hauler[0], Some(craft), "hauler bound");
+        assert_eq!(world.contracts.escrow_micros[0], 1_000_000, "reward escrowed");
+        assert_eq!(world.corporations.treasury_micros[0], 4_000_000, "treasury debited");
+        assert_eq!(world.ships.cargo[0], Some((Resource::Fuel, 10)), "qty-10 lot loaded");
+    }
+
+    #[test]
+    fn scripted_assign_filters_oversized_contracts() {
+        // Filter-at-choice, never claim-and-revert (spec §6): scripted ASSIGN
+        // skips a lot bigger than the hauler's derived capacity.
+        use crate::config::{BaseSpec, DispatchCfg, ShipyardCfg};
+        use crate::math::Vec3;
+
+        let mut stations = StationStore::empty();
+        let from = stations.push(BodyId { slot: 0, generation: 0 }, [0, 100], [0; N_RESOURCES]);
+        let to = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let mut corporations = CorporationStore::empty();
+        let corp = corporations.push(1_000_000, from);
+        let mut contracts = ContractStore::empty();
+        let cid = contracts.push(corp, Resource::Fuel, 10, from, to, 1_000);
+        let mut ships = CraftStore::empty();
+        ships.push(
+            BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 0.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
+            },
+            Vec3::ZERO,
+            Vec3::ZERO,
+            0.0,
+        );
+        // High demand edges so REPOST stays quiet (the route has a live Offered
+        // row -> bursting, but projected 10 >= demand_high 5 posts nothing).
+        let dispatch = DispatchCfg {
+            demand_low: 5,
+            demand_high: 5,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let shipyard = ShipyardCfg::default();
+        let mut events = EventStream::new();
+
+        // hulls 0 -> capacity 5 < qty 10: ASSIGN must NOT claim.
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &dispatch,
+            &shipyard,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(ships.contract[0], None, "oversized lot not claimed");
+        assert_eq!(ships.role[0], CraftRole::Idle, "craft stays Idle");
+
+        // hulls 1 -> capacity 10 == qty 10: ASSIGN claims it.
+        ships.upgrades[0].hulls = 1;
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &dispatch,
+            &shipyard,
+            Tick(2),
+            &mut events,
+        );
+        assert_eq!(ships.contract[0], Some(cid), "fitting lot claimed");
+        assert_eq!(ships.role[0], CraftRole::Hauler);
+    }
+
+    #[test]
+    fn credit_identity_holds_across_purchases() {
+        // The existing Σtreasury+Σcredits+Σescrow identity, extended across the
+        // new purchase leg: every settle is a pure wallet->Yard transfer.
+        use crate::stores::UpgradeKind;
+        use crate::world::World;
+        let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+
+        let credit_now = |w: &World| -> i64 {
+            w.corporations.treasury_micros.iter().sum::<i64>()
+                + w.ships.credits_micros.iter().sum::<i64>()
+                + w.contracts.escrow_micros.iter().sum::<i64>()
+        };
+        let initial_credit = credit_now(&world);
+
+        // Walk the full ladder (Escort L1/L2, Hull L1/L2); identity holds EVERY tick.
+        for (i, kind) in [
+            UpgradeKind::Escort,
+            UpgradeKind::Escort,
+            UpgradeKind::Hull,
+            UpgradeKind::Hull,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            world.step(&mut vec![buy_cmd(craft, kind)]);
+            assert_eq!(
+                credit_now(&world),
+                initial_credit,
+                "Σtreasury+Σcredits+Σescrow invariant after purchase {i}"
+            );
+        }
+
+        // Non-vacuity: all four arms actually settled (45M total moved to the Yard).
+        let purchases = world
+            .events_mut()
+            .since(Tick(0))
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::UpgradePurchased { .. }))
+            .count();
+        assert_eq!(purchases, 4, "all four catalog arms fired");
+        assert_eq!(world.corporations.treasury_micros[0], 45_000_000);
+        assert_eq!(world.ships.credits_micros[0], 5_000_000);
+    }
+
     #[test]
     fn stagger_period_zero_disables_assign_but_not_repost() {
         // ASSIGN gate (trader rung 1): `stagger_period == 0` turns scripted
@@ -1099,6 +1621,7 @@ mod tests {
             &stations,
             &mut ships,
             &dispatch,
+            &crate::config::ShipyardCfg::default(),
             Tick(1),
             &mut events,
         );

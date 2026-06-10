@@ -465,6 +465,7 @@ impl World {
             &self.stations,
             &mut self.ships,
             &self.config.dispatch_cfg,
+            &self.config.shipyard,
             next,
             &mut self.events,
         );
@@ -483,6 +484,27 @@ impl World {
             &self.bodies,
             &self.eph,
             &self.config.guidance,
+            &self.config.shipyard,
+            next,
+            &mut self.events,
+        );
+
+        // (1d) upgrade-purchase settle stage (pirates rung §6): consume every
+        //      BuyUpgrade intent written by this tick's ingest (and, from Task 5,
+        //      the scripted purchase policies). AFTER resolve_contracts, PRE-
+        //      physics: ships.pos is still the tick-`cur` state, so the vendor
+        //      dock predicate samples body_pos at `next - 1 == cur` — the same
+        //      frame (the try_load precedent). Settle is a pure wallet -> Yard
+        //      transfer (zero new identity legs); every intent is consumed here,
+        //      keeping `pending_upgrade` None at all hash points.
+        crate::economy::resolve_purchases(
+            &mut self.ships,
+            &self.stations,
+            &self.config.stations,
+            &self.bodies,
+            &self.eph,
+            &mut self.corporations,
+            &self.config.shipyard,
             next,
             &mut self.events,
         );

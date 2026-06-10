@@ -126,6 +126,16 @@ pub enum EventKind {
     PirateSpawned {
         pirate: CraftId,
     },
+    /// A craft bought an upgrade SHIP at a vendor station (pirates rung §6):
+    /// `level` is the post-purchase fleet-ledger count for that line;
+    /// `price_micros` the exact catalog debit (buyer wallet -> Yard treasury,
+    /// a pure transfer — zero new identity legs).
+    UpgradePurchased {
+        craft: CraftId,
+        kind: crate::stores::UpgradeKind,
+        level: u8,
+        price_micros: i64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
