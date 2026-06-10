@@ -164,16 +164,38 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
 }
 
 /// Per-craft life-arc printer: group `recent_events` by craft id, one
-/// tick-stamped line per event (spec §10's chronicle, v0 form).
+/// tick-stamped line per event (spec §10's chronicle, v0 form). Consecutive
+/// repeats of the same event shape for the same craft (a lying-low pirate
+/// re-seeking its hideout emits an Arrival every ~10 ticks — watchability
+/// noise, seed-7 lesson) collapse into one line with a repeat count.
 fn print_chronicle(world: &World) {
     println!("--- chronicle ---");
     for id in world.craft_ids() {
         println!("craft {}/{}:", id.slot, id.generation);
+        let mut pending: Option<(u64, u64, String)> = None; // (first_tick, count, line)
+        let flush = |p: &Option<(u64, u64, String)>| {
+            if let Some((t, n, line)) = p {
+                if *n > 1 {
+                    println!("  t={t:>6} {line}  (x{n}, consecutive)");
+                } else {
+                    println!("  t={t:>6} {line}");
+                }
+            }
+        };
         for e in world.recent_events(Tick(0)) {
-            if chronicle_subject(&e.kind) == Some(id) {
-                println!("  t={:>6} {:?}", e.tick.0, e.kind);
+            if chronicle_subject(&e.kind) != Some(id) {
+                continue;
+            }
+            let line = format!("{:?}", e.kind);
+            match &mut pending {
+                Some((_, n, prev)) if *prev == line => *n += 1,
+                _ => {
+                    flush(&pending);
+                    pending = Some((e.tick.0, 1, line));
+                }
             }
         }
+        flush(&pending);
     }
 }
 

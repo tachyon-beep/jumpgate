@@ -123,7 +123,13 @@ pub fn classify(samples: &[TrophicSample]) -> Diagnosis {
     let cycled = population_cycles(samples);
     let risk_heterogeneous = risk_is_heterogeneous(samples);
     let outcomes_disperse = outcome_dispersion(samples);
-    let verdict = if !cycled {
+    // PermanentPeace takes precedence over every other row: a starvation
+    // lie-low duty cycle over a dead predation field oscillates the active
+    // count without any predator-prey coupling, so `cycled` alone is a false
+    // witness once the war has ended (the seed-7 lesson, 2026-06-11).
+    let verdict = if predation_collapsed(samples) {
+        Verdict::PermanentPeace
+    } else if !cycled {
         Verdict::NoCycle
     } else if !risk_heterogeneous {
         Verdict::RiskEqualized
@@ -133,6 +139,27 @@ pub fn classify(samples: &[TrophicSample]) -> Diagnosis {
         Verdict::Alive
     };
     Diagnosis { cycled, risk_heterogeneous, outcomes_disperse, verdict }
+}
+
+/// Minimum first-half engagements for PermanentPeace to be meaningful — a run
+/// that never had a war (e.g. zero pirates) is NoCycle, not peace.
+/// DIAGNOSTIC WINDOW, NOT A GATE (PDR-0006).
+pub const PEACE_MIN_EARLY_ENGAGEMENTS: u64 = 4;
+
+/// PermanentPeace = the war ended: engagements (robs + driven-offs) present in
+/// the first half of the run but ZERO across the entire second half — the
+/// upgrade ratchet's absorbing state (spec §9: pirate ladder failed to
+/// out-reach the hauler ladder).
+fn predation_collapsed(samples: &[TrophicSample]) -> bool {
+    if samples.len() < 4 {
+        return false;
+    }
+    let mid = samples.len() / 2;
+    let eng =
+        |s: &TrophicSample| u64::from(s.robs).saturating_add(u64::from(s.drivenoffs));
+    let early: u64 = samples[..mid].iter().map(&eng).fold(0, u64::saturating_add);
+    let late: u64 = samples[mid..].iter().map(&eng).fold(0, u64::saturating_add);
+    early >= PEACE_MIN_EARLY_ENGAGEMENTS && late == 0
 }
 
 /// "Cycled" = the active-pirate series changes direction at least
@@ -419,6 +446,37 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// Seed-7's real shape (2026-06-11 console session, the instrument's first
+    /// caught lie): a violent opening, then the upgrade ratchet ends the war —
+    /// actives keep duty-cycling (starvation lie-low) but engagements are ZERO
+    /// for the whole late half. The flagship run read Alive on this; it is
+    /// PermanentPeace.
+    fn early_burst_then_silence() -> Vec<TrophicSample> {
+        (0..12u64)
+            .map(|w| {
+                let robs: [u32; 4] = if w < 3 { [4, 1, 0, 0] } else { [0, 0, 0, 0] };
+                s(
+                    (w + 1) * WINDOW_TICKS,
+                    if w % 2 == 0 { 1 } else { 3 },
+                    if w % 2 == 0 { 6 } else { 2 },
+                    &robs,
+                    &[5, 7, 6, 5],
+                    &DISPERSED,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn early_burst_then_silence_reads_permanent_peace() {
+        let d = classify(&early_burst_then_silence());
+        assert_eq!(
+            d.verdict,
+            Verdict::PermanentPeace,
+            "a lie-low duty cycle over a dead predation field is not Alive"
+        );
     }
 
     #[test]
