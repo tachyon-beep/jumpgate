@@ -17,6 +17,10 @@ pub struct BaseSpec {
     pub base_max_thrust: f64,
     pub base_exhaust_velocity: f64,
     pub base_fuel_capacity: f64,
+    /// Base cargo hold (units). Effective capacity is DERIVED at the read site
+    /// (`base + hulls * ShipyardCfg.hull_step_units`, pirates rung §6) — never
+    /// stored. Default 5 everywhere keeps existing scenarios identical.
+    pub base_cargo_capacity: u32,
 }
 
 /// Classical Kepler conic elements (radians for angles), solved once at init.
@@ -42,6 +46,14 @@ pub struct CraftInit {
     pub pos: Vec3,
     pub vel: Vec3,
     pub fuel_mass: f64,
+    /// Economic role minted at reset. `Pirate` rows get a `PirateState`
+    /// (grubstake food, zero notoriety). Default `Idle` — existing scenarios
+    /// identical (pirates rung Commit A; closes the no-way-to-mint-a-pirate gap).
+    pub role: crate::stores::CraftRole,
+    /// Scripted stages (ASSIGN, pirate brains, purchase policies) skip
+    /// `!scripted` craft — the gym-exclusion flag, decided at config so the
+    /// config golden moves once (spec §5). Default `true`.
+    pub scripted: bool,
 }
 
 /// N substeps = pure fn of QUANTIZED total local acceleration magnitude (Task 7).
@@ -90,6 +102,9 @@ pub struct StationInit {
     pub body_index: usize,
     pub initial_stock: [i64; crate::economy::N_RESOURCES],
     pub initial_price_micros: [i64; crate::economy::N_RESOURCES],
+    /// First station capability mixin (spec §6): this station vends Hull/Escort
+    /// upgrades (the Yard's storefront). Default `false`.
+    pub sells_upgrades: bool,
 }
 
 /// A producer attached to a station, running `recipe` every `recipe.interval` ticks.
@@ -180,6 +195,160 @@ impl Default for DispatchCfg {
     }
 }
 
+/// Scripted hauler purchase policy (pirates rung §6). Folded into config_hash
+/// via `rank()` (stable discriminant, APPEND-ONLY).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuyPolicy {
+    /// No scripted purchases (default — trader gym and existing tests untouched).
+    Off,
+    /// Escort L1 -> Hull L1 -> Escort L2 -> Hull L2 (the spec §6 ladder).
+    EscortFirst,
+    /// Hull L1 -> Escort L1 -> Hull L2 -> Escort L2.
+    HullFirst,
+}
+impl BuyPolicy {
+    /// Stable discriminant for config-hash folding. APPEND-ONLY.
+    pub fn rank(self) -> u8 {
+        match self {
+            BuyPolicy::Off => 0,
+            BuyPolicy::EscortFirst => 1,
+            BuyPolicy::HullFirst => 2,
+        }
+    }
+}
+
+/// Pirates-rung trophic knobs (spec §§2-7; pirates rung Commit A). Everything
+/// the sweep lab varies is per-run config, folded at the TAIL of config_hash.
+/// `engage_radius_au == 0.0` (the default) leaves the WHOLE trophic machinery
+/// inert: no encounter envelope, no rolls, no Piracy-stream runtime draws.
+/// These are DIAGNOSTIC/TUNING knobs, not gates (PDR-0006); the food-band
+/// values (`food_per_unit_micros`, `upkeep_per_tick`, `grubstake_micros`)
+/// are deliberately 0 by default — they are console-calibrated from the P0
+/// measured `laden_trips_per_window` via the spec §4 formulas, never pinned here.
+#[derive(Clone, Copy, Debug)]
+pub struct TrophicCfg {
+    /// Encounter envelope radius (AU). 0.0 = whole machinery inert (default).
+    /// Live runs use ~5e-4 (5x ARRIVAL_RADIUS, spec §2).
+    pub engage_radius_au: f64,
+    /// Relative-speed gate of the envelope (AU/day). A Δv-advantaged hauler
+    /// under way is out of envelope — flee-by-physics preserved.
+    pub engage_speed: f64,
+    /// P(Robbed | engaged) in milli (u < p_rob_milli on RngStream::Piracy).
+    pub p_rob_milli: u32,
+    /// Ransom = min(hauler wallet, this cap) — pure transfer, no new identity leg.
+    pub ransom_cap_micros: i64,
+    /// Food credited per robbed cargo unit. Console-calibrated from P0 (spec §4).
+    pub food_per_unit_micros: i64,
+    /// Metabolic drain while active. Console-calibrated from P0 (spec §4).
+    pub upkeep_per_tick: i64,
+    /// Food a pirate re-emerges with after starving (and is minted with at reset).
+    pub grubstake_micros: i64,
+    /// Lie-low duration after starvation.
+    pub starve_lie_low_ticks: u64,
+    /// Notoriety at/above which heat forces a lie-low.
+    pub heat_threshold: u32,
+    /// Notoriety accrued per successful rob.
+    pub notoriety_per_rob: u32,
+    /// Geometric notoriety decay factor (milli) applied every `decay_interval`.
+    pub notoriety_decay_milli: u32,
+    /// Ticks between notoriety decay applications.
+    pub decay_interval: u64,
+    /// Lie-low duration when heat trips.
+    pub heat_lie_low_ticks: u64,
+    /// Engage cooldown after a Robbed outcome ("digestion", ~one trip-time).
+    pub rob_cooldown: u64,
+    /// Engage cooldown after a DrivenOff outcome.
+    pub driveoff_cooldown: u64,
+    /// Base strength a Pirate role contributes (strength = escorts + this, §2/§6).
+    pub pirate_base_strength: u8,
+    /// Relocation reach (AU) — the PRIMARY locality lever (1-2 neighbors, never
+    /// the whole map).
+    pub pirate_max_reach_au: f64,
+    /// Staggered relocation period (ticks; ~4 trips — sticky on prey timescale).
+    pub relocate_period: u64,
+    /// P(keep current lurk station) per relocation check, in milli.
+    pub stay_milli: u32,
+    /// Body index of the lie-low refuge (outermost in the game scenario).
+    pub hideout_body_index: u32,
+    /// Route-evidence read window (ticks before the reader's own info_tick).
+    pub evidence_window: u64,
+    /// ASSIGN scoring penalty per recent rob (milli), clamped at 900 (spec §7).
+    pub evidence_penalty_milli: u32,
+    /// Gate for evidence-scored scripted ASSIGN (default false: trader gym and
+    /// all existing tests untouched).
+    pub hauler_belief_scoring: bool,
+    /// Scripted hauler purchase ladder.
+    pub hauler_buy_policy: BuyPolicy,
+}
+
+impl Default for TrophicCfg {
+    fn default() -> Self {
+        TrophicCfg {
+            engage_radius_au: 0.0, // inert: no encounter envelope at all
+            engage_speed: 2.0e-3,
+            p_rob_milli: 700,
+            ransom_cap_micros: 2_000_000,
+            food_per_unit_micros: 0, // console-calibrated from P0 (spec §4)
+            upkeep_per_tick: 0,      // console-calibrated from P0 (spec §4)
+            grubstake_micros: 0,     // console-calibrated from P0 (spec §4)
+            starve_lie_low_ticks: 2000,
+            heat_threshold: 250,
+            notoriety_per_rob: 100,
+            notoriety_decay_milli: 950,
+            decay_interval: 200,
+            heat_lie_low_ticks: 1500,
+            rob_cooldown: 600,
+            driveoff_cooldown: 200,
+            pirate_base_strength: 1,
+            pirate_max_reach_au: 0.6,
+            relocate_period: 2500,
+            stay_milli: 500,
+            hideout_body_index: 0,
+            evidence_window: 4000,
+            evidence_penalty_milli: 150,
+            hauler_belief_scoring: false,
+            hauler_buy_policy: BuyPolicy::Off,
+        }
+    }
+}
+
+/// The Yard (pirates rung §6): one config-minted corporation receives all
+/// upgrade payments (credits recycle corp -> escrow -> wallet -> upgrade -> corp).
+/// Caps are STRUCTURAL: settle is a no-op at cap, keeping strength in [0, 3]
+/// and the un-simulated wing small enough for a chronicle line.
+#[derive(Clone, Copy, Debug)]
+pub struct ShipyardCfg {
+    /// Corporation (config index) credited with every upgrade payment.
+    pub corp_index: u32,
+    /// Price of hull L1 / L2 (micros).
+    pub hull_price_micros: [i64; 2],
+    /// Price of escort L1 / L2 (micros).
+    pub escort_price_micros: [i64; 2],
+    /// Cargo units added per hull (capacity = base + hulls * this).
+    pub hull_step_units: u32,
+    /// Structural cap on the hull count (fleet ledger, spec §6 owner caveat).
+    pub max_hulls: u8,
+    /// Structural cap on the escort count.
+    pub max_escorts: u8,
+    /// Scripted-hauler working-capital headroom: buy only when
+    /// `credits >= price * buy_headroom_milli / 1000`.
+    pub buy_headroom_milli: u32,
+}
+
+impl Default for ShipyardCfg {
+    fn default() -> Self {
+        ShipyardCfg {
+            corp_index: 0,
+            hull_price_micros: [8_000_000, 20_000_000],
+            escort_price_micros: [5_000_000, 12_000_000],
+            hull_step_units: 5,
+            max_hulls: 2,
+            max_escorts: 2,
+            buy_headroom_milli: 1500,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -202,6 +371,10 @@ pub struct RunConfig {
     pub contracts: Vec<ContractInit>,
     pub price_cfg: PriceCfg,
     pub dispatch_cfg: DispatchCfg,
+    // Pirates rung (Commit A, folded AFTER dispatch_cfg, append-only). Defaults
+    // leave the trophic machinery inert (engage_radius_au == 0.0, BuyPolicy::Off).
+    pub trophic: TrophicCfg,
+    pub shipyard: ShipyardCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -260,6 +433,10 @@ impl RunConfig {
     ///  18. per-contract: corp_index, resource.index(), qty, from_station_index, to_station_index, reward_micros
     ///  19. price_cfg: slope_milli, reprice_interval, per-resource (base_micros, cap)
     ///  20. dispatch_cfg: demand_low, demand_high, stagger_period, contract_reward_micros, contract_qty
+    ///  21. per-craft: role.rank(), scripted, spec.base_cargo_capacity   (pirates rung A)
+    ///  22. per-station: sells_upgrades                                  (pirates rung A)
+    ///  23. trophic: all fields in declaration order (f64 via to_bits, enums via rank)
+    ///  24. shipyard: all fields in declaration order
     pub fn config_hash(&self) -> ConfigHash {
         // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
         // until it is explicitly folded below (D10/M6 — closes the silent-omission
@@ -279,6 +456,8 @@ impl RunConfig {
             contracts,
             price_cfg,
             dispatch_cfg,
+            trophic,  // NEW (pirates rung A): destructure forces folding below
+            shipyard, // NEW (pirates rung A): destructure forces folding below
         } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
@@ -366,6 +545,88 @@ impl RunConfig {
         h.write_u64(dispatch_cfg.stagger_period as u64);
         h.write_u64(dispatch_cfg.contract_reward_micros as u64);
         h.write_u64(dispatch_cfg.contract_qty as u64);
+        // PIRATES RUNG A (TAIL, append-only — CONFIG_FIELD_ORDER 21..=24). The
+        // byte stream above stays byte-identical; this only EXTENDS it. Counts
+        // for craft/stations are already folded at words 7-8/14, so per-element
+        // appends here cannot alias across cardinalities.
+        for c in craft {
+            h.write_u64(c.role.rank() as u64);
+            h.write_u64(c.scripted as u64);
+            h.write_u64(c.spec.base_cargo_capacity as u64);
+        }
+        for s in stations {
+            h.write_u64(s.sells_upgrades as u64);
+        }
+        // Exhaustive destructures: a NEW TrophicCfg/ShipyardCfg field is a
+        // COMPILE ERROR here until explicitly folded (the D10/M6 discipline).
+        let TrophicCfg {
+            engage_radius_au,
+            engage_speed,
+            p_rob_milli,
+            ransom_cap_micros,
+            food_per_unit_micros,
+            upkeep_per_tick,
+            grubstake_micros,
+            starve_lie_low_ticks,
+            heat_threshold,
+            notoriety_per_rob,
+            notoriety_decay_milli,
+            decay_interval,
+            heat_lie_low_ticks,
+            rob_cooldown,
+            driveoff_cooldown,
+            pirate_base_strength,
+            pirate_max_reach_au,
+            relocate_period,
+            stay_milli,
+            hideout_body_index,
+            evidence_window,
+            evidence_penalty_milli,
+            hauler_belief_scoring,
+            hauler_buy_policy,
+        } = trophic;
+        h.write_u64(engage_radius_au.to_bits());
+        h.write_u64(engage_speed.to_bits());
+        h.write_u64(*p_rob_milli as u64);
+        h.write_u64(*ransom_cap_micros as u64);
+        h.write_u64(*food_per_unit_micros as u64);
+        h.write_u64(*upkeep_per_tick as u64);
+        h.write_u64(*grubstake_micros as u64);
+        h.write_u64(*starve_lie_low_ticks);
+        h.write_u64(*heat_threshold as u64);
+        h.write_u64(*notoriety_per_rob as u64);
+        h.write_u64(*notoriety_decay_milli as u64);
+        h.write_u64(*decay_interval);
+        h.write_u64(*heat_lie_low_ticks);
+        h.write_u64(*rob_cooldown);
+        h.write_u64(*driveoff_cooldown);
+        h.write_u64(*pirate_base_strength as u64);
+        h.write_u64(pirate_max_reach_au.to_bits());
+        h.write_u64(*relocate_period);
+        h.write_u64(*stay_milli as u64);
+        h.write_u64(*hideout_body_index as u64);
+        h.write_u64(*evidence_window);
+        h.write_u64(*evidence_penalty_milli as u64);
+        h.write_u64(*hauler_belief_scoring as u64);
+        h.write_u64(hauler_buy_policy.rank() as u64);
+        let ShipyardCfg {
+            corp_index,
+            hull_price_micros,
+            escort_price_micros,
+            hull_step_units,
+            max_hulls,
+            max_escorts,
+            buy_headroom_milli,
+        } = shipyard;
+        h.write_u64(*corp_index as u64);
+        h.write_u64(hull_price_micros[0] as u64);
+        h.write_u64(hull_price_micros[1] as u64);
+        h.write_u64(escort_price_micros[0] as u64);
+        h.write_u64(escort_price_micros[1] as u64);
+        h.write_u64(*hull_step_units as u64);
+        h.write_u64(*max_hulls as u64);
+        h.write_u64(*max_escorts as u64);
+        h.write_u64(*buy_headroom_milli as u64);
         ConfigHash(h.finish())
     }
 }
@@ -397,7 +658,7 @@ fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0xf4bc_85c3_7cb6_8a6b; // RE-PINNED: +economy fold (stations/producers/corps/contracts/price_cfg/dispatch_cfg). Was 0x278c_5d91_b75a_9e5a.
+    const GOLDEN_CONFIG_HASH: u64 = 0x1798_b108_edae_5bb6; // RE-PINNED: +trophic/shipyard/role/scripted/sells_upgrades/base_cargo_capacity config surface (pirates rung A). Was 0xf4bc_85c3_7cb6_8a6b.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -426,10 +687,13 @@ mod tests {
                     base_max_thrust: 0.01,
                     base_exhaust_velocity: 3.0,
                     base_fuel_capacity: 0.5,
+                    base_cargo_capacity: 5,
                 },
                 pos: Vec3::new(1.0, 0.0, 0.0),
                 vel: Vec3::new(0.0, 1.0, 0.0),
                 fuel_mass: 0.5,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],
@@ -438,6 +702,8 @@ mod tests {
             contracts: vec![],
             price_cfg: PriceCfg::default(),
             dispatch_cfg: DispatchCfg::default(),
+            trophic: TrophicCfg::default(),
+            shipyard: ShipyardCfg::default(),
         }
     }
 
@@ -545,6 +811,7 @@ mod tests {
             body_index: 0,
             initial_stock: [10, 0],
             initial_price_micros: [0, 0],
+            sells_upgrades: false,
         });
         assert_ne!(sample().config_hash(), c.config_hash());
     }
@@ -590,6 +857,81 @@ mod tests {
     }
 
     #[test]
+    fn trophic_cfg_defaults_are_inert() {
+        // Default TrophicCfg disables the whole predation machinery: an
+        // engage radius of 0 means no encounter envelope ever contains a hauler.
+        let t = TrophicCfg::default();
+        assert_eq!(t.engage_radius_au, 0.0);
+        // ...and a RunConfig built without pirates mints zero pirate rows.
+        // (dt 0.01 passes the reset brakability guard; sample() is hash-only.)
+        let mut c = sample();
+        c.dt = Dt::new(0.01);
+        let (w, _) = crate::world::World::reset(c).expect("resolvable config");
+        assert!(
+            w.ships.pirate.iter().all(Option::is_none),
+            "no Pirate-role rows => no Some(pirate) rows"
+        );
+    }
+
+    #[test]
+    fn pirate_role_mints_pirate_state() {
+        let mut c = sample();
+        c.dt = Dt::new(0.01); // pass the reset brakability guard
+        c.trophic.grubstake_micros = 1_500_000;
+        c.craft[0].role = crate::stores::CraftRole::Pirate;
+        let (w, _) = crate::world::World::reset(c).expect("resolvable config");
+        let p = w.ships.pirate[0].expect("Pirate role mints PirateState at reset");
+        assert_eq!(p.food_micros, 1_500_000, "minted with the configured grubstake");
+        assert_eq!(p.notoriety, 0);
+        assert_eq!(p.lie_low_until, crate::time::Tick(0));
+        assert_eq!(w.ships.role[0], crate::stores::CraftRole::Pirate);
+    }
+
+    #[test]
+    fn changing_trophic_or_shipyard_changes_config_hash() {
+        let mut c = sample();
+        c.trophic.engage_radius_au = 5.0e-4;
+        assert_ne!(sample().config_hash(), c.config_hash());
+        let mut d = sample();
+        d.trophic.hauler_buy_policy = BuyPolicy::EscortFirst;
+        assert_ne!(sample().config_hash(), d.config_hash());
+        let mut e = sample();
+        e.shipyard.hull_price_micros[1] = 21_000_000;
+        assert_ne!(sample().config_hash(), e.config_hash());
+    }
+
+    #[test]
+    fn changing_role_scripted_vendor_capacity_changes_config_hash() {
+        let mut c = sample();
+        c.craft[0].role = crate::stores::CraftRole::Pirate;
+        assert_ne!(sample().config_hash(), c.config_hash());
+        let mut d = sample();
+        d.craft[0].scripted = false;
+        assert_ne!(sample().config_hash(), d.config_hash());
+        let mut e = sample();
+        e.craft[0].spec.base_cargo_capacity = 10;
+        assert_ne!(sample().config_hash(), e.config_hash());
+        // sells_upgrades participates: same station with/without the vendor bit.
+        let station = |sells: bool| StationInit {
+            body_index: 0,
+            initial_stock: [10, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: sells,
+        };
+        let mut f = sample();
+        f.stations.push(station(false));
+        let mut g = sample();
+        g.stations.push(station(true));
+        assert_ne!(f.config_hash(), g.config_hash());
+    }
+
+    #[test]
+    #[ignore = "prints the golden constant for config_hash_golden_anchor_is_stable"]
+    fn print_golden_config() {
+        println!("GOLDEN_CONFIG_HASH=0x{:016x}", sample().config_hash().0);
+    }
+
+    #[test]
     fn changing_cardinality_changes_hash() {
         // An extra all-zero craft must still change the hash, because counts are
         // folded in BEFORE field values.
@@ -600,10 +942,13 @@ mod tests {
                 base_max_thrust: 0.0,
                 base_exhaust_velocity: 0.0,
                 base_fuel_capacity: 0.0,
+                base_cargo_capacity: 5,
             },
             pos: Vec3::new(0.0, 0.0, 0.0),
             vel: Vec3::new(0.0, 0.0, 0.0),
             fuel_mass: 0.0,
+            role: crate::stores::CraftRole::Idle,
+            scripted: true,
         });
         assert_ne!(sample().config_hash(), c.config_hash());
     }

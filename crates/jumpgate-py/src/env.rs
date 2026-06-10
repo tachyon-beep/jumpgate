@@ -172,6 +172,7 @@ fn config_template(num_craft: usize) -> RunConfig {
         base_max_thrust: 1.0e-17,
         base_exhaust_velocity: 1.0e-3,
         base_fuel_capacity: 1.0e-12,
+        base_cargo_capacity: 5,
     };
     let craft = (0..num_craft)
         .map(|_| CraftInit {
@@ -179,6 +180,8 @@ fn config_template(num_craft: usize) -> RunConfig {
             pos: Vec3::new(1.0, 0.0, 0.0),    // 1 AU from the star
             vel: Vec3::new(0.0, 0.0172, 0.0), // ~circular at 1 AU: sqrt(G_CANONICAL) AU/day
             fuel_mass: 1.0e-12,
+            role: jumpgate_core::stores::CraftRole::Idle,
+            scripted: true,
         })
         .collect();
     RunConfig {
@@ -205,6 +208,8 @@ fn config_template(num_craft: usize) -> RunConfig {
         contracts: vec![],
         price_cfg: jumpgate_core::config::PriceCfg::default(),
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
 
@@ -312,6 +317,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
         base_max_thrust: 1.0e-12,
         base_exhaust_velocity: 2.0,
         base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 5,
     };
 
     // Spawn co-located with body 1 (station 0's host) at its seeded phase,
@@ -327,16 +333,43 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
     let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
     let craft = (0..num_craft)
-        .map(|_| CraftInit { spec: spec.clone(), pos, vel, fuel_mass: 1.0e-9 })
+        .map(|_| CraftInit {
+            spec: spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: jumpgate_core::stores::CraftRole::Idle,
+            scripted: true,
+        })
         .collect();
 
     // Station k rides body k+1 (body 0 is the star). Miners' homes (0, 2)
     // open with deep Ore stock; sink stations (1, 3) open empty.
     let stations = vec![
-        StationInit { body_index: 1, initial_stock: [40, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 2, initial_stock: [0, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 3, initial_stock: [40, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 4, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+        StationInit {
+            body_index: 1,
+            initial_stock: [40, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 2,
+            initial_stock: [0, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 3,
+            initial_stock: [40, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 4,
+            initial_stock: [0, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
     ];
     let producers = vec![
         // Ore miners at stations 0 and 2 (keep pickup stock flowing).
@@ -397,6 +430,8 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
             contract_reward_micros: 0,
             contract_qty: 0,
         },
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
 

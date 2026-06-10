@@ -77,6 +77,7 @@ fn p0_config(seed: u64, num_craft: usize) -> RunConfig {
         base_max_thrust: 1.0e-12,
         base_exhaust_velocity: 2.0,
         base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 5,
     };
 
     // Spawn co-located with body 1 (station 0's host), co-orbiting.
@@ -87,14 +88,41 @@ fn p0_config(seed: u64, num_craft: usize) -> RunConfig {
     let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
     let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
     let craft = (0..num_craft)
-        .map(|_| CraftInit { spec: spec.clone(), pos, vel, fuel_mass: 1.0e-9 })
+        .map(|_| CraftInit {
+            spec: spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: jumpgate_core::stores::CraftRole::Idle,
+            scripted: true,
+        })
         .collect();
 
     let stations = vec![
-        StationInit { body_index: 1, initial_stock: [40, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 2, initial_stock: [0, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 3, initial_stock: [40, 0], initial_price_micros: [0, 0] },
-        StationInit { body_index: 4, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+        StationInit {
+            body_index: 1,
+            initial_stock: [40, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 2,
+            initial_stock: [0, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 3,
+            initial_stock: [40, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 4,
+            initial_stock: [0, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        },
     ];
     let producers = vec![
         ProducerInit {
@@ -146,6 +174,8 @@ fn p0_config(seed: u64, num_craft: usize) -> RunConfig {
             contract_reward_micros: 0,
             contract_qty: 0,
         },
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
 

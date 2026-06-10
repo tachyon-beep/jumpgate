@@ -81,6 +81,8 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
         contracts: vec![],
         price_cfg: jumpgate_core::config::PriceCfg::default(),
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
 
@@ -93,10 +95,13 @@ fn coasting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
             base_max_thrust: 0.0,
             base_exhaust_velocity: 1.0e-2,
             base_fuel_capacity: 0.0,
+            base_cargo_capacity: 5,
         },
         pos,
         vel,
         fuel_mass: 0.0,
+        role: jumpgate_core::stores::CraftRole::Idle,
+        scripted: true,
     }
 }
 
@@ -228,10 +233,13 @@ fn thrusting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
             base_max_thrust: 1.0e-12,
             base_exhaust_velocity: 1.0e-2,
             base_fuel_capacity: 1.0e-9,
+            base_cargo_capacity: 5,
         },
         pos,
         vel,
         fuel_mass: 1.0e-9, // full tank => Δv budget for the accelerate+brake round trip
+        role: jumpgate_core::stores::CraftRole::Idle,
+        scripted: true,
     }
 }
 
@@ -345,6 +353,8 @@ fn transfer_to_moving_body_rendezvous() {
         contracts: vec![],
         price_cfg: jumpgate_core::config::PriceCfg::default(),
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");
@@ -473,6 +483,8 @@ fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
         contracts: vec![],
         price_cfg: jumpgate_core::config::PriceCfg::default(),
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");

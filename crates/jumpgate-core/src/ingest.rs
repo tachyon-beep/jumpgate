@@ -239,6 +239,7 @@ mod tests {
                     base_max_thrust: 1.0,
                     base_exhaust_velocity: 1.0,
                     base_fuel_capacity: 1.0,
+                    base_cargo_capacity: 5,
                 },
                 Vec3::ZERO,
                 Vec3::ZERO,
@@ -365,10 +366,13 @@ mod tests {
                     base_max_thrust: 1e-12,
                     base_exhaust_velocity: 1e-2,
                     base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
                 },
                 pos: Vec3::new(5.0, 0.0, 0.0),
                 vel: Vec3::ZERO,
                 fuel_mass: 1e-9,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],
@@ -377,6 +381,8 @@ mod tests {
             contracts: vec![],
             price_cfg: crate::config::PriceCfg::default(),
             dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
         }
     }
 

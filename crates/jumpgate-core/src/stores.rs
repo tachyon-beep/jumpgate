@@ -307,6 +307,7 @@ mod tests {
             base_max_thrust: 250.0,
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
+            base_cargo_capacity: 5,
         };
         // IDENTITY is bit-identical to the base numbers.
         let id = effective_params(&spec, &EffectiveMods::IDENTITY);
@@ -331,6 +332,7 @@ mod tests {
             base_max_thrust: 250.0,
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
+            base_cargo_capacity: 5,
         };
         let eff = effective_params(&spec, &EffectiveMods::IDENTITY);
         assert_eq!(eff.dry_mass, spec.base_dry_mass);
@@ -384,6 +386,7 @@ mod tests {
             base_max_thrust: 250.0,
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
+            base_cargo_capacity: 5,
         };
         ship.push(spec, Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 40.0);
         assert_eq!(ship.role[0], CraftRole::Idle);
@@ -418,6 +421,7 @@ mod tests {
             base_max_thrust: 250.0,
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
+            base_cargo_capacity: 5,
         };
         ship.push(spec, Vec3::ZERO, Vec3::ZERO, 40.0);
         // Mutate the new columns and read them back (round-trip).
@@ -448,6 +452,7 @@ mod tests {
             base_max_thrust: 250.0,
             base_exhaust_velocity: 30.0,
             base_fuel_capacity: 40.0,
+            base_cargo_capacity: 5,
         };
         let id0 = ship.push(spec.clone(), Vec3::new(1.0, 0.0, 0.0), Vec3::ZERO, 40.0);
         let id1 = ship.push(spec.clone(), Vec3::new(2.0, 0.0, 0.0), Vec3::ZERO, 20.0);

@@ -1076,6 +1076,7 @@ mod tests {
                 base_max_thrust: 0.0,
                 base_exhaust_velocity: 1.0,
                 base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
             },
             Vec3::ZERO,
             Vec3::ZERO,

@@ -196,14 +196,22 @@ impl World {
             // Hauler economy columns: every craft starts Idle, empty-handed, broke,
             // uncontracted (the loop builds the SoA manually; keep all columns
             // length-parallel or the state hash's dense-row unwrap panics).
-            ships.role.push(crate::stores::CraftRole::Idle);
+            ships.role.push(c.role);
             ships.cargo.push(None);
             ships.credits_micros.push(0);
             ships.contract.push(None);
-            // Trophic columns: default 0 risk-appetite, no pirate state (every
-            // config-minted craft is a non-pirate hauler/idle craft at tick 0).
+            // Trophic columns: default 0 risk-appetite; Pirate-role rows mint a
+            // PirateState (grubstake food, zero notoriety, immediately active).
             ships.risk_appetite.push(0);
-            ships.pirate.push(None);
+            ships.pirate.push(match c.role {
+                crate::stores::CraftRole::Pirate => Some(crate::stores::PirateState {
+                    food_micros: cfg.trophic.grubstake_micros,
+                    notoriety: 0,
+                    lie_low_until: Tick(0),
+                    // Task-2: engage_cooldown_until joins this mint with state v4.
+                }),
+                _ => None,
+            });
         }
 
         // Mint economy stores from the RunConfig init vecs. Dependency order:
@@ -794,11 +802,14 @@ mod tests {
                     base_max_thrust: 1e-17,
                     base_exhaust_velocity: 1e-3,
                     base_fuel_capacity: 1e-12,
+                    base_cargo_capacity: 5,
                 },
                 // 1 AU out, on a roughly circular prograde orbit (v ~ sqrt(GM/r)).
                 pos: Vec3::new(1.0, 0.0, 0.0),
                 vel: Vec3::new(0.0, 0.0172, 0.0),
                 fuel_mass: 1e-12,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],
@@ -807,6 +818,8 @@ mod tests {
             contracts: vec![],
             price_cfg: crate::config::PriceCfg::default(),
             dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
         }
     }
 
@@ -847,10 +860,13 @@ mod tests {
                     base_max_thrust: 1e-12,
                     base_exhaust_velocity: 1e-2, // Δv_max = 1e-2*ln(2) ~ 6.9e-3 > 2x cruise cap
                     base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
                 },
                 pos: Vec3::new(5.0, 0.0, 0.0),
                 vel: Vec3::ZERO, // start at REST: no orbital-velocity Δv tax
                 fuel_mass: 1e-9,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],
@@ -859,6 +875,8 @@ mod tests {
             contracts: vec![],
             price_cfg: crate::config::PriceCfg::default(),
             dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
         }
     }
 
@@ -1208,11 +1226,13 @@ mod tests {
                 body_index: 0,
                 initial_stock: [7, 3],
                 initial_price_micros: [100, 200],
+                sells_upgrades: false,
             },
             StationInit {
                 body_index: 0,
                 initial_stock: [0; N_RESOURCES],
                 initial_price_micros: [150, 250],
+                sells_upgrades: false,
             },
         ];
         cfg.producers = vec![ProducerInit {
@@ -1259,6 +1279,7 @@ mod tests {
             body_index: 0,
             initial_stock: [0; N_RESOURCES],
             initial_price_micros: [0; N_RESOURCES],
+            sells_upgrades: false,
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
@@ -1300,6 +1321,7 @@ mod tests {
             body_index: 5,
             initial_stock: [0; N_RESOURCES],
             initial_price_micros: [0; N_RESOURCES],
+            sells_upgrades: false,
         }];
         assert!(matches!(
             World::reset(cfg),
@@ -1350,12 +1372,14 @@ mod tests {
                 body_index: 0,
                 initial_stock: [0, 10],
                 initial_price_micros: [0, 0],
+                sells_upgrades: false,
             },
             // Station B (the delivery destination).
             StationInit {
                 body_index: 1,
                 initial_stock: [0, 0],
                 initial_price_micros: [0, 0],
+                sells_upgrades: false,
             },
         ];
         cfg.corporations = vec![CorporationInit {
@@ -1401,9 +1425,9 @@ mod tests {
         cfg.craft[0].vel = Vec3::new(0.0, v_circ, 0.0);
         cfg.stations = vec![
             // Station A (origin) on the FAST body: 10 Fuel covers the 5-unit load.
-            StationInit { body_index: 1, initial_stock: [0, 10], initial_price_micros: [0, 0] },
+            StationInit { body_index: 1, initial_stock: [0, 10], initial_price_micros: [0, 0], sells_upgrades: false },
             // Station B (destination) on the central star.
-            StationInit { body_index: 0, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+            StationInit { body_index: 0, initial_stock: [0, 0], initial_price_micros: [0, 0], sells_upgrades: false },
         ];
         cfg.corporations =
             vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
@@ -2005,6 +2029,7 @@ mod tests {
             body_index: 0,
             initial_stock: [0; N_RESOURCES],
             initial_price_micros: [0; N_RESOURCES],
+            sells_upgrades: false,
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
@@ -2126,9 +2151,9 @@ mod tests {
         }
         cfg.stations = vec![
             // Station A (origin): deep Fuel stock + producers keep it restocked.
-            StationInit { body_index: 0, initial_stock: [0, 1000], initial_price_micros: [0, 0] },
+            StationInit { body_index: 0, initial_stock: [0, 1000], initial_price_micros: [0, 0], sells_upgrades: false },
             // Station B (destination): a Fuel demand sink drains it each tick.
-            StationInit { body_index: 1, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+            StationInit { body_index: 1, initial_stock: [0, 0], initial_price_micros: [0, 0], sells_upgrades: false },
         ];
         cfg.producers = vec![
             ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Resource::Ore, 20)), interval: 1 } },

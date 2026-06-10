@@ -34,10 +34,13 @@ fn base_config() -> RunConfig {
                 base_max_thrust: 1.0e-13,
                 base_exhaust_velocity: 0.02,
                 base_fuel_capacity: 1.0e-9,
+                base_cargo_capacity: 5,
             },
             pos: Vec3::new(1.2, 0.0, 0.0),
             vel: Vec3::new(0.0, 0.9, 0.0),
             fuel_mass: 5.0e-10,
+            role: jumpgate_core::stores::CraftRole::Idle,
+            scripted: true,
         }],
         guidance: GuidanceParams::default(),
         stations: vec![],
@@ -46,6 +49,8 @@ fn base_config() -> RunConfig {
         contracts: vec![],
         price_cfg: jumpgate_core::config::PriceCfg::default(),
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
+        trophic: jumpgate_core::config::TrophicCfg::default(),
+        shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
 

@@ -114,6 +114,7 @@ mod tests {
                 base_max_thrust: 1.0,
                 base_exhaust_velocity: 1.0,
                 base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
             },
             &crate::stores::EffectiveMods::IDENTITY,
         )
