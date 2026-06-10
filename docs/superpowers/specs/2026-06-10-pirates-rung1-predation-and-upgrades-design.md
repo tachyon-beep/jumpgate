@@ -169,6 +169,10 @@ On **Robbed(p, h, contract c)** — all in stage 3b2, mirroring `resolve_failure
 - **Metabolism:** `food_micros += qty × food_per_unit_micros`; `notoriety += notoriety_per_rob`.
 - **Events:** `Robbed { pirate, hauler, contract, value_micros: ransom }`;
   DrivenOff emits `DrivenOff { pirate, hauler }`. Evidence-shaped: who/what/where/magnitude.
+  Both emission sites also log the engagement's kinematic snapshot (relative bearing +
+  speed, free at that point in 3b2) into the diagnostics window — it feeds the
+  endpoint-ambush histogram now and is the hit-location data seam for the future
+  part-graph damage model (§14.7).
 
 Robbed cargo never reaches the destination → destination stock stays low → REPOST keeps
 the predated route bursting: **prey regrows where wolves hunt, for free** (verified
@@ -534,7 +538,23 @@ commitments in §8/§14 keep them additive).
    on the existing upgrade verb; (d) mass-bearing cargo touches accel and the reset
    guard/brakability — a physics rung, sequenced deliberately, never a side effect. Keep
    `Resource` append-only; the goods table arrives as a superset, not a migration.
-7. **Capability mixins** (owner): orthogonal Option-column capabilities on positioned
+7. **Ships as first-class part-graphs** (owner): the future ship = a base hull carrying
+   a configuration of aftermarket parts — and combat damage is LOCATIONAL without FPS
+   modeling: "hit in the rear → hit the engines → the engines are armoured →
+   therefore…". The chain is: hit location = a pure function of engagement KINEMATICS
+   (a stern-chase robbery hits engines; a head-on hits the bow — real Newtonian
+   geometry, zero new simulation); location → parts via the hull's configuration map;
+   armor = per-part modifier; consequence = the part's effects rows (§14.5) feeding
+   EffectiveMods, so capability loss propagates as data. Rung-1 seams shaped for it:
+   (a) capability access stays exclusively through `effective_params`/EffectiveMods
+   (already law) — the parts model later replaces the INPUTS to mods, never the call
+   sites; (b) the upgrade catalog + purchase verb IS the proto parts market
+   (`UpgradeKind` append-only; "buy upgrade" generalizes to "install part");
+   (c) engagement events carry a kinematic snapshot (relative bearing + speed at
+   engagement — available free at the emission site, §2) so the hit-location model's
+   data seam exists from rung 1, and the same snapshot feeds the endpoint-ambush
+   discriminator today.
+8. **Capability mixins** (owner): orthogonal Option-column capabilities on positioned
    entities; `sells_upgrades` debuts the pattern (§6). Latent content the composition
    rules must not foreclose: craft+fence (smuggler barge), craft+vendor (fleet tender),
    craft+refuel (tanker logistics), craft+patrol+contract_board+rearm (the navy frigate
