@@ -499,6 +499,13 @@ impl World {
         )
     }
 
+    /// Shipyard config (the Yard's corp index) for the diagnostics sampler's
+    /// treasury read (`diagnostics::sample_window`, the §9 Yard-circulation
+    /// panel). Plain read over already-hashed config — never a behavior input.
+    pub(crate) fn shipyard_cfg(&self) -> &crate::config::ShipyardCfg {
+        &self.config.shipyard
+    }
+
     /// Idle == available for a strategic decision: role `Idle` AND no bound (or
     /// intended) contract. `None` for a stale id.
     pub fn craft_is_idle(&self, id: CraftId) -> Option<bool> {

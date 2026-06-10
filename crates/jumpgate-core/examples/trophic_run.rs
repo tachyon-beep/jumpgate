@@ -1,183 +1,36 @@
-//! trophic_run — the P0 game runner + chronicle (pirates rung 1, plan Task 0).
+//! trophic_run — the pirates-rung game runner + chronicle (plan Tasks 0 + 6).
 //!
 //! FRAME (PDR-0006): a designer's window, not a gate. This runner steps a
-//! seeded world, samples one integer `TrophicSample` per `WINDOW_TICKS`
-//! window, emits JSONL for the sweep lab, prints the classifier's diagnosis
-//! as evidence (never a verdict on the build), and can print a per-craft
+//! seeded `scenario_trophic` world, samples one integer `TrophicSample` per
+//! `WINDOW_TICKS` window, emits JSONL for the sweep lab
+//! (`python/analysis/sweep_trophic.py`), prints the classifier's diagnosis as
+//! evidence (never a verdict on the build), and can print a per-craft
 //! chronicle and run a two-run replay bit-identity check.
 //!
-//! P0 scope: the world is the EXISTING trader-style economy (no pirates) via a
-//! temporary local config fn cloned from the trader template shape — its job
-//! is to measure `laden_trips_per_window`, THE spec-§4 calibration input for
-//! the food band. Task 6 replaces the config with `scenario_trophic`.
+//! Every spec-§9 tuning knob rides `--set knob=value` (repeatable;
+//! `scenario::apply_knob` is the surface). The live positive control is
+//! `--set pirate_max_reach_au=999 --set stay_milli=0` (must read
+//! RiskEqualized — the instrument-kill check, spec §1). `--assert-no-fuel-empty`
+//! makes the 50k-tick endurance window mechanical (zero `FuelEmpty` events;
+//! a determinism-cheap window, not an aliveness gate).
 //!
 //! Usage:
 //!   cargo run -p jumpgate-core --example trophic_run -- \
-//!     --seed 7 --ticks 10000 --jsonl /tmp/p0.jsonl --chronicle --replay-check
+//!     --seed 7 --ticks 50000 --jsonl /tmp/run.jsonl --chronicle \
+//!     --replay-check --assert-no-fuel-empty --set p_rob_milli=600
 
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::process::ExitCode;
 
 use jumpgate_core::diagnostics::{self, TrophicSample};
-use jumpgate_core::economy::{Recipe, Resource};
 use jumpgate_core::{
-    BaseSpec, BodyInit, Command, ContractInit, CorporationInit, CraftId, CraftInit, DispatchCfg,
-    Dt, EventKind, G_CANONICAL, GuidanceParams, OrbitalElements, PriceCfg, ProducerInit,
-    RunConfig, StateView, StationInit, SubstepCfg, Tick, Vec3, World, state_hash,
+    Command, CraftId, EventKind, RunConfig, StateView, Tick, World, apply_knob, scenario_trophic,
+    state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
 const HASH_SAMPLE_EVERY: u64 = 1000;
-
-/// Scripted haulers in the P0 baseline (one per seeded route template).
-const NUM_CRAFT: usize = 4;
-
-/// SplitMix64-style finalizer over `(seed, k)` — the trader template's
-/// dependency-free config-derivation mix (config inputs only, never world RNG).
-fn mix(seed: u64, k: u64) -> u64 {
-    let mut z = seed.wrapping_add(k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// Top-53-bits uniform [0, 1) construction (bit-exact, reproducible).
-fn u64_to_unit_f64(x: u64) -> f64 {
-    ((x >> 11) as f64) * (1.0 / (1u64 << 53) as f64)
-}
-
-/// TEMPORARY P0 baseline config — the trader scenario template's shape
-/// (jumpgate-py `trader_config_template`: 1e-3 star, 4 station bodies at
-/// a = 0.35/0.55/0.8/1.1 AU with seed-derived phases, Ore miners/sinks, four
-/// rate-mispriced route templates) with ONE deviation: `stagger_period = 4`
-/// turns the scripted ASSIGN ON (the trader gym sets 0 because the RL agent
-/// owns acceptance; P0 needs the haul loop to self-run with no commands).
-/// Replaced by `scenario_trophic` in Task 6.
-fn p0_config(seed: u64, num_craft: usize) -> RunConfig {
-    const ORBIT_AU: [f64; 4] = [0.35, 0.55, 0.8, 1.1];
-    const BODY_MASS: f64 = 1.0e-12;
-    const STAR_MASS: f64 = 1.0e-3;
-
-    let star = BodyInit {
-        mass: STAR_MASS,
-        elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
-    };
-    let mut bodies = vec![star];
-    for (k, &a) in ORBIT_AU.iter().enumerate() {
-        let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
-        bodies.push(BodyInit {
-            mass: BODY_MASS,
-            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0 },
-        });
-    }
-
-    let spec = BaseSpec {
-        base_dry_mass: 1.0e-9,
-        base_max_thrust: 1.0e-12,
-        base_exhaust_velocity: 2.0,
-        base_fuel_capacity: 1.0e-9,
-        base_cargo_capacity: 5,
-    };
-
-    // Spawn co-located with body 1 (station 0's host), co-orbiting.
-    let m0_home = bodies[1].elements.m0;
-    let a_home = ORBIT_AU[0];
-    let mu = G_CANONICAL * (STAR_MASS + BODY_MASS);
-    let v_circ = (mu / a_home).sqrt();
-    let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
-    let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
-    let craft = (0..num_craft)
-        .map(|_| CraftInit {
-            spec: spec.clone(),
-            pos,
-            vel,
-            fuel_mass: 1.0e-9,
-            role: jumpgate_core::stores::CraftRole::Idle,
-            scripted: true,
-        })
-        .collect();
-
-    let stations = vec![
-        StationInit {
-            body_index: 1,
-            initial_stock: [40, 0],
-            initial_price_micros: [0, 0],
-            sells_upgrades: false,
-        },
-        StationInit {
-            body_index: 2,
-            initial_stock: [0, 0],
-            initial_price_micros: [0, 0],
-            sells_upgrades: false,
-        },
-        StationInit {
-            body_index: 3,
-            initial_stock: [40, 0],
-            initial_price_micros: [0, 0],
-            sells_upgrades: false,
-        },
-        StationInit {
-            body_index: 4,
-            initial_stock: [0, 0],
-            initial_price_micros: [0, 0],
-            sells_upgrades: false,
-        },
-    ];
-    let producers = vec![
-        ProducerInit {
-            station_index: 0,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
-        },
-        ProducerInit {
-            station_index: 2,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
-        },
-        ProducerInit {
-            station_index: 1,
-            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
-        },
-        ProducerInit {
-            station_index: 3,
-            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
-        },
-    ];
-    let corporations =
-        vec![CorporationInit { treasury_micros: 1_000_000_000, home_station_index: 0 }];
-    let contracts = vec![
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 1, reward_micros: 1_000_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 3, reward_micros: 1_200_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 3, reward_micros: 1_600_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 1, reward_micros: 3_000_000 },
-    ];
-
-    RunConfig {
-        master_seed: seed,
-        dt: Dt::new(0.25),
-        softening: 1.0e-4,
-        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
-        ephemeris_window: 100_000,
-        bodies,
-        craft,
-        guidance: GuidanceParams::default(),
-        stations,
-        producers,
-        corporations,
-        contracts,
-        price_cfg: PriceCfg::default(),
-        dispatch_cfg: DispatchCfg {
-            demand_low: 10,
-            demand_high: 20,
-            // DEVIATION from the trader template (0): scripted ASSIGN ON so
-            // the haul loop self-runs; stagger 4 spreads accepts across craft.
-            stagger_period: 4,
-            contract_reward_micros: 0,
-            contract_qty: 0,
-        },
-        trophic: jumpgate_core::config::TrophicCfg::default(),
-        shipyard: jumpgate_core::config::ShipyardCfg::default(),
-    }
-}
 
 struct Args {
     seed: u64,
@@ -185,10 +38,20 @@ struct Args {
     jsonl: Option<String>,
     chronicle: bool,
     replay_check: bool,
+    assert_no_fuel_empty: bool,
+    sets: Vec<(String, String)>,
 }
 
 fn parse_args() -> Result<Args, String> {
-    let mut args = Args { seed: 7, ticks: 50_000, jsonl: None, chronicle: false, replay_check: false };
+    let mut args = Args {
+        seed: 7,
+        ticks: 50_000,
+        jsonl: None,
+        chronicle: false,
+        replay_check: false,
+        assert_no_fuel_empty: false,
+        sets: Vec::new(),
+    };
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
         match flag.as_str() {
@@ -203,26 +66,41 @@ fn parse_args() -> Result<Args, String> {
             "--jsonl" => args.jsonl = Some(it.next().ok_or("--jsonl needs a path")?),
             "--chronicle" => args.chronicle = true,
             "--replay-check" => args.replay_check = true,
+            "--assert-no-fuel-empty" => args.assert_no_fuel_empty = true,
+            "--set" => {
+                let kv = it.next().ok_or("--set needs knob=value")?;
+                let (k, v) = kv
+                    .split_once('=')
+                    .ok_or_else(|| format!("--set {kv}: expected knob=value"))?;
+                args.sets.push((k.to_string(), v.to_string()));
+            }
             other => return Err(format!("unknown arg: {other}")),
         }
     }
     Ok(args)
 }
 
-/// One full seeded run: returns the per-window samples, the sampled
-/// `(tick, state_hash)` stream, and the final world (for the chronicle).
+/// `simulate`'s product: per-window samples, the sampled `(tick, state_hash)`
+/// stream, and the final world (chronicle + event counts).
+type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World);
+
+/// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
+/// the replay-check's second run shares nothing but the recipe.
 fn simulate(
-    seed: u64,
-    ticks: u64,
+    args: &Args,
     mut jsonl: Option<&mut BufWriter<File>>,
-) -> (Vec<TrophicSample>, Vec<(u64, u64)>, World) {
-    let (mut world, _config_hash) = World::reset(p0_config(seed, NUM_CRAFT))
-        .unwrap_or_else(|e| panic!("p0 config must resolve: {e:?}"));
+) -> Result<RunProduct, String> {
+    let mut cfg: RunConfig = scenario_trophic(args.seed);
+    for (k, v) in &args.sets {
+        apply_knob(&mut cfg, k, v)?;
+    }
+    let (mut world, _config_hash) =
+        World::reset(cfg).map_err(|e| format!("scenario_trophic must resolve: {e}"))?;
     let mut cmds: Vec<Command> = Vec::new();
     let mut samples = Vec::new();
     let mut hashes = Vec::new();
     let mut window_start = Tick(0);
-    for _ in 0..ticks {
+    for _ in 0..args.ticks {
         world.step(&mut cmds);
         let t = world.tick().0;
         if t % HASH_SAMPLE_EVERY == 0 {
@@ -237,7 +115,7 @@ fn simulate(
             samples.push(s);
         }
     }
-    (samples, hashes, world)
+    Ok((samples, hashes, world))
 }
 
 /// Serialize one window sample as a JSONL line (field-for-field).
@@ -271,7 +149,8 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         EventKind::Arrival { craft, .. }
         | EventKind::FuelEmpty { craft }
         | EventKind::Wake { craft }
-        | EventKind::Reward { craft, .. } => Some(craft),
+        | EventKind::Reward { craft, .. }
+        | EventKind::UpgradePurchased { craft, .. } => Some(craft),
         EventKind::ContractAccepted { hauler, .. }
         | EventKind::ContractFulfilled { hauler, .. } => Some(hauler),
         EventKind::Robbed { pirate, .. }
@@ -310,26 +189,39 @@ fn main() -> ExitCode {
     let mut jsonl_writer = args.jsonl.as_ref().map(|p| {
         BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}")))
     });
-    let (samples, hashes, world) = simulate(args.seed, args.ticks, jsonl_writer.as_mut());
+    let (samples, hashes, world) = match simulate(&args, jsonl_writer.as_mut()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("trophic_run: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     if let Some(mut w) = jsonl_writer {
         w.flush().expect("jsonl flush");
     }
 
     println!(
-        "trophic_run: seed={} ticks={} windows={} (W={})",
+        "trophic_run: seed={} ticks={} windows={} (W={}) sets={:?}",
         args.seed,
         args.ticks,
         samples.len(),
-        diagnostics::WINDOW_TICKS
+        diagnostics::WINDOW_TICKS,
+        args.sets
     );
     for s in &samples {
         println!(
-            "  window@{:>6}: laden_trips={:>3} accepts={:?} laden_in_transit={} credits={:?}",
+            "  window@{:>6}: active={} low={} trips={:>3} robs={:>3} drivenoffs={:>3} \
+             buys(h/e)={}/{} yard={} laden={}",
             s.tick,
+            s.active_pirates,
+            s.lying_low,
             s.laden_trips,
-            s.per_route_accepts,
+            s.robs,
+            s.drivenoffs,
+            s.purchases_hull,
+            s.purchases_escort,
+            s.yard_treasury_micros,
             s.laden_in_transit,
-            s.per_craft_credits
         );
     }
     if !samples.is_empty() {
@@ -346,12 +238,51 @@ fn main() -> ExitCode {
     let diag = diagnostics::classify(&samples);
     println!("diagnosis (a window, not a gate — PDR-0006): {diag:?}");
 
+    // The endurance window (spec §6): FuelEmpty count over the whole run.
+    let fuel_empty = world
+        .recent_events(Tick(0))
+        .iter()
+        .filter(|e| matches!(e.kind, EventKind::FuelEmpty { .. }))
+        .count();
+    let robs_total: u64 = samples.iter().map(|s| u64::from(s.robs)).sum();
+    let trips_total: u64 = samples.iter().map(|s| u64::from(s.laden_trips)).sum();
+    let buys_total: u64 = samples
+        .iter()
+        .map(|s| u64::from(s.purchases_hull) + u64::from(s.purchases_escort))
+        .sum();
+    // Machine-readable summary line (the sweep aggregator parses this).
+    println!(
+        "RESULT seed={} ticks={} verdict={:?} cycled={} risk_heterogeneous={} \
+         outcomes_disperse={} fuel_empty={} robs={} laden_trips={} purchases={}",
+        args.seed,
+        args.ticks,
+        diag.verdict,
+        diag.cycled,
+        diag.risk_heterogeneous,
+        diag.outcomes_disperse,
+        fuel_empty,
+        robs_total,
+        trips_total,
+        buys_total,
+    );
+
     if args.chronicle {
         print_chronicle(&world);
     }
 
+    if args.assert_no_fuel_empty && fuel_empty > 0 {
+        eprintln!("trophic_run: endurance window violated — {fuel_empty} FuelEmpty event(s)");
+        return ExitCode::FAILURE;
+    }
+
     if args.replay_check {
-        let (_, hashes2, _) = simulate(args.seed, args.ticks, None);
+        let (_, hashes2, _) = match simulate(&args, None) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("trophic_run: replay arm: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
         if hashes == hashes2 {
             println!(
                 "replay-check OK: {} (tick, state_hash) samples bit-identical (every {} ticks)",

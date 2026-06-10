@@ -266,6 +266,8 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
     let mut laden_trips: u32 = 0;
     let mut robs: u32 = 0;
     let mut drivenoffs: u32 = 0;
+    let mut purchases_hull: u32 = 0;
+    let mut purchases_escort: u32 = 0;
     for e in world.recent_events(Tick(window_start.0.saturating_add(1))) {
         match e.kind {
             EventKind::ContractAccepted { contract, .. } => {
@@ -290,6 +292,14 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             EventKind::DrivenOff { .. } => {
                 drivenoffs = drivenoffs.saturating_add(1);
             }
+            EventKind::UpgradePurchased { kind, .. } => match kind {
+                crate::stores::UpgradeKind::Hull => {
+                    purchases_hull = purchases_hull.saturating_add(1);
+                }
+                crate::stores::UpgradeKind::Escort => {
+                    purchases_escort = purchases_escort.saturating_add(1);
+                }
+            },
             _ => {}
         }
     }
@@ -316,14 +326,19 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         laden_trips,
         robs,
         drivenoffs,
-        // Task-3: count EventKind::UpgradePurchased { kind: Hull/Escort } here.
-        purchases_hull: 0,
-        purchases_escort: 0,
+        purchases_hull,
+        purchases_escort,
         per_route_robs,
         per_route_accepts,
         per_route_traffic,
-        // Task-1/6: read the Yard corp treasury (ShipyardCfg.corp_index) here.
-        yard_treasury_micros: 0,
+        // The Yard treasury (ShipyardCfg.corp_index) at the sample point —
+        // the §9 broken-flow / circulation panel. Out-of-range index reads 0.
+        yard_treasury_micros: world
+            .corporations
+            .treasury_micros
+            .get(world.shipyard_cfg().corp_index as usize)
+            .copied()
+            .unwrap_or(0),
         per_craft_credits: world.ships.credits_micros.clone(),
         // The stage-3b2 emission sites push one kinematic snapshot per
         // engagement (pirate.rs); this window reads the trip-phase channel.
@@ -455,5 +470,80 @@ mod tests {
         assert!(d.risk_heterogeneous);
         assert!(!d.outcomes_disperse, "uniform final wallets must not read dispersed");
         assert_eq!(d.verdict, Verdict::DecisionNotTranslating);
+    }
+
+    /// The Task-6 sampler wires: `UpgradePurchased` events count into the
+    /// per-window purchase fields, and the Yard corp treasury
+    /// (`ShipyardCfg.corp_index`) is read at the sample point — the
+    /// purchase-desync and Yard-circulation panels' inputs (spec §9).
+    #[test]
+    fn sample_window_counts_purchases_and_reads_yard_treasury() {
+        use crate::config::{
+            BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
+            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
+            TrophicCfg,
+        };
+        use crate::contract::Command;
+        use crate::math::Vec3;
+        use crate::stores::UpgradeKind;
+        use crate::time::Dt;
+        use crate::types::{CommandKind, EntityRef, Target};
+        use crate::world::World;
+        let cfg = RunConfig {
+            master_seed: 7,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 256,
+            bodies: vec![BodyInit {
+                mass: 1e-9,
+                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            }],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
+                },
+                pos: Vec3::ZERO, // docked at the vendor body
+                vel: Vec3::ZERO,
+                fuel_mass: 1e-9,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![StationInit {
+                body_index: 0,
+                initial_stock: [0, 0],
+                initial_price_micros: [0, 0],
+                sells_upgrades: true,
+            }],
+            producers: vec![],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            contracts: vec![],
+            price_cfg: PriceCfg::default(),
+            dispatch_cfg: DispatchCfg::default(),
+            trophic: TrophicCfg::default(),
+            shipyard: ShipyardCfg::default(), // corp_index 0 == the only corp
+        };
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        world.ships.credits_micros[0] = 50_000_000;
+        let buy = |kind| Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::BuyUpgrade { kind },
+        };
+        world.step(&mut vec![buy(UpgradeKind::Escort)]);
+        world.step(&mut vec![buy(UpgradeKind::Hull)]);
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.purchases_escort, 1, "escort purchase counted in the window");
+        assert_eq!(s.purchases_hull, 1, "hull purchase counted in the window");
+        assert_eq!(
+            s.yard_treasury_micros,
+            5_000_000 + 8_000_000,
+            "Yard treasury read at the sample point (escort L1 + hull L1)"
+        );
     }
 }
