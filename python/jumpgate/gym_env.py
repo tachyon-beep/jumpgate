@@ -20,7 +20,11 @@ class JumpgateGymEnv(gym.Env):
     _MODES = {"waypoint": 0, "thrust": 1, "trader": 2}
 
     def __init__(
-        self, num_envs: int = 1, num_craft: int = 1, mode: str = "waypoint"
+        self,
+        num_envs: int = 1,
+        num_craft: int = 1,
+        mode: str = "waypoint",
+        num_pirates: int = 0,
     ) -> None:
         super().__init__()
         if mode not in self._MODES:
@@ -28,7 +32,12 @@ class JumpgateGymEnv(gym.Env):
         self.num_envs = num_envs
         self.num_craft = num_craft
         self.mode = mode
-        self._native = JumpgateEnv(num_envs, num_craft)
+        # Pirates variant (pirates rung spec §11, trader mode only): > 0
+        # appends K=2 pirate-contact blocks to the obs (20 -> 34) and defaults
+        # the horizon to 5000. obs_dim passthrough ONLY — the action space is
+        # UNCHANGED (no purchase actions this rung).
+        self.num_pirates = num_pirates
+        self._native = JumpgateEnv(num_envs, num_craft, num_pirates)
         # Unseeded-reset seed derivation (see reset()): base from the last
         # explicit seed, golden-ratio stride per unseeded reset.
         self._seed_base = 0

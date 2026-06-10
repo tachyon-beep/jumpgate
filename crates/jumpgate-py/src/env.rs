@@ -3,7 +3,7 @@
 //! Pure `decode_action` / `compute_reward` are unit-tested without the GIL.
 
 use crate::obs::{write_obs_frame_relative, write_obs_thrust_mode, OBS_DIM, THRUST_OBS_DIM};
-use crate::obs::{write_obs_trader, TRADER_OBS_DIM};
+use crate::obs::{write_obs_pirate_contacts, write_obs_trader, TRADER_OBS_DIM, TRADER_PIRATES_OBS_DIM};
 use jumpgate_core::{
     BaseSpec, BodyInit, Command, CommandKind, ContractId, CraftId, CraftInit, Dt, EntityRef,
     Event, EventKind,
@@ -238,6 +238,11 @@ impl Default for TraderCfg {
     }
 }
 
+/// Pirates-variant horizon (spec §11): ≈ 6-10 decisions, long enough that a
+/// robbery's Δcredits lands inside the episode that chose the route.
+/// Baselines are re-rolled at this horizon by the report script.
+pub const TRADER_PIRATES_HORIZON: u64 = 5000;
+
 /// SplitMix64-style finalizer over `(seed, k)`: deterministic, dependency-free
 /// pre-reset config derivation (NOT world state — RngStreams owns that; this
 /// only seeds the scenario template's initial mean anomalies).
@@ -280,7 +285,13 @@ fn mix(seed: u64, k: u64) -> u64 {
 /// 2·ln2 ≈ 1.39 ≫ the ~0.03/trip a transfer spends (≥ 3× greedy-burn margin,
 /// spec §4.3). Raising v_e (not capacity) keeps wet mass — and therefore
 /// trip times (~150–400 ticks/leg at a_full 5e-4) — unchanged.
-pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
+/// `num_pirates` (pirates rung spec §11): 0 (the trader rung, byte-identical
+/// config — no pirate rows, inert `TrophicCfg::default()`, zero Piracy draws)
+/// or N pirate-role craft spawned co-orbiting the OUTERMOST body (the
+/// hideout) with a LIVE trophic surface; their initial lurk stations are
+/// seed-drawn from the Piracy stream at `World::reset` (§5 — the
+/// gym-memorization guard).
+pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -> RunConfig {
     use jumpgate_core::config::{
         ContractInit, CorporationInit, DispatchCfg, PriceCfg, ProducerInit, StationInit,
     };
@@ -332,7 +343,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     let v_circ = (mu / a_home).sqrt();
     let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
     let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
-    let craft = (0..num_craft)
+    let mut craft: Vec<CraftInit> = (0..num_craft)
         .map(|_| CraftInit {
             spec: spec.clone(),
             pos,
@@ -342,6 +353,27 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
             scripted: true,
         })
         .collect();
+    // Pirates APPENDED after the agent craft (craft_ids()[0] stays the
+    // trader). Spawn co-orbiting the outermost body (a = 1.1 AU, the gym
+    // hideout); the reset Piracy draw sends each toward a seed-drawn lurk
+    // station (scenario_trophic's spawn math).
+    if num_pirates > 0 {
+        let m0_h = bodies[4].elements.m0;
+        let a_h = ORBIT_AU[3];
+        let v_h = (mu / a_h).sqrt();
+        let ppos = Vec3::new(a_h * m0_h.cos(), a_h * m0_h.sin(), 0.0);
+        let pvel = Vec3::new(-v_h * m0_h.sin(), v_h * m0_h.cos(), 0.0);
+        for _ in 0..num_pirates {
+            craft.push(CraftInit {
+                spec: spec.clone(),
+                pos: ppos,
+                vel: pvel,
+                fuel_mass: 1.0e-9,
+                role: jumpgate_core::stores::CraftRole::Pirate,
+                scripted: true,
+            });
+        }
+    }
 
     // Station k rides body k+1 (body 0 is the star). Miners' homes (0, 2)
     // open with deep Ore stock; sink stations (1, 3) open empty.
@@ -396,6 +428,28 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
     // concurrent escrows × 3 cr ≪ 1000 cr).
     let corporations =
         vec![CorporationInit { treasury_micros: 1_000_000_000, home_station_index: 0 }];
+
+    // LIVE trophic surface for the pirates variant (num_pirates == 0 keeps
+    // the inert default — the spec-§8 lever — so existing trader scenarios
+    // stay bit-identical). Values are the scenario_trophic §4 calibration,
+    // EXCEPT the grubstake: 150_000 / upkeep 25 = a 6000-tick active runway
+    // ≥ the 5000-tick horizon, so the predation field is live across the
+    // whole episode (an early starvation lie-low would blank the second half
+    // of every episode); lie-low visibility still reaches the obs via heat
+    // (3 quick robs cross the 250 notoriety threshold).
+    let trophic = if num_pirates > 0 {
+        jumpgate_core::config::TrophicCfg {
+            engage_radius_au: 5.0e-4, // 5× ARRIVAL_RADIUS (spec §2)
+            upkeep_per_tick: 25,
+            food_per_unit_micros: 10_000,
+            grubstake_micros: 150_000,
+            starve_lie_low_ticks: 4_000,
+            hideout_body_index: 4, // outermost trader body (1.1 AU)
+            ..jumpgate_core::config::TrophicCfg::default()
+        }
+    } else {
+        jumpgate_core::config::TrophicCfg::default()
+    };
     // Four rate-MISPRICED routes (reward NOT ∝ trip time — spec §6): which
     // route is best shifts with orbital phase, so rate-maximization is a
     // judgment, not a lookup.
@@ -430,7 +484,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
             contract_reward_micros: 0,
             contract_qty: 0,
         },
-        trophic: jumpgate_core::config::TrophicCfg::default(),
+        trophic,
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
     }
 }
@@ -458,6 +512,10 @@ pub struct JumpgateEnv {
     episode_counter: u64,   // total auto-resets since the last reset()
     // --- trader control-mode state (strategic Rung 1) ---
     trader: TraderCfg, // macro-step horizon
+    /// Pirates variant (pirates rung spec §11): pirate-role craft per trader
+    /// world. 0 = the untouched trader rung (obs 20, horizon 2000); > 0
+    /// appends K=2 contact blocks (obs 34) and defaults the horizon to 5000.
+    num_pirates: usize,
     /// Slot → contract-id mapping captured at obs-write time
     /// (`num_envs × TRADER_BOARD_SLOTS`; `None` = empty slot). The action
     /// decode targets the SAME board snapshot the agent observed.
@@ -488,7 +546,8 @@ fn write_thrust_obs_for(world: &World, flight: &FlightCfg, target: Vec3, id: Cra
 #[pymethods]
 impl JumpgateEnv {
     #[new]
-    fn new(num_envs: usize, num_craft: usize) -> Self {
+    #[pyo3(signature = (num_envs, num_craft, num_pirates = 0))]
+    fn new(num_envs: usize, num_craft: usize, num_pirates: usize) -> Self {
         let template = config_template(num_craft);
         let worlds = (0..num_envs)
             .map(|i| {
@@ -514,7 +573,14 @@ impl JumpgateEnv {
             ticks_in_episode: vec![0; num_envs],
             master_seed: 0,
             episode_counter: 0,
-            trader: TraderCfg::default(),
+            trader: TraderCfg {
+                horizon: if num_pirates > 0 {
+                    TRADER_PIRATES_HORIZON
+                } else {
+                    TraderCfg::default().horizon
+                },
+            },
+            num_pirates,
             board_ids: vec![None; num_envs * TRADER_BOARD_SLOTS],
             prev_credits: vec![0; num_envs],
         }
@@ -621,7 +687,13 @@ impl JumpgateEnv {
             if let Some(v) = time_limit {
                 self.trader.horizon = v;
             }
-            self.obs_dim = TRADER_OBS_DIM;
+            // Pirates variant: append K=2 contact blocks (20 -> 34). The
+            // action space is UNCHANGED (no purchase actions this rung).
+            self.obs_dim = if self.num_pirates > 0 {
+                TRADER_PIRATES_OBS_DIM
+            } else {
+                TRADER_OBS_DIM
+            };
             self.action_dim = TRADER_ACTION_DIM;
         } else if mode == 1 {
             // Curriculum knobs ride the template; thrust/dry-mass ratio is
@@ -918,7 +990,8 @@ impl JumpgateEnv {
     /// point's obs (the craft starts idle with a seeded board, so the first
     /// decision is immediate at tick 0).
     fn reset_trader_episode(&mut self, env: usize, seed: u64, out: &mut [f32]) {
-        let cfg = trader_config_template(seed.wrapping_add(env as u64), self.num_craft);
+        let cfg =
+            trader_config_template(seed.wrapping_add(env as u64), self.num_craft, self.num_pirates);
         let (world, _hash) = World::reset(cfg).expect("resolvable trader cfg");
         self.worlds[env] = world;
         self.ticks_in_episode[env] = 0;
@@ -971,8 +1044,18 @@ impl JumpgateEnv {
             credits,
             busy,
             time_remaining_frac,
-            &mut out[obs_base..obs_base + self.obs_dim],
+            &mut out[obs_base..obs_base + TRADER_OBS_DIM],
         );
+        // Pirates variant (spec §11): append the K=2 contact blocks (dims
+        // 20-33). `pirate_contacts` returns distance-sorted RAW evidence —
+        // rel-pos/strength/lying-low, never a route score.
+        if self.obs_dim == TRADER_PIRATES_OBS_DIM {
+            let contacts = world.pirate_contacts(craft);
+            write_obs_pirate_contacts(
+                &contacts,
+                &mut out[obs_base + TRADER_OBS_DIM..obs_base + self.obs_dim],
+            );
+        }
     }
 
     /// Trader-mode macro-step. Decode the f32 action index (0 = wait,
@@ -1144,7 +1227,7 @@ mod tests {
         // (a_max = 1e-5 AU/day^2 cannot counter it). With star_mass = 0 the
         // craft must start at rest; with star_mass = 1 it must start at the
         // circular-orbit speed for its spawn radius.
-        let mut env = JumpgateEnv::new(1, 1);
+        let mut env = JumpgateEnv::new(1, 1, 0);
         env.configure(
             1, None, None, Some(0.0), None, None, None, None, None, None, None, None, None, None,
         )
@@ -1169,9 +1252,9 @@ mod tests {
 
     #[test]
     fn trader_template_resolves_and_seed_varies_geometry() {
-        let a = trader_config_template(1, 1);
-        let b = trader_config_template(1, 1);
-        let c = trader_config_template(2, 1);
+        let a = trader_config_template(1, 1, 0);
+        let b = trader_config_template(1, 1, 0);
+        let c = trader_config_template(2, 1, 0);
         // Deterministic per seed:
         assert_eq!(a.bodies[1].elements.m0, b.bodies[1].elements.m0);
         // Varied across seeds (anti-memorization):
@@ -1190,7 +1273,7 @@ mod tests {
             .length();
         assert!(d < 1e-9, "craft co-located with station 0's body at t=0: d={d}");
         // Scripted ASSIGN is OFF: stepping a few ticks must NOT bind the craft.
-        let (mut world, _hash) = World::reset(trader_config_template(1, 1)).expect("cfg");
+        let (mut world, _hash) = World::reset(trader_config_template(1, 1, 0)).expect("cfg");
         let mut empty: Vec<Command> = Vec::new();
         for _ in 0..10 {
             world.step(&mut empty);
@@ -1203,7 +1286,7 @@ mod tests {
     /// Build a trader-mode env the way `configure(mode=2)` + `reset(seed)`
     /// would, but driveable from Rust (the pymethods need numpy buffers).
     fn trader_env(num_envs: usize, horizon: u64) -> JumpgateEnv {
-        let mut env = JumpgateEnv::new(num_envs, 1);
+        let mut env = JumpgateEnv::new(num_envs, 1, 0);
         env.control_mode = 2;
         env.trader = TraderCfg { horizon };
         env.obs_dim = TRADER_OBS_DIM;

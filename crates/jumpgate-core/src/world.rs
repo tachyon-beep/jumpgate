@@ -515,6 +515,51 @@ impl World {
         })
     }
 
+    /// Pirate contacts for the gym obs (pirates rung spec §11): every live
+    /// Pirate-role craft except the observer, as RAW evidence
+    /// `(rel_pos, rel_vel, strength, active)` — positions and capability
+    /// magnitude relative to the observer, plus lying-low visibility
+    /// (`active` = off lie-low at the current tick). NEVER `route_evidence`
+    /// counts or any derived score (the agent derives route danger from
+    /// contacts + geometry). Sorted by distance ascending, ties to the lower
+    /// dense row (stable sort over dense-row order — deterministic). Plain
+    /// read over already-hashed state (the trader-accessor pattern): no
+    /// layout, fold-order, or stepping change. Empty for a stale observer.
+    pub fn pirate_contacts(&self, observer: CraftId) -> Vec<(Vec3, Vec3, u32, bool)> {
+        let Some(orow) = self.ship_index(observer) else {
+            return Vec::new();
+        };
+        let opos = self.ships.pos[orow];
+        let ovel = self.ships.vel[orow];
+        let mut rows: Vec<(f64, usize)> = Vec::new();
+        for row in 0..self.ships.ids.len() {
+            if row == orow || self.ships.role[row] != crate::stores::CraftRole::Pirate {
+                continue;
+            }
+            rows.push((self.ships.pos[row].sub(opos).length(), row));
+        }
+        // f64 distances here are finite by construction (physics state);
+        // total_cmp keeps the sort deterministic without an unwrap.
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        rows.into_iter()
+            .map(|(_, row)| {
+                let active = self.ships.pirate[row]
+                    .is_some_and(|ps| self.tick >= ps.lie_low_until);
+                let s = crate::pirate::strength(
+                    self.ships.role[row],
+                    self.ships.upgrades[row],
+                    &self.config.trophic,
+                );
+                (
+                    self.ships.pos[row].sub(opos),
+                    self.ships.vel[row].sub(ovel),
+                    s as u32,
+                    active,
+                )
+            })
+            .collect()
+    }
+
     /// Advance one tick. `dt` is owned by the World, never an argument.
     /// (1) ingest commands canonically, (2) Lod-dispatch: skip physics for dormant
     /// (`Lod::Nothing`) craft and emit `Wake` on dormant->active, integrate the rest,

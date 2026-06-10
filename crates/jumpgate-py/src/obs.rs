@@ -198,6 +198,71 @@ pub fn write_obs_trader(
     out[own + 3] = time_remaining_frac;
 }
 
+// --- Pirate-contact blocks (pirates rung 1, spec §11) ---
+
+/// Contact slots exposed to the trader (K). Beyond-K contacts are dropped
+/// (distance-sorted upstream, so the K NEAREST survive); short worlds write
+/// masked-absent slots.
+pub const PIRATE_CONTACT_SLOTS: usize = 2;
+
+/// Per-contact block: `[present, unit_bearing xyz, log1p(d/0.01)/`
+/// `PIRATE_LOG_DIST_SCALE, strength/PIRATE_STRENGTH_SCALE, active]`.
+pub const PIRATE_CONTACT_STRIDE: usize = 7;
+
+/// Trader obs width with the pirates variant on (`num_pirates > 0`):
+/// the UNCHANGED 20-dim trader block + K=2 appended contact blocks = 34.
+pub const TRADER_PIRATES_OBS_DIM: usize =
+    TRADER_OBS_DIM + PIRATE_CONTACT_SLOTS * PIRATE_CONTACT_STRIDE;
+
+/// FIXED compile-time scales (spec §11; stationary by construction, no
+/// VecNormalize — the flight-rung lesson). `log1p(d/0.01)/5.5` maps the
+/// 0..~2.4 AU contact band onto ~0..1; strength caps at 4 under the
+/// structural escort caps.
+pub const PIRATE_LOG_DIST_SCALE: f64 = 5.5;
+pub const PIRATE_STRENGTH_SCALE: f64 = 4.0;
+/// Distance reference (AU) inside the log: ~the engagement-radius order of
+/// magnitude, so "on top of you" vs "across the system" spreads the range.
+pub const PIRATE_DIST_REF_AU: f64 = 0.01;
+
+/// Pirate-contact obs writer (spec §11). `contacts` are
+/// `(rel_pos, rel_vel, strength, active)` rows from
+/// `World::pirate_contacts(observer)`, already distance-sorted; rows beyond
+/// `PIRATE_CONTACT_SLOTS` are ignored, remaining slots masked-absent (the
+/// `write_obs_parts` discipline). RAW evidence only: bearing + log-distance +
+/// capability magnitude + lying-low visibility — never a route score. The
+/// v0 block does NOT emit `rel_vel` (the accessor carries it for the next
+/// rung's chase/tether obs without an accessor break). All values O(1) by
+/// construction; not the frame-relative f32 boundary (no raw absolute
+/// coordinate can reach here).
+pub fn write_obs_pirate_contacts(contacts: &[(Vec3, Vec3, u32, bool)], out: &mut [f32]) {
+    debug_assert_eq!(
+        out.len(),
+        PIRATE_CONTACT_SLOTS * PIRATE_CONTACT_STRIDE,
+        "contact buffer must span exactly the appended contact dims"
+    );
+    for slot in 0..PIRATE_CONTACT_SLOTS {
+        let base = slot * PIRATE_CONTACT_STRIDE;
+        match contacts.get(slot) {
+            Some(&(rel_pos, _rel_vel, strength, active)) => {
+                let d = rel_pos.length();
+                let bearing = if d > 1e-12 { rel_pos.scale(1.0 / d) } else { Vec3::ZERO };
+                out[base] = 1.0; // present
+                out[base + 1] = bearing.x as f32;
+                out[base + 2] = bearing.y as f32;
+                out[base + 3] = bearing.z as f32;
+                out[base + 4] = ((d / PIRATE_DIST_REF_AU).ln_1p() / PIRATE_LOG_DIST_SCALE) as f32;
+                out[base + 5] = (strength as f64 / PIRATE_STRENGTH_SCALE) as f32;
+                out[base + 6] = if active { 1.0 } else { 0.0 };
+            }
+            None => {
+                for k in 0..PIRATE_CONTACT_STRIDE {
+                    out[base + k] = 0.0;
+                }
+            }
+        }
+    }
+}
+
 use jumpgate_core::ids::CraftId;
 use jumpgate_core::world::View;
 
@@ -336,6 +401,29 @@ mod tests {
         assert_eq!(out[17], (4_500_000.0f64 / TRADER_CREDITS_SCALE) as f32);
         assert_eq!(out[18], 0.0); // not busy
         assert_eq!(out[19], 0.9);
+    }
+
+    #[test]
+    fn pirate_contact_blocks_layout_scales_and_absent_slot_zeroing() {
+        let mut out = [9.0f32; PIRATE_CONTACT_SLOTS * PIRATE_CONTACT_STRIDE];
+        // One present contact (0.03 AU dead-ahead +x, strength 2, lying low),
+        // one absent slot.
+        let contacts = [(Vec3::new(0.03, 0.0, 0.0), Vec3::new(-0.001, 0.0, 0.0), 2u32, false)];
+        write_obs_pirate_contacts(&contacts, &mut out);
+
+        assert_eq!(out[0], 1.0); // present
+        assert_eq!(out[1], 1.0); // unit bearing +x
+        assert_eq!(out[2], 0.0);
+        assert_eq!(out[3], 0.0);
+        let expect_d = ((0.03f64 / PIRATE_DIST_REF_AU).ln_1p() / PIRATE_LOG_DIST_SCALE) as f32;
+        assert_eq!(out[4], expect_d);
+        assert_eq!(out[5], (2.0f64 / PIRATE_STRENGTH_SCALE) as f32);
+        assert_eq!(out[6], 0.0); // lying low -> not active
+        // Slot 1 masked-absent: flag 0 + zeroed payload.
+        for k in 0..PIRATE_CONTACT_STRIDE {
+            assert_eq!(out[PIRATE_CONTACT_STRIDE + k], 0.0, "absent slot dim {k}");
+        }
+        assert_eq!(TRADER_PIRATES_OBS_DIM, 34);
     }
 
     #[test]
