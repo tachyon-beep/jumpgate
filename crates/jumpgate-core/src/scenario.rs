@@ -206,12 +206,19 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         });
     }
 
-    // --- the §4-calibrated food band (see `food_band` doc for the arithmetic).
+    // --- console-session-2 band (2026-06-11, owner-judged): the original
+    // §4-calibrated band (upkeep 25 / grubstake 50k / ransom 2cr) starved
+    // pirates into duty-cycle loops and let the hauler escort ladder end the
+    // war by t~10k (PermanentPeace). The walked band keeps every test seed's
+    // predation alive through the final third: a rob buys ~2 windows of
+    // life, a fresh grubstake ~1.4, and a 6cr ransom funds the pirate
+    // counter-rung (escort L1 = 5cr) off ~1 good score.
     let trophic = TrophicCfg {
         engage_radius_au: 5.0e-4, // LIVE (5× ARRIVAL_RADIUS, spec §2)
-        upkeep_per_tick: 25,
+        upkeep_per_tick: 12,
         food_per_unit_micros: 10_000,
-        grubstake_micros: 50_000,
+        grubstake_micros: 100_000,
+        ransom_cap_micros: 6_000_000,
         starve_lie_low_ticks: 4_000,
         hideout_body_index: 6, // outermost body (1.4 AU)
         hauler_belief_scoring: true,
@@ -365,17 +372,23 @@ mod tests {
             "expected-active {expected_active} <= stations - 2"
         );
 
-        // The §4 food-band identities (k_digest = 1 window, W = 2000):
-        // one qty-5 rob sustains W ticks; the grubstake is one window's upkeep.
-        assert_eq!(
-            5 * cfg.trophic.food_per_unit_micros,
-            cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
-            "one qty-5 rob sustains W x k_digest ticks"
+        // The console-session-2 band (2026-06-11): a qty-5 rob sustains AT
+        // LEAST two windows of upkeep (the original one-window band starved
+        // pirates into permanent duty-cycle loops); the grubstake covers more
+        // than one window so a fresh pirate survives its first bad draw; the
+        // ransom cap funds the pirate counter-rung (escort L1) off one score.
+        assert!(
+            5 * cfg.trophic.food_per_unit_micros
+                >= 2 * cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
+            "one qty-5 rob sustains >= 2 windows"
         );
-        assert_eq!(
-            cfg.trophic.grubstake_micros,
-            cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
-            "grubstake = one window of upkeep"
+        assert!(
+            cfg.trophic.grubstake_micros > cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
+            "grubstake outlasts one window"
+        );
+        assert!(
+            cfg.trophic.ransom_cap_micros >= cfg.shipyard.escort_price_micros[0],
+            "one capped ransom funds the pirate counter-rung"
         );
 
         // >= 12 directed routes across exactly 3 tier corps + the Yard corp;
