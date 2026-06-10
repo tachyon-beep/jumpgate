@@ -136,6 +136,12 @@ pub fn write_obs_thrust_mode(
     out[10] = scale_feat as f32;
 }
 
+/// Trader-mode obs width: 4 board slots × `[present, reward, d_pickup,
+/// d_haul]` + own `[fuel_frac, credits, busy, time_remaining_frac]`.
+/// Layout + writer land with the macro-step (`write_obs_trader`); the width
+/// is needed by `configure(mode=2)` first.
+pub const TRADER_OBS_DIM: usize = 20;
+
 use jumpgate_core::ids::CraftId;
 use jumpgate_core::world::View;
 

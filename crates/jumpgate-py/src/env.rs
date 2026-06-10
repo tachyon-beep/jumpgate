@@ -3,6 +3,7 @@
 //! Pure `decode_action` / `compute_reward` are unit-tested without the GIL.
 
 use crate::obs::{write_obs_frame_relative, write_obs_thrust_mode, OBS_DIM, THRUST_OBS_DIM};
+use crate::obs::TRADER_OBS_DIM;
 use jumpgate_core::{
     BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt, EntityRef, Event, EventKind,
     FullObserver, G_CANONICAL, GuidanceParams, NavDest, OrbitalElements, RngStream, RngStreams,
@@ -206,6 +207,178 @@ fn config_template(num_craft: usize) -> RunConfig {
     }
 }
 
+// === Trader mode (strategic Rung 1): constants + scenario template ===
+
+/// Board slots exposed to the agent (M). Action space is `Discrete(M+1)` in
+/// Python (0 = wait, j = accept slot j-1); the native buffer stays f32.
+pub const TRADER_BOARD_SLOTS: usize = 4;
+
+/// Trader-mode action width: a single f32 index decoded with `round()`.
+pub const TRADER_ACTION_DIM: usize = 1;
+
+/// Ticks advanced by the wait action (spec §5.1).
+pub const TRADER_WAIT_TICKS: u64 = 8;
+
+/// Trader-mode episode config (the macro-step horizon, in world ticks).
+/// Reuses `configure`'s `time_limit` kwarg; no new configure args in v1.
+#[derive(Clone, Copy, Debug)]
+pub struct TraderCfg {
+    pub horizon: u64,
+}
+
+impl Default for TraderCfg {
+    fn default() -> Self {
+        TraderCfg { horizon: 2000 }
+    }
+}
+
+/// SplitMix64-style finalizer over `(seed, k)`: deterministic, dependency-free
+/// pre-reset config derivation (NOT world state — RngStreams owns that; this
+/// only seeds the scenario template's initial mean anomalies).
+fn mix(seed: u64, k: u64) -> u64 {
+    let mut z = seed.wrapping_add(k.wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Build the trader-rung scenario (spec §6): one star (1 M_sun), four marker
+/// bodies on circular orbits (`a = 0.35/0.55/0.8/1.1` AU) whose initial mean
+/// anomalies derive from `seed` (anti-memorization: geometry differs per
+/// episode), one station per body, Ore miners at stations 0/2 + Ore sinks at
+/// 1/3, one funded corp, four seeded rate-mispriced routes, scripted ASSIGN
+/// OFF (`stagger_period: 0` — the agent owns acceptance; REPOST keeps the
+/// board flowing).
+///
+/// Craft spec is LIFTED from the proven world.rs forage-loop fixture
+/// (`one_body_one_thrusting_craft` + the stage2 forager `exhaust_velocity`
+/// raise): dry 1e-9 / thrust 1e-12 / capacity 1e-9 at dt=0.25 passes the §6
+/// anti-tunnel reset guard (a_max_empty·dt² = 6.25e-5 < R/(2·k_brake) = 1e-4).
+/// The plan's dt=1.0 would REJECT this spec (1e-3 ≥ 1e-4), so trader mode
+/// keeps the economy fixtures' proven dt=0.25. `exhaust_velocity = 2.0`
+/// (vs the forage fixture's 1.0) doubles the full-burn tank life to ~2000
+/// days — ≥4x a 2000-tick (500-day) episode's worst-case continuous burn —
+/// without touching thrust/mass (the guard inputs) or trip times
+/// (accel-limited, not cruise-cap-limited).
+pub fn trader_config_template(seed: u64, num_craft: usize) -> RunConfig {
+    use jumpgate_core::config::{
+        ContractInit, CorporationInit, DispatchCfg, PriceCfg, ProducerInit, StationInit,
+    };
+    use jumpgate_core::economy::{Recipe, Resource};
+
+    /// Circular-orbit radii (AU) for the four station-host bodies.
+    const ORBIT_AU: [f64; 4] = [0.35, 0.55, 0.8, 1.1];
+    /// Negligible-mass marker bodies (fixture convention): only their
+    /// positions matter; no local gravity wells around stations.
+    const BODY_MASS: f64 = 1.0e-12;
+
+    let star = BodyInit {
+        mass: 1.0, // 1 M_sun in canonical units
+        elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+    };
+    let mut bodies = vec![star];
+    for (k, &a) in ORBIT_AU.iter().enumerate() {
+        // Seed-derived initial phase, uniform on [0, TAU): body k+1 uses
+        // mix(seed, k+1) so phases decorrelate across bodies AND seeds.
+        let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
+        bodies.push(BodyInit {
+            mass: BODY_MASS,
+            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0 },
+        });
+    }
+
+    let spec = BaseSpec {
+        base_dry_mass: 1.0e-9,
+        base_max_thrust: 1.0e-12,
+        base_exhaust_velocity: 2.0,
+        base_fuel_capacity: 1.0e-9,
+    };
+
+    // Spawn co-located with body 1 (station 0's host) at its seeded phase,
+    // co-orbiting: for e=0/i=0 conics the ephemeris state is exactly
+    // pos = a(cos m0, sin m0, 0), vel = v_circ(-sin m0, cos m0, 0) with
+    // v_circ = sqrt(mu/a), mu = G·(M_star + m_body). Co-location means the
+    // first 0→x accept loads same-tick (no deadhead) — the proven
+    // two_body_contract_fixture opening.
+    let m0_home = bodies[1].elements.m0;
+    let a_home = ORBIT_AU[0];
+    let mu = G_CANONICAL * (1.0 + BODY_MASS);
+    let v_circ = (mu / a_home).sqrt();
+    let pos = Vec3::new(a_home * m0_home.cos(), a_home * m0_home.sin(), 0.0);
+    let vel = Vec3::new(-v_circ * m0_home.sin(), v_circ * m0_home.cos(), 0.0);
+    let craft = (0..num_craft)
+        .map(|_| CraftInit { spec: spec.clone(), pos, vel, fuel_mass: 1.0e-9 })
+        .collect();
+
+    // Station k rides body k+1 (body 0 is the star). Miners' homes (0, 2)
+    // open with deep Ore stock; sink stations (1, 3) open empty.
+    let stations = vec![
+        StationInit { body_index: 1, initial_stock: [40, 0], initial_price_micros: [0, 0] },
+        StationInit { body_index: 2, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+        StationInit { body_index: 3, initial_stock: [40, 0], initial_price_micros: [0, 0] },
+        StationInit { body_index: 4, initial_stock: [0, 0], initial_price_micros: [0, 0] },
+    ];
+    let producers = vec![
+        // Ore miners at stations 0 and 2 (keep pickup stock flowing).
+        ProducerInit {
+            station_index: 0,
+            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
+        },
+        ProducerInit {
+            station_index: 2,
+            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
+        },
+        // Ore demand-sinks at stations 1 and 3 (drain deliveries so REPOST
+        // re-fires the routes).
+        ProducerInit {
+            station_index: 1,
+            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
+        },
+        ProducerInit {
+            station_index: 3,
+            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
+        },
+    ];
+    // Treasury large enough that escrow never reverts an accept (max 4
+    // concurrent escrows × 3 cr ≪ 1000 cr).
+    let corporations =
+        vec![CorporationInit { treasury_micros: 1_000_000_000, home_station_index: 0 }];
+    // Four rate-MISPRICED routes (reward NOT ∝ trip time — spec §6): which
+    // route is best shifts with orbital phase, so rate-maximization is a
+    // judgment, not a lookup.
+    let contracts = vec![
+        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 1, reward_micros: 1_000_000 },
+        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 3, reward_micros: 1_200_000 },
+        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 3, reward_micros: 1_600_000 },
+        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 1, reward_micros: 3_000_000 },
+    ];
+
+    RunConfig {
+        master_seed: seed,
+        // dt 0.25: the proven economy-fixture timestep; see the doc above for
+        // why dt=1.0 is rejected by the anti-tunnel guard with this craft spec.
+        dt: Dt::new(0.25),
+        softening: 1.0e-4,
+        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
+        ephemeris_window: 100_000,
+        bodies,
+        craft,
+        guidance: GuidanceParams::default(),
+        stations,
+        producers,
+        corporations,
+        contracts,
+        price_cfg: PriceCfg::default(),
+        dispatch_cfg: DispatchCfg {
+            demand_low: 10,
+            demand_high: 20,
+            stagger_period: 0, // scripted ASSIGN OFF: the agent owns acceptance
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        },
+    }
+}
+
 /// Vectorized Gymnasium env: `num_envs` independent `World`s, each with
 /// `num_craft` craft. Writes frame-relative obs / per-craft reward / terminated /
 /// truncated into caller-provided numpy buffers (one memcpy per step, §7.3).
@@ -227,6 +400,8 @@ pub struct JumpgateEnv {
     ticks_in_episode: Vec<u64>, // per env
     master_seed: u64,       // seed of the last reset (auto-reset derivation base)
     episode_counter: u64,   // total auto-resets since the last reset()
+    // --- trader control-mode state (strategic Rung 1) ---
+    trader: TraderCfg, // macro-step horizon
 }
 
 /// Write the 10-dim thrust-mode obs for one craft (static target v1:
@@ -277,6 +452,7 @@ impl JumpgateEnv {
             ticks_in_episode: vec![0; num_envs],
             master_seed: 0,
             episode_counter: 0,
+            trader: TraderCfg::default(),
         }
     }
 
@@ -326,9 +502,9 @@ impl JumpgateEnv {
         arrival_bonus: Option<f64>,
         phi_scale: Option<f64>,
     ) -> PyResult<(usize, usize)> {
-        if mode > 1 {
+        if mode > 2 {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "mode must be 0 (waypoint) or 1 (thrust)",
+                "mode must be 0 (waypoint), 1 (thrust), or 2 (trader)",
             ));
         }
         let f = &mut self.flight;
@@ -373,7 +549,17 @@ impl JumpgateEnv {
         }
 
         self.control_mode = mode;
-        if mode == 1 {
+        if mode == 2 {
+            // Trader mode: the scenario template is built FRESH at each reset
+            // from the episode seed (`trader_config_template`); `self.template`
+            // belongs to modes 0/1 and is deliberately untouched. `time_limit`
+            // doubles as the macro-step horizon (no new configure args in v1).
+            if let Some(v) = time_limit {
+                self.trader.horizon = v;
+            }
+            self.obs_dim = TRADER_OBS_DIM;
+            self.action_dim = TRADER_ACTION_DIM;
+        } else if mode == 1 {
             // Curriculum knobs ride the template; thrust/dry-mass ratio is
             // untouched so the core reset anti-tunnel guard still passes.
             self.template.bodies[0].mass = self.flight.star_mass;
@@ -753,6 +939,37 @@ mod tests {
             (v - v_circ).abs() < 1e-15,
             "gravity on -> circular-orbit speed: got {v}, want {v_circ}"
         );
+    }
+
+    #[test]
+    fn trader_template_resolves_and_seed_varies_geometry() {
+        let a = trader_config_template(1, 1);
+        let b = trader_config_template(1, 1);
+        let c = trader_config_template(2, 1);
+        // Deterministic per seed:
+        assert_eq!(a.bodies[1].elements.m0, b.bodies[1].elements.m0);
+        // Varied across seeds (anti-memorization):
+        assert_ne!(a.bodies[1].elements.m0, c.bodies[1].elements.m0);
+        // Resolvable (anti-tunnel guard passes, economy refs in range) AND the
+        // craft spawns co-located with station 0's body (same-tick first load).
+        let (world, _hash) = World::reset(a).expect("resolvable trader cfg");
+        let craft = world.craft_ids()[0];
+        let board = world.offered_contracts();
+        assert_eq!(board.len(), 4, "four seeded routes on the board");
+        let from_station = board[0].2; // route 0 -> 1 pickup (station 0)
+        let d = world
+            .station_pos(from_station)
+            .expect("live station")
+            .sub(world.craft_pos(craft).expect("live craft"))
+            .length();
+        assert!(d < 1e-9, "craft co-located with station 0's body at t=0: d={d}");
+        // Scripted ASSIGN is OFF: stepping a few ticks must NOT bind the craft.
+        let (mut world, _hash) = World::reset(trader_config_template(1, 1)).expect("cfg");
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..10 {
+            world.step(&mut empty);
+        }
+        assert_eq!(world.craft_is_idle(craft), Some(true), "no scripted acceptance");
     }
 
     #[test]
