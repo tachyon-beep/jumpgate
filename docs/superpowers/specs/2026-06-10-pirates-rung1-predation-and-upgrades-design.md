@@ -563,6 +563,47 @@ commitments in §8/§14 keep them additive).
    the existing contract engine with a new contract type (completion = a named pirate's
    destruction).
 
+9. **The crime/boarding dissertation** (`docs/superpowers/concepts/crimes.md`) is adopted
+   as the cut-3+ blueprint for boarding, with one owner correction and three
+   reconciliations against project law:
+   - **Owner correction (the ambition):** the dissertation's closing frame — "texture
+     without requiring Dwarf Fortress in space" — has it backwards. **Dwarf Fortress in
+     space IS the point**; the abstractions are practical compromises until home
+     supercomputers arrive, not design ceilings. Consequence: every abstraction in this
+     project must carry its DEEPENING PATH as a first-class design artifact (the fleet
+     ledger demotes to real ships; statistical resolution decomposes into staged
+     boarding; crew pools promote to named characters; focus budgets are functions of
+     COMPUTE, not philosophy — they grow). An abstraction without a written deepening
+     path is a bug.
+   - **Adopted as-is:** boarding = an interrupt-driven crisis mini-sim (zoom in around
+     selected systems/characters/compartments, collapse back to macro with a CONSEQUENCE
+     BUNDLE, never `success=true`); the staged operation
+     (Commit→Suppress→Attach→Cross→Breach→Secure→Exploit→Consolidate); "DRL chooses
+     intent/allocation/escalation/abort — procedural modules resolve technical
+     execution" (our two-layer architecture, generalized); modules-propose-options,
+     captain-arbitrates; crew as pools with named characters PROMOTED by events (the
+     chronicle as character foundry); the explicit `IncidentFocusBudget` (formal LoD
+     budget); prize-control as a separate problem ("can you actually run the bastard
+     thing?"); intercept-combat / boarding / prize-control as three modules with
+     distinct state spaces.
+   - **Unified with §14.7:** "control domains" (bridge/engineering/cargo/propulsion as
+     separate contested/controlled states) ARE per-location control state on the
+     part-graph — one model, not two; hit-location and leverage-points read the same
+     hull configuration map. Likewise the Commit phase's intelligence inputs (hull map
+     quality, manifest confidence) are EVIDENCE-quality attributes — the media layer's
+     streams feeding the boarding module, same seam.
+   - **Reconciliation 1 (reward law):** the dissertation's pirate/freighter "reward
+     component" lists (legal heat, reputation, crew loyalty, …) are utility models for
+     SCRIPTED captains' doctrine only. For DRL players, reward stays currency-only;
+     legal heat and reputation must price themselves through consequences (patrol
+     intensity → lost income; fear → fewer compliant victims), never as reward terms.
+   - **Reconciliation 2 (retired premise):** `doctrine: cautious|violent|desperate` is
+     legitimate CK-style content on HEURISTIC captains; it must never become a taste
+     scalar substituting for learned risk on a DRL agent (the risk_appetite ghost).
+   - **Reconciliation 3 (determinism):** the "stochastic procedural resolver" draws only
+     from seeded RngStreams (append-only), and event-promoted characters/narrative
+     beats ride the recorded seam (§14.3) — a boarding replays bit-identically.
+
 ## 15. Owner decision points
 
 1. ✅ **APPROVED (owner, 2026-06-10)** — with first-class goods banked as §14.6.
