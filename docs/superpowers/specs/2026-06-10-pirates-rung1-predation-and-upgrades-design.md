@@ -507,7 +507,19 @@ commitments in §8/§14 keep them additive).
    (no shadows — behavior stays a function of (state, config, seed)). `lie_low_until` and
    upgrade levels are recognized hand-rolled instances; migrate when a third coexisting
    modifier family appears (morale).
-6. **Capability mixins** (owner): orthogonal Option-column capabilities on positioned
+6. **First-class goods** (owner, at decision-1 sign-off): eventually cargo stops being
+   `(Resource, qty)` and becomes goods with size, mass, unique hauling requirements
+   ("vibrates ominously", "needs cooling"), and provenance flags — notably
+   `stolen_from: <tag>`. Consequences the rung-1 abstractions must not foreclose:
+   (a) the ransom model's cargo→consumed leg is already explicit accounting, so swapping
+   in a goods table later changes the leg's type, not its existence; (b) provenance is
+   what makes cut-2 fencing real (the fence discount exists BECAUSE goods are traceably
+   stolen; police seizure and media gossip key off the same tag); (c) hauling
+   requirements are capability-matching — refrigerated holds etc. become catalog lines
+   on the existing upgrade verb; (d) mass-bearing cargo touches accel and the reset
+   guard/brakability — a physics rung, sequenced deliberately, never a side effect. Keep
+   `Resource` append-only; the goods table arrives as a superset, not a migration.
+7. **Capability mixins** (owner): orthogonal Option-column capabilities on positioned
    entities; `sells_upgrades` debuts the pattern (§6). Latent content the composition
    rules must not foreclose: craft+fence (smuggler barge), craft+vendor (fleet tender),
    craft+refuel (tanker logistics), craft+patrol+contract_board+rearm (the navy frigate
