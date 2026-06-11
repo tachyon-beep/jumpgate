@@ -36,6 +36,25 @@ use crate::time::Dt;
 /// the outermost — the hideout.
 pub const STATION_ORBIT_AU: [f64; 6] = [0.35, 0.56, 0.77, 0.98, 1.19, 1.40];
 
+/// Frontier station-body semi-major axes (AU) — the geometric band
+/// `a_k = 0.35*r^k`, `r = (3.0/0.35)^(1/9)` (spec §2; endpoints exact, law
+/// pinned by `frontier_orbit_band_is_the_pinned_geometric_law`). Body index
+/// k+1 hosts station row k. Radial gaps run 0.094 -> 0.637 AU; the 8-9 gap
+/// (0.637) exceeds `pirate_max_reach_au` 0.6 BY DESIGN — the one hop
+/// haulers can fly and pirates can never walk (the never-opens seam).
+pub const FRONTIER_ORBIT_AU: [f64; 10] = [
+    0.35,
+    0.444_365_796_521_264_1,
+    0.564_174_174_622_793,
+    0.716_284_875_665_669_2,
+    0.909_407_140_889_456_3,
+    1.154_598_367_209_910_7,
+    1.465_897_208_878_237_4,
+    1.861_127_373_832_788_5,
+    2.362_918_136_859_245,
+    3.0,
+];
+
 /// Scripted haulers (2 per station body).
 pub const NUM_HAULERS: usize = 12;
 
@@ -516,5 +535,33 @@ mod tests {
         assert!(apply_knob(&mut cfg, "warp_factor", "9").is_err());
         assert!(apply_knob(&mut cfg, "p_rob_milli", "many").is_err());
         assert!(apply_knob(&mut cfg, "hauler_buy_policy", "Maximal").is_err());
+    }
+
+    #[test]
+    fn frontier_orbit_band_is_the_pinned_geometric_law() {
+        // Spec §2: a_k = 0.35*r^k, r = (3.0/0.35)^(1/9) — endpoints EXACT,
+        // interior pinned to the recomputed law (never to rounded prose).
+        let r = (3.0f64 / 0.35).powf(1.0 / 9.0);
+        assert_eq!(FRONTIER_ORBIT_AU.len(), 10);
+        assert_eq!(FRONTIER_ORBIT_AU[0], 0.35, "inner endpoint exact");
+        assert_eq!(FRONTIER_ORBIT_AU[9], 3.0, "outer endpoint exact");
+        for (k, &a) in FRONTIER_ORBIT_AU.iter().enumerate() {
+            let law = 0.35 * r.powi(k as i32);
+            assert!(
+                (a - law).abs() <= 1.0e-12,
+                "a_{k} = {a} deviates from the geometric law {law}"
+            );
+        }
+        for w in FRONTIER_ORBIT_AU.windows(2) {
+            assert!(w[0] < w[1], "ascending band: {FRONTIER_ORBIT_AU:?}");
+        }
+        // The designed seam (spec §2/§6): the 8-9 radial gap (0.637) exceeds
+        // pirate_max_reach_au 0.6 — the one hop haulers can fly and pirates
+        // can never walk. Recorded design law, not a run gate.
+        let outer_gap = FRONTIER_ORBIT_AU[9] - FRONTIER_ORBIT_AU[8];
+        assert!(
+            outer_gap > 0.6,
+            "outer gap {outer_gap} must exceed pirate reach 0.6 (never-opens seam)"
+        );
     }
 }
