@@ -62,16 +62,19 @@ pub const FRONTIER_ORBIT_AU: [f64; 10] = [
 pub const FRONTIER_NUM_HAULERS: usize = 20;
 pub const FRONTIER_NUM_PIRATES: usize = 10;
 
-/// Frontier HAULER exhaust velocity — the ANALYTIC PRIOR, **pending
-/// calibration** (spec §4, OD-5): the phase-2 calibration ensemble
-/// (`craft.fuel_capacity_scale = 100`) measures the worst HAULER-leg burn and
-/// the baked value is derived as k ~= 2.5 x that MEASUREMENT — never spec
-/// arithmetic. The bake task replaces this value and writes the derivation
-/// into this doc comment. At 1.0: burn 2.5e-13/tick, endurance ~= 4,000
-/// thrusting ticks ~= 2.5x the worst round trip; tank (1e-9) = 100x the
-/// re-baked FUEL_EMPTY_EPS, so the FuelEmpty edge is LIVE. Pirates do NOT
-/// use this const — they keep the band's 20.0 per-craft (OD-6).
-pub const FRONTIER_HAULER_EXHAUST_VELOCITY: f64 = 1.0;
+/// Frontier HAULER exhaust velocity — CALIBRATED, not designed
+/// (world-gets-big spec §4 step 3, OD-5b: k = 2.5 applied to the MEASURED
+/// worst hauler-leg burn, never spec arithmetic). Instrument: 20-seed
+/// `scenario_frontier` ensemble, `--set fuel_capacity_scale=100` (endurance
+/// 400k full-throttle ticks >> the 100k-tick run: burn tail uncorrupted),
+/// banked at
+/// `docs/superpowers/posts/2026-06-12-world-gets-big-calibration/`.
+/// Measured worst hauler-leg burn: 170 permille of the scaled tank (seed 9,
+/// window close tick 86000) = 170e-10 fuel mass. Bake:
+/// `v_e = 2.5 * 170e-10 / 1.0e-9 * 1.0 = 42.5`. Was the analytic prior 1.0.
+/// Pirates do NOT use this const — they keep the band's 20.0 per-craft
+/// (OD-6: the x10 endurance spec, no taste scalar).
+pub const FRONTIER_HAULER_EXHAUST_VELOCITY: f64 = 42.5;
 
 /// Haven station row (spec §3, OD-3): the dark port at the SEAM — hosted by
 /// body 7 (1.4660 AU), a vendor (the pirate escort settle path requires a
@@ -333,8 +336,8 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     }
 
     // --- craft: per-CLASS specs (spec §4/§6, OD-6) --------------------------
-    // Haulers: v_e = the named analytic prior (the calibration bakes it);
-    // tank 1e-9 = 100x the re-baked eps — the FuelEmpty edge is LIVE.
+    // Haulers: v_e = the calibrated frontier constant above; tank 1e-9 =
+    // 100x the re-baked eps — the FuelEmpty edge is LIVE.
     let hauler_spec = BaseSpec {
         base_dry_mass: 1.0e-9,
         base_max_thrust: 1.0e-12,
@@ -1109,9 +1112,10 @@ mod tests {
     /// big-map trajectory so physics/stage/config drift on the frontier is
     /// loud. Re-derive ONLY via `print_golden_frontier` (single-cause re-pin
     /// commits; the calibration v_e bake is the one scheduled re-pin).
-    // PINNED from print_golden_frontier output, pre-calibration hauler v_e
-    // prior (1.0).
-    const FRONTIER_TRAJECTORY_GOLDEN: u64 = 0xe5b3c68a9b4f727c;
+    // RE-PINNED: hauler v_e calibration bake (OD-5b, k=2.5 x measured worst
+    // leg burn — see the FRONTIER_HAULER_EXHAUST_VELOCITY doc comment). Was
+    // 0xe5b3c68a9b4f727c.
+    const FRONTIER_TRAJECTORY_GOLDEN: u64 = 0x050de98bd4b6793c;
 
     #[test]
     fn frontier_trajectory_golden() {
