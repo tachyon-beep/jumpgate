@@ -8,9 +8,12 @@
 //! chronicle and run a two-run replay bit-identity check.
 //!
 //! Every spec-§9 tuning knob rides `--set knob=value` (repeatable;
-//! `scenario::apply_knob` is the surface). The live positive control is
-//! `--set pirate_max_reach_au=999 --set stay_milli=0` (must read
-//! RiskEqualized — the instrument-kill check, spec §1). `--assert-no-fuel-empty`
+//! `scenario::apply_knob` is the surface). The live positive control is the
+//! hungry-roamer injection `--set pirate_max_reach_au=999 --set stay_milli=0
+//! --set upkeep_per_tick=200 --set grubstake_micros=2000000000` (must read
+//! RiskEqualized — the instrument-kill check, spec §1/§9; the old reach+stay
+//! recipe was neutralized by the hunger gate: fed pirates camp, genuinely
+//! clumped, correctly Alive — jumpgate-50c6a8a3bd). `--assert-no-fuel-empty`
 //! makes the 50k-tick endurance window mechanical (zero `FuelEmpty` events;
 //! a determinism-cheap window, not an aliveness gate).
 //!

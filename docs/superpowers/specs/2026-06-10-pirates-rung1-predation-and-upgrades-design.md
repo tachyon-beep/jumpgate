@@ -406,9 +406,16 @@ narrative-chaos layer's front door) cheap later. Surgery itself is NOT built thi
 per window — active/lying-low pirates, laden haulers, per-route robs/accepts/traffic,
 laden-trips-per-window (the calibration input), engagements by trip-phase, purchases,
 Yard treasury, per-craft credits; pure `classify() -> Diagnosis`). Validated by 4-corner
-synthetic series AND the live positive control: `pirate_max_reach = ∞` + zero
-relocation-stickiness MUST read RiskEqualized — re-validated against the OCCUPIED-route
-metric. The integration test asserts classify() RUNS, never what verdict it returns.
+synthetic series AND the live positive control. **Positive-control recipe (revised
+2026-06-11, jumpgate-50c6a8a3bd):** the original `reach = ∞` + zero
+relocation-stickiness injection was neutralized by the hunger gate — fed pirates stop
+roaming and camp, which is genuinely clumped risk, correctly read Alive, so the old
+recipe stopped injecting the disease. The control is now the **perpetually-hungry
+roamer**: `pirate_max_reach_au=999 stay_milli=0 upkeep_per_tick=200
+grubstake_micros=2000000000` — hunger that never lets them settle, equalizing risk by
+construction. It MUST read RiskEqualized — re-validated against the OCCUPIED-route
+metric (and against the 2026-06-11 labeled-run recalibration of its thresholds). The
+integration test asserts classify() RUNS, never what verdict it returns.
 
 Verdicts: `Alive | NoCycle | RiskEqualized | Saturated | DecisionNotTranslating |
 PermanentPeace | ArmsRaceFlat` (no gate vocabulary in identifiers).

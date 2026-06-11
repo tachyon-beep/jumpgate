@@ -30,7 +30,31 @@ pub const CYCLE_MIN_ALTERNATIONS: u32 = 3;
 /// Minimum mean active-pirate-normalized HHI (milli) of robberies over
 /// OCCUPIED routes for "risk heterogeneous". 1000 milli ≈ "each active pirate
 /// owns one route"; even spread over m ≫ k routes reads ≈ 1000·k/m.
-pub const HHI_NORM_MIN_MILLI: u64 = 600;
+///
+/// Fitted against the 2026-06-11 labeled real-run set (filigree
+/// jumpgate-50c6a8a3bd; 50k ticks, band baseline vs the hungry-roamer
+/// disease control `pirate_max_reach_au=999 stay_milli=0 upkeep_per_tick=200
+/// grubstake_micros=2000000000`), measured mean normalized HHI (milli):
+///   TRUE-clumped   (baseline s7/s23/s42/s99): 3070, 2962, 2918, 3498
+///   TRUE-equalized (control  s7/s23):         1490, 1472
+/// Threshold = margin midpoint (2918 + 1490) / 2 = 2204. (The previous 600
+/// sat far below the real boundary: BOTH labels passed it, so this clause
+/// never discriminated; the run-aggregate HHI was also measured and does NOT
+/// separate — raw 130–153 vs 123–143, normalized 548–714 vs 551–629.)
+pub const HHI_NORM_MIN_MILLI: u64 = 2204;
+
+/// Slack (in argmax-change counts) granted to the hot-route persistence
+/// clause: heterogeneous requires `hot_changes <= traffic_changes +
+/// HOT_PERSISTENCE_SLACK_CHANGES`. At 1–3 robs/window the per-window rob
+/// argmax is sampling noise between genuinely-hot routes, so zero slack
+/// misreads sparse clumping (the seed-7 caught lie: 12 hot changes vs 11
+/// traffic changes read equalized while robs sat on 9 of 36 routes).
+/// Fitted against the same labeled set, measured hot-change excess over
+/// traffic changes:
+///   TRUE-clumped:   +1, -1, -3, -6  (max +1, the seed-7 boundary)
+///   TRUE-equalized: +6, +5          (min +5)
+/// Slack = margin midpoint (1 + 5) / 2 = 3.
+pub const HOT_PERSISTENCE_SLACK_CHANGES: u32 = 3;
 
 /// Minimum final-window per-craft credit spread (milli of the largest
 /// magnitude) for "outcomes disperse".
@@ -191,7 +215,9 @@ fn population_cycles(samples: &[TrophicSample]) -> bool {
 /// by the active-pirate count (mean over robbing windows), PLUS rank-persistence
 /// of the hot route relative to the traffic gradient: the argmax-rob route must
 /// change across windows no faster than the argmax-traffic route does ("the hot
-/// route must move slower than laden traffic does").
+/// route must move slower than laden traffic does"), within
+/// `HOT_PERSISTENCE_SLACK_CHANGES` (sparse windows make the rob argmax noisy
+/// between genuinely-hot routes; see the constants' fitted-calibration notes).
 fn risk_is_heterogeneous(samples: &[TrophicSample]) -> bool {
     let mut norm_sum: u128 = 0;
     let mut robbing_windows: u128 = 0;
@@ -246,7 +272,8 @@ fn risk_is_heterogeneous(samples: &[TrophicSample]) -> bool {
         return false;
     }
     let mean_norm_milli = norm_sum / robbing_windows;
-    mean_norm_milli >= u128::from(HHI_NORM_MIN_MILLI) && hot_changes <= traffic_changes
+    mean_norm_milli >= u128::from(HHI_NORM_MIN_MILLI)
+        && hot_changes <= traffic_changes.saturating_add(HOT_PERSISTENCE_SLACK_CHANGES)
 }
 
 /// Index of the strictly greatest positive value, ties to the LOWEST index
@@ -431,6 +458,9 @@ mod tests {
 
     /// Boom/bust + robs clumped on route 0 (persistent) while the traffic
     /// gradient's argmax hops every window + dispersed final outcomes.
+    /// Actives 2/4 (mean normalized HHI 1000 × 3 = 3000) sit inside the
+    /// labeled TRUE-clumped band (2918–3498) above the fitted
+    /// `HHI_NORM_MIN_MILLI` = 2204.
     fn cycling_heterogeneous(credits: &[i64]) -> Vec<TrophicSample> {
         (0..12u64)
             .map(|w| {
@@ -438,7 +468,7 @@ mod tests {
                 let traffic: &[u32] = if boom { &[5, 7, 6, 5] } else { &[7, 5, 6, 5] };
                 s(
                     (w + 1) * WINDOW_TICKS,
-                    if boom { 1 } else { 3 },
+                    if boom { 2 } else { 4 },
                     if boom { 6 } else { 2 },
                     &[3, 0, 0, 0],
                     traffic,
@@ -501,7 +531,8 @@ mod tests {
     #[test]
     fn cycling_equalized_reads_risk_equalized() {
         // Boom/bust, but robs spread evenly over every occupied route each
-        // window (HHI 250 milli; ≤ 2 active pirates ⇒ normalized ≤ 500 < 600).
+        // window (HHI 250 milli; ≤ 2 active pirates ⇒ normalized ≤ 500, far
+        // below the fitted HHI_NORM_MIN_MILLI = 2204).
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| {
                 let boom = w % 2 == 0;
@@ -528,6 +559,46 @@ mod tests {
         assert!(d.risk_heterogeneous);
         assert!(!d.outcomes_disperse, "uniform final wallets must not read dispersed");
         assert_eq!(d.verdict, Verdict::DecisionNotTranslating);
+    }
+
+    /// The seed-7 shape (2026-06-11 labeled-run recalibration, filigree
+    /// jumpgate-50c6a8a3bd): robs clumped on 2 hot routes of 9 occupied at
+    /// 1–3 robs/window sparsity. At that sparsity the per-window rob argmax
+    /// hops between the hot routes (6 changes here) slightly faster than the
+    /// traffic argmax moves (5 changes), so the zero-slack persistence clause
+    /// misread eyeball-clumped as equalized — the instrument's second caught
+    /// lie. Must read heterogeneous.
+    fn sparse_two_hot_of_nine() -> Vec<TrophicSample> {
+        (0..12u64)
+            .map(|w| {
+                // 9 occupied routes; traffic argmax hops between routes 2 and
+                // 3 every two windows (5 changes over 12 windows).
+                let mut traffic = [1u32; 9];
+                traffic[if (w / 2) % 2 == 0 { 2 } else { 3 }] = 3;
+                // Robs stay on routes {0, 1}: hot route 0 with periodic hops
+                // to route 1 (hot sequence 0,1,0,0 repeating → 6 changes).
+                let mut robs = [0u32; 9];
+                match w % 4 {
+                    0 | 2 => {
+                        robs[0] = 2;
+                        robs[1] = 1;
+                    }
+                    1 => robs[1] = 2,
+                    _ => robs[0] = 1,
+                }
+                s((w + 1) * WINDOW_TICKS, 4, 4, &robs, &traffic, &DISPERSED)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn sparse_clumped_minority_routes_read_heterogeneous() {
+        let d = classify(&sparse_two_hot_of_nine());
+        assert!(
+            d.risk_heterogeneous,
+            "robs clumped on 2 of 9 occupied routes at 1-3 robs/window must \
+             read heterogeneous (the seed-7 boundary shape)"
+        );
     }
 
     /// The Task-6 sampler wires: `UpgradePurchased` events count into the

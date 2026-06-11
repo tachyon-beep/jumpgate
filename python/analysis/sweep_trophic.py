@@ -16,11 +16,22 @@ run's RESULT line, aggregates the per-window JSONL, and prints:
 Usage:
     python3 python/analysis/sweep_trophic.py --seeds 7 11 13 --ticks 50000 \
         --knobset baseline \
-        --knobset "control:pirate_max_reach_au=999,stay_milli=0"
+        --knobset "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000"
 
 A knob set is "name" (no overrides) or "name:k=v,k=v,..." (each k=v becomes
 a `--set`). Unknown knobs make the runner exit nonzero and the sweep stops:
 a silent typo would poison a whole matrix read.
+
+POSITIVE CONTROL (the instrument-kill disease injection, recipe revised
+2026-06-11, filigree jumpgate-50c6a8a3bd): the old `reach=999 + stay=0`
+recipe was neutralized by the hunger gate — FED pirates stop roaming and
+camp, which is genuinely clumped risk, so the instrument correctly read
+Alive and the "control" no longer injected the disease it was built to
+inject. The control must make pirates PERPETUALLY HUNGRY ROAMERS:
+`pirate_max_reach_au=999` (no locality) + `stay_milli=0` (no stickiness)
++ `upkeep_per_tick=200` with `grubstake_micros=2000000000` (hunger that
+never lets them settle). That equalizes risk over routes by construction
+and MUST read RiskEqualized; anything else means the instrument is broken.
 """
 
 import argparse
@@ -146,10 +157,14 @@ def panel(name, runs):
             f"final={ts[-1]} monotone={mono}"
         )
 
-    # Population cycle + risk-concentration evidence. The RUN-AGGREGATE HHI is
-    # the sparsity-robust read (per-window HHI saturates at 1-3 robs/window —
-    # the live-control finding); print both so the owner sees the instrument
-    # beside the world.
+    # Population cycle + risk-concentration evidence. MEASURED 2026-06-11
+    # (labeled-run recalibration, filigree jumpgate-50c6a8a3bd): the
+    # RUN-AGGREGATE HHI does NOT separate the labeled runs (raw 130-153
+    # clumped vs 123-143 equalized); the calibrated instrument read is the
+    # mean PER-WINDOW active-pirate-NORMALIZED HHI (clumped 2918-3498 vs
+    # equalized 1472-1490) plus the slacked hot-route persistence clause
+    # (diagnostics.rs). Both raw reads stay printed as context beside the
+    # window, not as the instrument.
     for (r, ws) in runs:
         act = [w["active_pirates"] for w in ws]
         alts = alternations(act)
@@ -183,14 +198,18 @@ def main():
         action="append",
         default=None,
         help="'name' or 'name:k=v,k=v' (repeatable). Default: baseline + the "
-        "reach=inf positive control (must read RiskEqualized — instrument-kill).",
+        "hungry-roamer positive control (reach=inf, no stickiness, upkeep "
+        "that never lets pirates settle; must read RiskEqualized — "
+        "instrument-kill). The old reach+stay-only recipe is retired: the "
+        "hunger gate made fed pirates camp (genuinely clumped, correctly "
+        "Alive), so it stopped injecting the disease.",
     )
     ap.add_argument("--out", default="/tmp/sweep_trophic")
     args = ap.parse_args()
 
     specs = args.knobset or [
         "baseline",
-        "control:pirate_max_reach_au=999,stay_milli=0",
+        "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000",
     ]
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -216,14 +235,15 @@ def main():
         panel(name, runs)
 
     # The live positive control, restated wherever the default grid ran it
-    # (spec section 1 instrument-kill: reach=inf MUST read RiskEqualized;
-    # if it does not, fix the INSTRUMENT before tuning anything).
+    # (spec section 1 instrument-kill: the hungry-roamer injection MUST read
+    # RiskEqualized; if it does not, fix the INSTRUMENT before tuning
+    # anything).
     if "control" in all_runs:
         n = sum(1 for r, _ in all_runs["control"] if r["verdict"] == "RiskEqualized")
         total = len(all_runs["control"])
         print(
-            f"\npositive control (reach=inf): {n}/{total} runs read RiskEqualized "
-            "(expected ALL — anything else means the instrument is broken)"
+            f"\npositive control (hungry roamers, reach=inf): {n}/{total} runs read "
+            "RiskEqualized (expected ALL — anything else means the instrument is broken)"
         )
 
 
