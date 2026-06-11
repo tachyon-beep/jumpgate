@@ -13,7 +13,14 @@ use crate::time::Tick;
 use crate::types::{EntityRef, NavDest};
 
 /// Quantization epsilon for fuel comparisons (fuel at/below this == "empty").
-pub const FUEL_EMPTY_EPS: f64 = 1e-9;
+/// 1e-11 since the world-gets-big eps re-bake (spec §4 item 1; was 1e-9):
+/// every band tank is 1.0e-9 (scenario_trophic, scenario.rs) — exactly AT the
+/// old eps — and the strict `fuel_prev > FUEL_EMPTY_EPS` edge below was
+/// arithmetically unfireable for the whole band. At 1e-11 a 1e-9 tank sits
+/// 100x above eps, so the gauge lives outside the dead zone. eps appears in
+/// NO physics expression: burn arithmetic, state_hash, and config_hash are
+/// untouched by this change (HASH_FORMAT_VERSION stays 5; zero goldens move).
+pub const FUEL_EMPTY_EPS: f64 = 1e-11;
 
 /// Append-only, tick-ordered event stream. Emitters push in tick order.
 pub struct EventStream {
@@ -187,6 +194,21 @@ mod tests {
         assert!(!fuel_just_emptied(0.0, FUEL_EMPTY_EPS));
         // Still fuelled -> does not fire.
         assert!(!fuel_just_emptied(0.4, 0.5));
+    }
+
+    #[test]
+    fn fuel_edge_arms_for_band_scale_tank_draining_through_eps() {
+        // The world-gets-big eps re-bake (spec §4 item 1): a band-scale tank
+        // (1.0e-9 — every scenario_trophic craft, scenario.rs) must be able to
+        // ARM the edge. At the old eps (1e-9) prev == eps exactly and the
+        // strict `>` in fuel_just_emptied made FuelEmpty arithmetically
+        // unfireable for the whole band.
+        assert!(fuel_just_emptied(0.0, 1.0e-9), "band-scale tank fires on its dry tick");
+        // A tank draining THROUGH eps (at/below now, strictly above before)
+        // arms without ever touching exact zero.
+        assert!(fuel_just_emptied(FUEL_EMPTY_EPS * 0.5, FUEL_EMPTY_EPS * 2.0));
+        // The strict-greater pin is unchanged: a tank parked AT eps never fires.
+        assert!(!fuel_just_emptied(0.0, FUEL_EMPTY_EPS));
     }
 
     use crate::math::Vec3;

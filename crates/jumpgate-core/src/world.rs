@@ -2240,18 +2240,21 @@ mod tests {
     /// is independent of propellant `fuel_mass`), but its propellant is exhausted
     /// mid-transit before it can rendezvous with station B, so a `FuelEmpty` event
     /// fires while the contract is `InTransit`. The lever is `fuel_mass`: it starts
-    /// just above `FUEL_EMPTY_EPS` (1e-9), enough to survive step 1 (still
+    /// just above `FUEL_EMPTY_EPS` (1e-11), enough to survive step 1 (still
     /// `CargoLoaded`, so the once-only FuelEmpty edge must NOT fire there) but drained
     /// across the eps threshold a couple of ticks into the burn, long before the craft
     /// can cover the 0.3 AU to station B.
     fn two_body_starved_contract_fixture() -> RunConfig {
         let mut cfg = two_body_contract_fixture();
-        // Start propellant just above FUEL_EMPTY_EPS (1e-9): enough to survive step 1
-        // (where the contract is still CargoLoaded) but exhausted a couple of ticks
-        // into the burn — long before the craft can cover the 0.3 AU to station B — so
-        // FuelEmpty fires while the contract is InTransit. (Fuel cargo loaded at A is
-        // independent of this propellant `fuel_mass`.)
-        cfg.craft[0].fuel_mass = 1.06e-9;
+        // REDESIGNED (not nudged) for the eps re-bake 1e-9 -> 1e-11 (spec §4
+        // item 1; was 1.06e-9 = old eps + 6e-11). Same 6e-11 headroom above the
+        // NEW eps = 2.4 full-throttle burn ticks (burn/tick = max_thrust/v_e*dt
+        // = 1e-12/1e-2*0.25 = 2.5e-11). Tick 1 (load+dispatch): 7e-11 -> 4.5e-11
+        // (survives step 1; the once-only edge must NOT fire while CargoLoaded);
+        // tick 2: -> 2e-11; tick 3: clamped to 0 <= eps with prev 2e-11 > eps ->
+        // FuelEmpty fires while InTransit (the stage-1c promotion ran on tick 2),
+        // long before the craft covers the 0.3 AU to station B.
+        cfg.craft[0].fuel_mass = 7.0e-11;
         cfg
     }
 

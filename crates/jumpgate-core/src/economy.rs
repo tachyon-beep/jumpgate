@@ -2359,7 +2359,7 @@ mod tests {
     /// (BOTH stocked, so distance is the only load blocker), one corp, one Fuel(5)
     /// contract `from_station_index -> to_station_index`, and one manual (unscripted)
     /// hauler co-located with body 0 whose propellant starts just above
-    /// `FUEL_EMPTY_EPS` (1e-9) — enough to survive step 1, but drained across the eps
+    /// `FUEL_EMPTY_EPS` (1e-11) — enough to survive step 1, but drained across the eps
     /// threshold a couple of ticks into any burn, long before it can cover 0.3 AU.
     fn starved_two_body_contract_fixture(
         from_station_index: usize,
@@ -2413,8 +2413,13 @@ mod tests {
                 },
                 pos: Vec3::ZERO, // co-located with body 0 (station 0's host)
                 vel: Vec3::ZERO,
-                // Just above FUEL_EMPTY_EPS: survives step 1, runs dry shortly after.
-                fuel_mass: 1.06e-9,
+                // REDESIGNED (not nudged) for the eps re-bake 1e-9 -> 1e-11
+                // (spec §4 item 1; was 1.06e-9 = old eps + 6e-11). Same 6e-11
+                // headroom above the NEW eps = 2.4 full-throttle burn ticks
+                // (1e-12/1e-2*0.25 = 2.5e-11/tick): survives step 1 at 4.5e-11,
+                // runs dry across eps on tick 3 — both the Accepted deadhead arm
+                // and the CargoLoaded-window arm keep their step-1 asserts.
+                fuel_mass: 7.0e-11,
                 role: CraftRole::Idle,
                 scripted: false, // manual-accept only: scripted ASSIGN stays out
             }],

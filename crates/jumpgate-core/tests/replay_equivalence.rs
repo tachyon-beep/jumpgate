@@ -38,6 +38,14 @@ fn base_config() -> RunConfig {
             },
             pos: Vec3::new(1.2, 0.0, 0.0),
             vel: Vec3::new(0.0, 0.9, 0.0),
+            // Half a tank: a real multi-hundred-tick burn for the replay/corruption
+            // tests. NOTE (eps re-bake, spec §4 item 1): 5.0e-10 sat BELOW the old
+            // FUEL_EMPTY_EPS (1e-9, edge unarmed) and is ABOVE the new 1e-11.
+            // Deliberately NOT lowered: this config has no contracts, so a
+            // FuelEmpty event (reachable only near tick ~196 of a full-throttle
+            // 200-tick run; burn/tick = 1e-13/0.02*0.5 = 2.5e-12) is state-inert
+            // and fires identically in the record and replay arms. Lowering the
+            // tank below 1e-11 would gut the burn these tests exist to record.
             fuel_mass: 5.0e-10,
             role: jumpgate_core::stores::CraftRole::Idle,
             scripted: true,
