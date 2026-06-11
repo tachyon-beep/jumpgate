@@ -322,6 +322,7 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
         "inflation_milli" => m.inflation_milli = p(name, value)?,
         "claimed_value_cap_micros" => m.claimed_value_cap_micros = p(name, value)?,
         "value_ticks_milli" => m.value_ticks_milli = p(name, value)?,
+        "staleness_from_rob_tick" => m.staleness_from_rob_tick = p(name, value)?,
         other => return Err(format!("--set {other}: unknown knob")),
     }
     Ok(())

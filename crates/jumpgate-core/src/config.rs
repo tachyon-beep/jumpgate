@@ -372,6 +372,13 @@ pub struct MediaCfg {
     pub claimed_value_cap_micros: i64,
     /// Eviction-priority ticks per credit. 1000.
     pub value_ticks_milli: u32,
+    /// Staleness anchor for the gossip evidence READ (owner call, 2026-06-11
+    /// basin-clean ensemble): `false` (default — cut-1 behavior, byte-stable)
+    /// anchors the read window on `first_heard` (per-reader forgetting);
+    /// `true` anchors on the alert's carried `rob_tick` — "people immediately
+    /// ask WHEN it happened" — so era-old news is discarded regardless of
+    /// hearing time (the retention-bleed countermeasure probe).
+    pub staleness_from_rob_tick: bool,
 }
 
 impl Default for MediaCfg {
@@ -385,6 +392,7 @@ impl Default for MediaCfg {
             inflation_milli: 125,
             claimed_value_cap_micros: 32_000_000,
             value_ticks_milli: 1000,
+            staleness_from_rob_tick: false,
         }
     }
 }
@@ -692,6 +700,7 @@ impl RunConfig {
             inflation_milli,
             claimed_value_cap_micros,
             value_ticks_milli,
+            staleness_from_rob_tick,
         } = media;
         h.write_u64(*station_gossip_slots as u64);
         h.write_u64(*craft_gossip_slots as u64);
@@ -701,6 +710,7 @@ impl RunConfig {
         h.write_u64(*inflation_milli as u64);
         h.write_u64(*claimed_value_cap_micros as u64);
         h.write_u64(*value_ticks_milli as u64);
+        h.write_u64(*staleness_from_rob_tick as u64);
         ConfigHash(h.finish())
     }
 }
@@ -732,7 +742,7 @@ fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0x5fda_1f2f_edf2_355c; // RE-PINNED: +MediaCfg (media rung cut 1). Was 0x1798_b108_edae_5bb6.
+    const GOLDEN_CONFIG_HASH: u64 = 0xee02_df67_1889_78dc; // RE-PINNED: +media.staleness_from_rob_tick (WHY-panel probe knob). Was 0x5fda_1f2f_edf2_355c.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -983,6 +993,9 @@ mod tests {
         let mut d = sample();
         d.media.sig_divisor_micros = 20_000;
         assert_ne!(sample().config_hash(), d.config_hash());
+        let mut e = sample();
+        e.media.staleness_from_rob_tick = true;
+        assert_ne!(sample().config_hash(), e.config_hash());
     }
 
     #[test]

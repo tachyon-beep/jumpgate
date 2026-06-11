@@ -573,7 +573,12 @@ impl World {
         };
         if self.media_live() {
             self.ships.gossip[crow].as_ref().map_or(0, |buf| {
-                buf.count_route_recent(route, self.tick, self.config.trophic.evidence_window)
+                buf.count_route_recent(
+                    route,
+                    self.tick,
+                    self.config.trophic.evidence_window,
+                    self.config.media.staleness_from_rob_tick,
+                )
             })
         } else {
             self.route_evidence.count_recent(
@@ -693,6 +698,7 @@ impl World {
             &self.config.craft,
             &self.route_evidence,
             media_live,
+            self.config.media.staleness_from_rob_tick,
             &mut self.assign_diag,
             &self.config.dispatch_cfg,
             &self.config.shipyard,

@@ -59,17 +59,30 @@ impl GossipBuffer {
     }
     /// RAW count of held alerts on `route` still inside THIS node's read
     /// window (spec §7, the media-live `route_evidence` body — Task 7's ONE
-    /// shared read so the accessor and the ASSIGN site cannot drift):
-    /// staleness anchors on `first_heard` at this node — the per-reader
-    /// forgetting clock, never one synchronized world clock — and the count
-    /// is unweighted (valence stays in the consumer, PDR-0006).
-    pub fn count_route_recent(&self, route: usize, now: Tick, evidence_window: u64) -> u32 {
+    /// shared read so the accessor and the ASSIGN site cannot drift). The
+    /// count is unweighted (valence stays in the consumer, PDR-0006).
+    ///
+    /// Staleness anchor (owner call, 2026-06-11 basin-clean ensemble):
+    /// `from_rob_tick == false` (the cut-1 default) anchors on `first_heard`
+    /// at this node — the per-reader forgetting clock. `true` anchors on the
+    /// alert's CARRIED `rob_tick` — "people immediately ask WHEN it
+    /// happened": era-old news is discarded no matter how recently it was
+    /// heard (the retention-bleed countermeasure; `rob_tick` is the CLAIMED
+    /// time — truthful in cut 1, a corruptible claim in later cuts).
+    pub fn count_route_recent(
+        &self,
+        route: usize,
+        now: Tick,
+        evidence_window: u64,
+        from_rob_tick: bool,
+    ) -> u32 {
         self.slots
             .iter()
             .flatten()
             .filter(|a| {
+                let anchor = if from_rob_tick { a.rob_tick } else { a.first_heard };
                 a.route as usize == route
-                    && now.0.saturating_sub(a.first_heard.0) <= evidence_window
+                    && now.0.saturating_sub(anchor.0) <= evidence_window
             })
             .count() as u32
     }
@@ -622,5 +635,36 @@ mod tests {
         assert_eq!(ev_a, ev_b);
         assert_eq!(a.occupied(), 2, "buffer stays at cap");
         assert!(ev_a > 0, "the cycle actually exercised overflow");
+    }
+
+    /// The staleness-anchor probe knob (owner call, 2026-06-11): with
+    /// `from_rob_tick == false` the read window runs from `first_heard` (the
+    /// cut-1 per-reader clock); with `true` it runs from the alert's carried
+    /// `rob_tick`, so era-old news recently heard is DISCARDED while fresh
+    /// news recently heard still counts.
+    #[test]
+    fn staleness_anchor_rob_tick_discards_era_old_news() {
+        let mut buf = GossipBuffer::empty(4);
+        // Era-old robbery (t=100) heard only just now (t=5900).
+        buf.slots[0] = Some(alert(0, 3_000_000, 100, 5900, 2));
+        // Fresh robbery (t=5500) heard just now too.
+        buf.slots[1] = Some(alert(1, 3_000_000, 5500, 5900, 1));
+        let now = Tick(6000);
+        let window = 4000;
+        // first_heard anchor: both heard 100 ticks ago -> both count.
+        assert_eq!(buf.count_route_recent(1, now, window, false), 2);
+        // rob_tick anchor: the era-old one (age 5900 > 4000) is discarded.
+        assert_eq!(buf.count_route_recent(1, now, window, true), 1);
+        // And a rob-fresh alert heard long ago still counts under rob_tick
+        // (the anchor swap is symmetric, not just stricter): rob t=5500,
+        // heard t=5600, now far past the HEARING but inside the rob window.
+        let mut buf2 = GossipBuffer::empty(4);
+        buf2.slots[0] = Some(alert(2, 3_000_000, 5800, 1000, 1));
+        assert_eq!(buf2.count_route_recent(1, Tick(6000), 4000, true), 1);
+        assert_eq!(
+            buf2.count_route_recent(1, Tick(6000), 200, false),
+            0,
+            "first_heard anchor would have expired it"
+        );
     }
 }

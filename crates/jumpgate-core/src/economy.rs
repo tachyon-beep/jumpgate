@@ -411,6 +411,7 @@ pub fn run_scripted_dispatch(
     craft_cfg: &[crate::config::CraftInit],
     route_evidence: &crate::world::RouteEvidence,
     media_live: bool,
+    staleness_from_rob_tick: bool,
     diag: &mut AssignDiag,
     dispatch: &crate::config::DispatchCfg,
     shipyard: &crate::config::ShipyardCfg,
@@ -597,7 +598,12 @@ pub fn run_scripted_dispatch(
                     );
                     let active = if media_live {
                         ships.gossip[crow].as_ref().map_or(0, |buf| {
-                            buf.count_route_recent(route, tick, trophic.evidence_window)
+                            buf.count_route_recent(
+                                route,
+                                tick,
+                                trophic.evidence_window,
+                                staleness_from_rob_tick,
+                            )
                         })
                     } else {
                         ring
@@ -1865,6 +1871,7 @@ mod tests {
             &[],
             &no_evidence,
             false,
+            false,
             &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
@@ -1883,6 +1890,7 @@ mod tests {
             &mut ships,
             &[],
             &no_evidence,
+            false,
             false,
             &mut AssignDiag::default(),
             &dispatch,
@@ -1968,6 +1976,7 @@ mod tests {
             &[],
             &re,
             false,
+            false,
             &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
@@ -1987,6 +1996,7 @@ mod tests {
             &mut ships,
             &[],
             &re,
+            false,
             false,
             &mut AssignDiag::default(),
             &dispatch,
@@ -2009,6 +2019,7 @@ mod tests {
             &mut ships,
             &[],
             &re,
+            false,
             false,
             &mut AssignDiag::default(),
             &dispatch,
@@ -2060,6 +2071,7 @@ mod tests {
             &[],
             &re,
             true,
+            false,
             &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
@@ -2082,6 +2094,7 @@ mod tests {
             &[],
             &re,
             true,
+            false,
             &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
@@ -2130,6 +2143,7 @@ mod tests {
             &mut ships,
             &unscripted,
             &re,
+            false,
             false,
             &mut AssignDiag::default(),
             &dispatch,
@@ -2308,6 +2322,7 @@ mod tests {
             &mut ships,
             &[],
             &crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() },
+            false,
             false,
             &mut AssignDiag::default(),
             &dispatch,
@@ -2626,6 +2641,7 @@ mod tests {
             &[],
             &ring,
             true,
+            false,
             &mut diag,
             &dispatch,
             &ShipyardCfg::default(),
@@ -2659,6 +2675,7 @@ mod tests {
             &[],
             &empty_ring,
             true,
+            false,
             &mut diag2,
             &dispatch,
             &ShipyardCfg::default(),
