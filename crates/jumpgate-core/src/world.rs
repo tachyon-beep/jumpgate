@@ -156,6 +156,11 @@ pub enum ResetError {
     /// The media-live predicate requires BOTH caps live (dual gate, spec §11);
     /// a half-on config is a misconfiguration, rejected before tick 0.
     BadMediaCfg { reason: &'static str },
+    /// A half-on `RefuelCfg`: `lot_mass > 0` while the Fuel price surface is
+    /// dead or the Port corp index cannot resolve. Refuel settlement is a
+    /// four-legged transfer, so reject before tick 0 rather than minting a
+    /// zero-price or one-legged world.
+    BadRefuelCfg { reason: &'static str },
 }
 
 impl std::fmt::Display for ResetError {
@@ -173,6 +178,9 @@ impl std::fmt::Display for ResetError {
             ),
             ResetError::BadMediaCfg { reason } => {
                 write!(f, "bad media config: {reason}")
+            }
+            ResetError::BadRefuelCfg { reason } => {
+                write!(f, "bad refuel config: {reason}")
             }
         }
     }
@@ -212,6 +220,22 @@ impl World {
             return Err(ResetError::BadMediaCfg {
                 reason: "half-on media: both gossip slot caps must be > 0 together",
             });
+        }
+        // Refuel half-on validation (BEFORE minting, like BadMediaCfg): once
+        // `lot_mass` opens the verb, settlement must have a live Fuel price
+        // somewhere and a resolvable Port corporation row for the credit leg.
+        if cfg.refuel.lot_mass > 0.0 {
+            let fuel = crate::economy::Resource::Fuel.index();
+            if !cfg.stations.iter().any(|s| s.initial_price_micros[fuel] > 0) {
+                return Err(ResetError::BadRefuelCfg {
+                    reason: "lot_mass > 0 requires at least one positive initial Fuel price",
+                });
+            }
+            if (cfg.refuel.corp_index as usize) >= cfg.corporations.len() {
+                return Err(ResetError::BadRefuelCfg {
+                    reason: "lot_mass > 0 requires refuel.corp_index to name an existing corporation",
+                });
+            }
         }
         // The media-live dual gate (config caps AND the trophic inert lever):
         // decides whether reset mints gossip buffers at all.
@@ -1762,6 +1786,35 @@ mod tests {
             World::reset(cfg).map(|_| ()),
             Err(ResetError::BadMediaCfg { .. })
         ));
+    }
+
+    #[test]
+    fn refuel_half_on_price_surface_is_a_reset_error() {
+        // lot_mass > 0 with a dead Fuel price surface would make every refuel a
+        // silent zero-price transfer. Reject it before tick 0, like BadMediaCfg.
+        let mut cfg = one_body_two_stations_one_miner();
+        cfg.corporations = vec![crate::config::CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 0,
+        }];
+        for station in cfg.stations.iter_mut() {
+            station.initial_price_micros[crate::economy::Resource::Fuel.index()] = 0;
+        }
+        cfg.refuel = crate::config::RefuelCfg { lot_mass: 5e-11, corp_index: 0 };
+        assert!(
+            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            "lot_mass > 0 with no Fuel price must reject"
+        );
+
+        cfg.stations[0].initial_price_micros[crate::economy::Resource::Fuel.index()] = 1;
+        cfg.refuel.corp_index = cfg.corporations.len() as u32;
+        assert!(
+            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            "lot_mass > 0 with a stale Port corp index must reject"
+        );
+
+        cfg.refuel.corp_index = 0;
+        assert!(World::reset(cfg).is_ok(), "fully-on refuel config resolves");
     }
 
     #[test]
