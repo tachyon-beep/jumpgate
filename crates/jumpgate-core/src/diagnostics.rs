@@ -79,6 +79,23 @@ pub fn permille_floor(num: f64, den: f64) -> u32 {
     }
 }
 
+/// UNHASHED per-craft fuel diagnostics (world-gets-big phase 0b). Written by
+/// `World::step`, read only by `sample_window`, never a behavior input and
+/// never hashed. Reset-sized to `n_craft`; craft rows never mint mid-run.
+#[derive(Clone, Debug, Default)]
+pub struct FuelDiag {
+    /// Ticks with a live burn (`fuel_consumed > 0`), run-cumulative.
+    pub thrust_ticks: Vec<u64>,
+    /// Propellant mass burned, run-cumulative.
+    pub burned_mass: Vec<f64>,
+    /// Tank low-water mark over the run.
+    pub min_fuel_mass: Vec<f64>,
+    /// Tank at the open of the craft's current contract leg.
+    pub leg_start_fuel: Vec<Option<f64>>,
+    /// `(close_tick, burn as permille-of-capacity, FLOOR)` per completed leg.
+    pub leg_burns: Vec<(Tick, u32)>,
+}
+
 /// One per-window integer reading of the trophic field (spec §9). All fields
 /// are integers: samples are hash-adjacent evidence, never float analytics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

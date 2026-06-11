@@ -83,6 +83,10 @@ pub struct World {
     /// UNHASHED diagnostics-only state — never an input to any behavior stage
     /// (see `pirate::EngagementSnapshot`).
     pub(crate) engagement_diag: Vec<crate::pirate::EngagementSnapshot>,
+    /// UNHASHED fuel diagnostics (world-gets-big phase 0b): per-craft duty,
+    /// burn, low-water, and contract-leg burn brackets. Read only by
+    /// `sample_window`; no behavior stage reads this field.
+    pub(crate) fuel_diag: crate::diagnostics::FuelDiag,
     eph: Ephemeris,
     rng: RngStreams,
     log: ActionLog,
@@ -430,6 +434,13 @@ impl World {
                 };
             }
         }
+        let fuel_diag = crate::diagnostics::FuelDiag {
+            thrust_ticks: vec![0; ships.fuel_mass.len()],
+            burned_mass: vec![0.0; ships.fuel_mass.len()],
+            min_fuel_mass: ships.fuel_mass.clone(),
+            leg_start_fuel: vec![None; ships.fuel_mass.len()],
+            leg_burns: Vec::new(),
+        };
         let dt = cfg.dt;
         let world = World {
             ships,
@@ -445,6 +456,7 @@ impl World {
             media_diag: Default::default(),
             assign_diag: Default::default(),
             engagement_diag: Vec::new(),
+            fuel_diag,
             eph,
             rng,
             log: ActionLog {
@@ -853,6 +865,17 @@ impl World {
             self.ships.vel[ci] = new_vel;
             self.ships.fuel_mass[ci] = (fuel - fuel_consumed).max(0.0);
 
+            // UNHASHED fuel diagnostics: duty, cumulative burn, and low-water.
+            // Diagnostics-only; no behavior stage reads `fuel_diag`.
+            if fuel_consumed > 0.0 {
+                self.fuel_diag.thrust_ticks[ci] =
+                    self.fuel_diag.thrust_ticks[ci].saturating_add(1);
+                self.fuel_diag.burned_mass[ci] += fuel_consumed;
+            }
+            if self.ships.fuel_mass[ci] < self.fuel_diag.min_fuel_mass[ci] {
+                self.fuel_diag.min_fuel_mass[ci] = self.ships.fuel_mass[ci];
+            }
+
             if throttle > 0.0 {
                 let dv = thrust_accel.length() * dt;
                 if let NavState::Seeking { dest, dv_remaining } = self.ships.nav[ci] {
@@ -1016,6 +1039,34 @@ impl World {
             &mut self.econ,
             &failed_craft,
         );
+
+        // (3c2) UNHASHED fuel-leg diagnostics: open on ContractAccepted, close
+        // on ContractFulfilled. Robbed/failed legs do not close; the next accept
+        // overwrites the bracket. Burn is recorded through the permille_floor
+        // seam as permille of effective capacity.
+        let leg_edges: Vec<(CraftId, bool)> = self
+            .events
+            .since(next)
+            .iter()
+            .filter_map(|e| match e.kind {
+                EventKind::ContractAccepted { hauler, .. } => Some((hauler, true)),
+                EventKind::ContractFulfilled { hauler, .. } => Some((hauler, false)),
+                _ => None,
+            })
+            .collect();
+        for (craft, opened) in leg_edges {
+            let Some(row) = self.ship_index(craft) else { continue };
+            if opened {
+                self.fuel_diag.leg_start_fuel[row] = Some(self.ships.fuel_mass[row]);
+            } else if let Some(start) = self.fuel_diag.leg_start_fuel[row].take() {
+                let cap =
+                    effective_params(&self.ships.spec[row], &self.ships.mods[row]).fuel_capacity;
+                let burned = (start - self.ships.fuel_mass[row]).max(0.0);
+                self.fuel_diag
+                    .leg_burns
+                    .push((next, crate::diagnostics::permille_floor(burned, cap)));
+            }
+        }
 
         // (3d) economy reprice stage (Stage-2 — Task 20): on a tick-gated clock,
         //      recompute station micro-prices against this tick's FULLY-SETTLED stock
@@ -2545,6 +2596,57 @@ mod tests {
             + world.ships.credits_micros.iter().sum::<i64>()
             + world.contracts.escrow_micros.iter().sum::<i64>();
         assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+    }
+
+    /// Phase-0b fuel instrument: one delivery run brackets exactly one
+    /// contract leg and moves every per-craft diagnostic channel. UNHASHED:
+    /// no golden involvement.
+    #[test]
+    fn fuel_diag_brackets_the_delivery_leg_and_tracks_burn() {
+        use crate::economy::ContractStatus;
+        use crate::types::{EntityRef, Target};
+        let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
+        let craft = world.craft_ids()[0];
+        let cidx = 0;
+        let contract = world
+            .contracts
+            .ids
+            .id_at(cidx)
+            .map(|(slot, generation)| crate::ids::ContractId { slot, generation })
+            .unwrap();
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        assert!(
+            world.fuel_diag.leg_start_fuel[0].is_some(),
+            "accept opens the leg bracket at the current tank"
+        );
+
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            if world.contracts.status[cidx] == ContractStatus::Completed {
+                break;
+            }
+        }
+        assert_eq!(
+            world.contracts.status[cidx],
+            ContractStatus::Completed,
+            "delivery completed within the step bound"
+        );
+        assert_eq!(world.fuel_diag.leg_burns.len(), 1, "exactly one leg closed");
+        let (close_tick, burn_permille) = world.fuel_diag.leg_burns[0];
+        assert!(close_tick.0 > 0, "leg closed at a real tick");
+        assert!(burn_permille <= 1000, "leg burn is a permille of capacity");
+        assert_eq!(world.fuel_diag.leg_start_fuel[0], None, "bracket consumed at close");
+        assert!(world.fuel_diag.thrust_ticks[0] > 0, "duty counted thrusting ticks");
+        assert!(world.fuel_diag.burned_mass[0] > 0.0, "cumulative burn accumulated");
+        assert!(
+            world.fuel_diag.min_fuel_mass[0] <= world.ships.fuel_mass[0],
+            "low-water mark never exceeds the live tank"
+        );
     }
 
     #[test]
