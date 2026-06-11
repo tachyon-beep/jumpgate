@@ -1221,6 +1221,51 @@ pub fn run_purchase_policies(
     }
 }
 
+/// Scripted refuel-intent stage — stage 1c3b, world-gets-big §5. Writes
+/// `pending_refuel` for scripted non-pirate craft docked at any station with
+/// at least one lot of headroom and a wallet covering one unit at the dock's
+/// live Fuel price. Top-to-full, threshold-free; the 1d2 settler buys
+/// `min(need, stock, afford)` lots. Never clobbers an ingest intent.
+#[allow(clippy::too_many_arguments)]
+pub fn run_refuel_policies(
+    ships: &mut CraftStore,
+    craft_cfg: &[crate::config::CraftInit],
+    stations: &StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    refuel: &crate::config::RefuelCfg,
+    tick: Tick,
+) {
+    if refuel.lot_mass <= 0.0 {
+        return;
+    }
+    let prev = Tick(tick.0.saturating_sub(1));
+    let fuel_r = Resource::Fuel.index();
+    for crow in 0..ships.ids.len() {
+        if craft_cfg.get(crow).is_some_and(|c| !c.scripted) {
+            continue;
+        }
+        if ships.pending_refuel[crow].is_some() {
+            continue;
+        }
+        if ships.role[crow] == CraftRole::Pirate {
+            continue;
+        }
+        let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
+            continue;
+        };
+        let eff = effective_params(&ships.spec[crow], &ships.mods[crow]);
+        let need = ((eff.fuel_capacity - ships.fuel_mass[crow]) / refuel.lot_mass).floor();
+        if need < 1.0 {
+            continue;
+        }
+        if ships.credits_micros[crow] < stations.price_micros[srow][fuel_r] {
+            continue;
+        }
+        ships.pending_refuel[crow] = Some(());
+    }
+}
+
 /// Delivery-on-arrival settlement stage (deterministic, sorted-`ContractId` order).
 /// Runs in `World::step` AFTER boundary-event detection: `arrivals` is the list of
 /// `(craft, dest)` pairs lifted from this tick's just-detected `Arrival` events. For
@@ -2021,6 +2066,83 @@ mod tests {
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
         assert_refuel_skipped(&mut world, 12_000, 0.0, 40, "stale-corp");
+    }
+
+    #[test]
+    fn credit_identity_holds_across_refuels_and_policy_is_self_running() {
+        use crate::contract::Command;
+        use crate::world::World;
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 1_000_000;
+        let total = |w: &crate::world::World| -> i64 {
+            w.corporations.treasury_micros.iter().sum::<i64>()
+                + w.ships.credits_micros.iter().sum::<i64>()
+                + w.contracts.escrow_micros.iter().sum::<i64>()
+        };
+        let t0 = total(&world);
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..50 {
+            world.step(&mut empty);
+            assert_eq!(total(&world), t0, "Σtreasury+Σcredits+Σescrow invariant every tick");
+        }
+        assert!(
+            world
+                .events_mut()
+                .since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::Refueled { units: 4, .. })),
+            "policy-driven top-to-full refuel happened (4 lots, dry -> full)"
+        );
+        assert_eq!(world.ships.fuel_mass[0], 1.0e-9, "topped to capacity: 4 * 2.5e-10");
+        assert_eq!(world.ships.credits_micros[0], 1_000_000 - 20_000, "4 units at 5_000");
+    }
+
+    #[test]
+    fn refuel_policy_gates_deterministically() {
+        use crate::world::World;
+        let no_refuel = |world: &mut crate::world::World, arm: &str| {
+            assert!(
+                !world
+                    .events_mut()
+                    .since(Tick(0))
+                    .iter()
+                    .any(|e| matches!(e.kind, EventKind::Refueled { .. })),
+                "{arm}: the policy must not have produced a refuel"
+            );
+        };
+
+        let mut cfg = refuel_world_fixture();
+        cfg.craft[0].scripted = false;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.step(&mut Vec::new());
+        no_refuel(&mut world, "!scripted");
+
+        let mut cfg = refuel_world_fixture();
+        cfg.craft[0].role = crate::stores::CraftRole::Pirate;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.step(&mut Vec::new());
+        no_refuel(&mut world, "pirate");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.fuel_mass[0] = 1.0e-9;
+        world.ships.prev_fuel[0] = 1.0e-9;
+        world.step(&mut Vec::new());
+        no_refuel(&mut world, "full-tank");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 4_999;
+        world.step(&mut Vec::new());
+        no_refuel(&mut world, "wallet-short");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.pos[0] = crate::math::Vec3::new(1.0, 0.0, 0.0);
+        world.ships.prev_pos[0] = world.ships.pos[0];
+        world.step(&mut Vec::new());
+        no_refuel(&mut world, "undocked");
     }
 
     /// Capacity-gate fixture: two bodies (origin star hosts station A, a 0.3 AU

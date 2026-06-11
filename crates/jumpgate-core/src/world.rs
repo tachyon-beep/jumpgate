@@ -803,6 +803,20 @@ impl World {
             next,
         );
 
+        // (1c3b) scripted refuel policies (world-gets-big §5): write
+        //       `pending_refuel` for docked, scripted, non-pirate craft with
+        //       >= 1 lot of headroom and a wallet covering one unit at the
+        //       dock's live price. Consumed by stage 1d2 below the same tick.
+        crate::economy::run_refuel_policies(
+            &mut self.ships,
+            &self.config.craft,
+            &self.stations,
+            &self.bodies,
+            &self.eph,
+            &self.config.refuel,
+            next,
+        );
+
         // (1d) upgrade-purchase settle stage (pirates rung §6): consume every
         //      BuyUpgrade intent written by this tick's ingest and the stage-1c3
         //      scripted purchase policies. AFTER resolve_contracts, PRE-
