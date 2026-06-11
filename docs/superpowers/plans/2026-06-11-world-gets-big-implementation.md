@@ -1519,6 +1519,12 @@ EOF
 
 ## Phase 1 — eps re-bake (spec §4 item 1; §9 phase 1 first clause)
 
+> **Implementation status (Codex, 2026-06-12): COMPLETE.** Landed as
+> `3dadeba` (`FUEL_EMPTY_EPS` 1e-9 -> 1e-11 + starved-fixture redesign).
+> Verification recorded: fuel-edge focused tests, replay equivalence, full
+> workspace tests, clippy, python smoke suite, and a pre/post-eps trophic digest
+> at seeds 1/7 with byte-identical JSONL plus `replay-check OK`.
+
 HEAD at plan time: `e7e490e`. Beat: make the FuelEmpty edge armable. At
 `FUEL_EMPTY_EPS = 1e-9` every band tank (1.0e-9, `scenario.rs:113/126`) sits
 exactly AT the eps and the strict `fuel_prev > FUEL_EMPTY_EPS` predicate
@@ -1803,6 +1809,16 @@ git worktree remove /tmp/wgb-eps-base
 ---
 
 ## Phase 1 — the refuel verb (spec §5, §7 Refueled/ContractFailed, §9 phase-1 rest)
+
+> **Implementation status (Codex, 2026-06-12): COMPLETE through Task 1.2.7.**
+> Landed commits: `f9f6217` RefuelCfg fold and config re-pin, `eb7efc8`
+> half-on reset guard, `580471b` transient pending_refuel store column,
+> `bdab65b` resolve_refuels settlement, `ab1b8bb` scripted refuel policy,
+> `a960e91` FUEL-C1 same-tick dv rederive, `f5be1c2` PLAY-C1 dispatch
+> eligibility + Refuel/ContractFailed, `0c20249` chronicle arms, and
+> `28605b9` trophic inertness proof. Phase-exit digest vs pre-phase-1
+> `af2167c` is byte-identical for seeds 7/23 (stdout and JSONL), and HEAD
+> replay-check is green.
 
 > Drafted against HEAD `e7e490e`. Prerequisite within phase 1: **Task 1.1 (the
 > eps 1e-11 re-bake + fixture redesign, own commit — owned by the fuel-edge
@@ -3281,7 +3297,17 @@ git diff <PRE> -- crates/jumpgate-core/src/hash.rs | grep -E "GOLDEN|FORMAT_VERS
 git diff <PRE> -- crates/jumpgate-core/src/config.rs | grep GOLDEN_CONFIG_HASH          # expect: exactly the one re-pin
 ```
 
-- [ ] **Step 6: commit (tests only — the digest artifacts stay untracked).**
+- [x] **Step 6: commit (tests only — the digest artifacts stay untracked).**
+
+  **Completed 2026-06-12:** committed as `28605b9`
+  (`feat(world-gets-big): prove trophic refuel inertness gate`). Digest
+  artifacts stayed under `runs/` and were not staged. The phase-exit hashes were:
+  seed 7 JSONL `7e7be28917f54323aaaceafcef2a96297c4a528a6b601f0267b31cf745e71cca`;
+  seed 23 JSONL `c38ed1c89874f7d4d42bc10e0aef0d1cddb3ee4c46e65d9caec2baf655d05229`;
+  seed 7 stdout `744f284c4176372625d22539cb63e14420de21740d2a88f0c8fb4280270ea29a`;
+  seed 23 stdout `a54384b1f9ff2169961bd8bd28493316c8673994e86dd19764ecf55257d58f05`.
+  `cargo test --workspace`, `cargo clippy --all-targets -- -D warnings`, and
+  `PYTHONPATH=/home/john/jumpgate/python pytest python/tests` were green.
 
 ```
 git add crates/jumpgate-core/src/economy.rs crates/jumpgate-core/src/scenario.rs
