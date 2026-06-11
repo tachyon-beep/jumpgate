@@ -610,6 +610,21 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
         "claimed_value_cap_micros" => m.claimed_value_cap_micros = p(name, value)?,
         "value_ticks_milli" => m.value_ticks_milli = p(name, value)?,
         "staleness_from_rob_tick" => m.staleness_from_rob_tick = p(name, value)?,
+        // Craft-spec knobs (world-gets-big spec §4 — calibration levers).
+        // Scales EVERY craft's tank and starting fuel together (full-tank
+        // starts preserved; pirates' endurance ratio preserved). Zero,
+        // negative, and non-finite values would poison a whole sweep grid, so
+        // they are loud errors.
+        "fuel_capacity_scale" => {
+            let scale: f64 = p(name, value)?;
+            if !(scale.is_finite() && scale > 0.0) {
+                return Err(format!("--set {name}={value}: scale must be finite and > 0"));
+            }
+            for c in &mut cfg.craft {
+                c.spec.base_fuel_capacity *= scale;
+                c.fuel_mass *= scale;
+            }
+        }
         other => return Err(format!("--set {other}: unknown knob")),
     }
     Ok(())
@@ -807,6 +822,24 @@ mod tests {
         assert!(apply_knob(&mut cfg, "warp_factor", "9").is_err());
         assert!(apply_knob(&mut cfg, "p_rob_milli", "many").is_err());
         assert!(apply_knob(&mut cfg, "hauler_buy_policy", "Maximal").is_err());
+    }
+
+    #[test]
+    fn fuel_capacity_scale_knob_scales_every_tank() {
+        // World-gets-big spec §4 step 3: the calibration ensemble's lever —
+        // scales capacity AND starting fuel (full-tank starts preserved) so
+        // endurance exceeds run length and the burn tail is uncorrupted.
+        let mut cfg = scenario_trophic(7);
+        let base: Vec<(f64, f64)> =
+            cfg.craft.iter().map(|c| (c.spec.base_fuel_capacity, c.fuel_mass)).collect();
+        apply_knob(&mut cfg, "fuel_capacity_scale", "100").expect("knob applies");
+        for (c, (cap0, fuel0)) in cfg.craft.iter().zip(&base) {
+            assert_eq!(c.spec.base_fuel_capacity, cap0 * 100.0, "capacity scaled");
+            assert_eq!(c.fuel_mass, fuel0 * 100.0, "starting fuel scaled");
+        }
+        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "0").is_err(), "zero is loud");
+        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "-1").is_err(), "negative is loud");
+        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "nan").is_err(), "NaN is loud");
     }
 
     #[test]
