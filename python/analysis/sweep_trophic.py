@@ -73,10 +73,22 @@ META_RE = re.compile(
     r"station_radii_milli_au=\[(?P<radii>[0-9, ]*)\]$"
 )
 
+# The FUEL line (world-gets-big phase 0b) — lands in the SAME commit as the
+# runner's println! (the lockstep rule). HAULER numbers only on the anchored
+# line; pirates ride the per-role JSONL tail rows. Phase-1 refuel fields
+# append here with the mechanic; this phase prints only measured fields.
+FUEL_RE = re.compile(
+    r"^FUEL seed=(?P<seed>\d+) hauler_duty_milli=(?P<duty>\d+) "
+    r"hauler_burn_total_milli=(?P<burn>\d+) "
+    r"hauler_median_leg_burn_permille=(?P<leg>\d+) "
+    r"hauler_min_tank_permille=(?P<min_tank>\d+)$"
+)
+
 ANCHORED = {
     "result": (True, RESULT_RE),
     "media": (True, MEDIA_RE),
     "meta": (False, META_RE),
+    "fuel": (False, FUEL_RE),
 }
 
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli
@@ -181,6 +193,19 @@ def panel(name, runs):
     # Endurance window: FuelEmpty must be 0 on every run (spec section 6).
     fuel = [int(run["result"]["fuel_empty"]) for run in runs]
     print(f"endurance: fuel_empty per run = {fuel} (window expects all 0)")
+
+    # FUEL window (phase 0b, spec §8): hauler duty/burn/low-water per run.
+    # Version-gated: pre-FUEL banked output prints n/a, never dies.
+    if all(run["fuel"] is not None for run in runs):
+        print(
+            "fuel (hauler): duty_milli="
+            f"{[int(run['fuel']['duty']) for run in runs]} burn_total_milli="
+            f"{[int(run['fuel']['burn']) for run in runs]} median_leg_burn_permille="
+            f"{[int(run['fuel']['leg']) for run in runs]} min_tank_permille="
+            f"{[int(run['fuel']['min_tank']) for run in runs]}"
+        )
+    else:
+        print("fuel: n/a (pre-FUEL instrument format)")
 
     # Endpoint-ambush trip-phase histogram (the owner's pre-registered
     # discriminator, spec section 2: bimodal at trip endpoints).

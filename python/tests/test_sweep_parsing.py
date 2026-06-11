@@ -25,6 +25,8 @@ MEDIA seed=7 born=12 escaped_milli=833 median_lag=410 p90_lag=1290 reading=Local
 V2_STDOUT = V1_STDOUT + (
     "META seed=7 scenario=trophic stations=6 haulers=12 pirates_initial=6 "
     "station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]\n"
+    "FUEL seed=7 hauler_duty_milli=412 hauler_burn_total_milli=3180 "
+    "hauler_median_leg_burn_permille=24 hauler_min_tank_permille=507\n"
 )
 
 
@@ -43,3 +45,13 @@ def test_v2_meta_line_parses():
     assert parsed["meta"]["haulers"] == "12"
     assert parsed["meta"]["pirates_initial"] == "6"
     assert parsed["meta"]["radii"] == "350, 560, 770, 980, 1190, 1400"
+
+
+def test_v2_fuel_line_parses_and_v1_reads_none():
+    parsed = sweep.parse_stdout(V2_STDOUT)
+    assert parsed["fuel"] is not None
+    assert parsed["fuel"]["duty"] == "412"
+    assert parsed["fuel"]["burn"] == "3180"
+    assert parsed["fuel"]["leg"] == "24"
+    assert parsed["fuel"]["min_tank"] == "507"
+    assert sweep.parse_stdout(V1_STDOUT)["fuel"] is None

@@ -219,8 +219,76 @@ fn sample_json(s: &TrophicSample) -> String {
         "assign_decisions_cum": s.assign_decisions_cum,
         "assign_flips_cum": s.assign_flips_cum,
         "assign_counts_cum": s.assign_counts_cum,
+        // Fuel lab keys (world-gets-big phase 0b) — ADDITIVE: every pre-fuel
+        // key above is byte-untouched.
+        "per_craft_role": s.per_craft_role,
+        "per_craft_thrust_ticks": s.per_craft_thrust_ticks,
+        "per_craft_burn_milli": s.per_craft_burn_milli,
+        "per_craft_min_tank_permille": s.per_craft_min_tank_permille,
+        "leg_burn_permille": s.leg_burn_permille,
     })
     .to_string()
+}
+
+/// Role-split fuel aggregates (phase 0b, spec §8 — windows, never gates).
+/// The pirate side exists for the per-role JSONL rows only; the anchored FUEL
+/// line carries HAULER numbers. 0 sentinels mirror the MEDIA precedent.
+struct FuelAgg {
+    duty_milli: u64,
+    burn_total_milli: u64,
+    median_leg_burn_permille: u32,
+    min_tank_permille: u32,
+}
+
+fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
+    let zero = FuelAgg {
+        duty_milli: 0,
+        burn_total_milli: 0,
+        median_leg_burn_permille: 0,
+        min_tank_permille: 0,
+    };
+    let Some(last) = samples.last() else {
+        return zero;
+    };
+    let rows: Vec<usize> = (0..last.per_craft_role.len())
+        .filter(|&r| (last.per_craft_role[r] == 2) == pirate_side)
+        .collect();
+    if rows.is_empty() {
+        return zero;
+    }
+
+    // Duty: pooled thrusting ticks over pooled craft-ticks, milli, FLOOR.
+    let thrust: u64 = rows.iter().map(|&r| last.per_craft_thrust_ticks[r]).sum();
+    let craft_ticks = (rows.len() as u64).saturating_mul(last.tick);
+    let duty_milli = thrust
+        .saturating_mul(1000)
+        .checked_div(craft_ticks)
+        .unwrap_or(0);
+    let burn_total_milli: u64 =
+        rows.iter().map(|&r| u64::from(last.per_craft_burn_milli[r])).sum();
+    // Contract legs are hauler-only by construction; pirates read the 0
+    // sentinel because they fly no contract legs.
+    let median_leg_burn_permille = if pirate_side {
+        0
+    } else {
+        let mut legs: Vec<u32> = samples
+            .iter()
+            .flat_map(|s| s.leg_burn_permille.iter().copied())
+            .collect();
+        legs.sort_unstable();
+        if legs.is_empty() { 0 } else { legs[(legs.len() - 1) / 2] }
+    };
+    let min_tank_permille = rows
+        .iter()
+        .map(|&r| last.per_craft_min_tank_permille[r])
+        .min()
+        .unwrap_or(0);
+    FuelAgg {
+        duty_milli,
+        burn_total_milli,
+        median_leg_burn_permille,
+        min_tank_permille,
+    }
 }
 
 /// Post-run media event log (plan Task 8.4): one JSONL line per
@@ -379,7 +447,26 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let hauler_fuel = fuel_agg(&samples, false);
+    let pirate_fuel = fuel_agg(&samples, true);
     if let Some(mut w) = jsonl_writer {
+        // Per-role FUEL rows (phase 0b, spec §8): the anchored stdout line
+        // carries HAULER numbers only; pirates ride these JSONL tail rows.
+        // No "tick" key — window consumers gate on `"tick" in row`.
+        for (role, a) in [("hauler", &hauler_fuel), ("pirate", &pirate_fuel)] {
+            writeln!(
+                w,
+                "{}",
+                serde_json::json!({
+                    "fuel_role": role,
+                    "duty_milli": a.duty_milli,
+                    "burn_total_milli": a.burn_total_milli,
+                    "median_leg_burn_permille": a.median_leg_burn_permille,
+                    "min_tank_permille": a.min_tank_permille,
+                })
+            )
+            .expect("jsonl write");
+        }
         w.flush().expect("jsonl flush");
     }
 
@@ -490,6 +577,20 @@ fn main() -> ExitCode {
         median_lag,
         p90_lag,
         diagnostics::media_classify(&samples),
+    );
+
+    // The FUEL line (world-gets-big phase 0b, spec §8 — a window, not a gate;
+    // the lockstep rule: this line and FUEL_RE land in the SAME commit).
+    // MEASURED fields only. Refuel fields append with the phase-1 mechanic,
+    // never as zeros for a verb that does not exist yet.
+    println!(
+        "FUEL seed={} hauler_duty_milli={} hauler_burn_total_milli={} \
+         hauler_median_leg_burn_permille={} hauler_min_tank_permille={}",
+        args.seed,
+        hauler_fuel.duty_milli,
+        hauler_fuel.burn_total_milli,
+        hauler_fuel.median_leg_burn_permille,
+        hauler_fuel.min_tank_permille,
     );
 
     // The ASSIGN line (WHY-panel windows, 2026-06-11; a window, not a gate):
