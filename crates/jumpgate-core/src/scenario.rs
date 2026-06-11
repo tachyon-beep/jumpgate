@@ -396,10 +396,17 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         s[Resource::Fuel.index()] = fuel;
         s
     };
+    // Demand-deflation curve seed (spec §5): the SAME integer curve
+    // update_prices walks — price = base*(2000 - min(stock,cap)*slope/cap)/1000
+    // at base 5_000 / cap 40 / slope 1800 => dry 10_000, full 1_000.
+    let fuel_price = |fuel_stock: i64| -> i64 {
+        let s = fuel_stock.clamp(0, 40);
+        (5_000 * (2000 - s * 1800 / 40) / 1000).max(0)
+    };
     let station = |body_index: usize, ore: i64, fuel: i64, vendor: bool| StationInit {
         body_index,
         initial_stock: stock(ore, fuel),
-        initial_price_micros: [0, 0],
+        initial_price_micros: [0, fuel_price(fuel)],
         sells_upgrades: vendor,
     };
     let stations = vec![
@@ -507,11 +514,12 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         corporations,
         contracts,
         price_cfg: PriceCfg {
-            // DEAD until task 2.4 flips Fuel live. cap 0 = the structural-off
-            // switch; never inherit PriceCfg::default()'s live-ish cap [1,1]
-            // in a factory.
-            base_micros: [0, 0],
-            cap: [0, 0],
+            // The first live price (OD-4): Fuel only — full (stock >= 40)
+            // 1_000 -> dry 10_000 micros/unit; a full fill ~= the grubstake
+            // ~= 10% of a tier-1 reward. cap[Ore] == 0 = the structural-off
+            // switch (update_prices skips the row).
+            base_micros: [0, 5_000],
+            cap: [0, 40],
             slope_milli: 1800,
             reprice_interval: 1,
         },
@@ -525,7 +533,10 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         trophic,
         shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
         media: MediaCfg::default(),
-        refuel: RefuelCfg::default(),
+        // Refuel LIVE (spec §5): 20 lots/tank (~1 lot core leg, ~3-4
+        // frontier leg); revenue -> the Port corp (index 4, treasury 0) —
+        // generator AND consumer land in one rung (the OD-5b two-sided law).
+        refuel: RefuelCfg { lot_mass: 5.0e-11, corp_index: 4 },
     }
 }
 
@@ -607,7 +618,9 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::{Command, EventKind, StateView};
     use crate::diagnostics::WINDOW_TICKS;
+    use crate::time::Tick;
     use crate::world::World;
 
     #[test]
@@ -1066,5 +1079,88 @@ mod tests {
             scenario_frontier(7).config_hash(),
             scenario_trophic(7).config_hash()
         );
+    }
+
+    #[test]
+    fn scenario_frontier_fuel_pricing_and_port() {
+        let cfg = scenario_frontier(7);
+
+        // PriceCfg: Fuel-only live (spec §5, OD-4). cap[Ore]==0 is the
+        // structural-off switch — Ore stays dead by construction.
+        assert_eq!(cfg.price_cfg.base_micros, [0, 5_000], "Fuel-only base");
+        assert_eq!(cfg.price_cfg.cap, [0, 40], "cap[Ore]==0 keeps Ore structurally dead");
+        assert_eq!(cfg.price_cfg.slope_milli, 1800);
+        assert_eq!(cfg.price_cfg.reprice_interval, 1);
+
+        // Curve endpoints: dry (s=0) 10_000; full (s=cap) 1_000 micros/unit.
+        let curve_price = |stock: i64| {
+            let s = stock.clamp(0, 40);
+            (5_000 * (2000 - s * 1800 / 40) / 1000).max(0)
+        };
+        assert_eq!(curve_price(0), 10_000);
+        assert_eq!(curve_price(40), 1_000);
+
+        // initial_price_micros[Fuel] is seeded FROM THE CURVE at the
+        // station's initial stock (spec §5); Ore price 0 everywhere; every
+        // seeded fuel price nonzero (the phase-1 half-on guard's input).
+        for (row, s) in cfg.stations.iter().enumerate() {
+            assert_eq!(
+                s.initial_price_micros[Resource::Ore.index()],
+                0,
+                "station {row}: Ore price dead"
+            );
+            let st = s.initial_stock[Resource::Fuel.index()].clamp(0, 40);
+            let want = curve_price(st);
+            assert_eq!(
+                s.initial_price_micros[Resource::Fuel.index()],
+                want,
+                "station {row}: fuel price seeded from the curve"
+            );
+            assert!(
+                s.initial_price_micros[Resource::Fuel.index()] > 0,
+                "station {row}: half-on guard input must be nonzero"
+            );
+        }
+
+        // RefuelCfg LIVE (spec §5): lot 5e-11 => 20 lots per 1e-9 tank
+        // (~1 lot core leg, ~3-4 frontier leg); revenue -> the Port corp.
+        assert_eq!(cfg.refuel.lot_mass, 5.0e-11, "lot_mass");
+        assert_eq!(cfg.refuel.corp_index, 4, "the Port corp index");
+        let lots = (1.0e-9 / cfg.refuel.lot_mass).round() as u32;
+        assert_eq!(lots, 20, "20 lots per tank");
+
+        // The half-on guard accepts the armed factory: reset resolves.
+        World::reset(scenario_frontier(7)).expect("frontier resolves with refuel live");
+    }
+
+    #[test]
+    fn frontier_ore_price_never_updates_and_fuel_rides_the_curve() {
+        // cap[Ore]==0 => update_prices skips the row forever; Fuel prices
+        // stay inside the curve band [1_000, 10_000].
+        let (mut world, _h) = World::reset(scenario_frontier(7)).expect("resolve");
+        let mut cmds: Vec<Command> = Vec::new();
+        for _ in 0..500 {
+            world.step(&mut cmds);
+        }
+        let mut fuel_updates = 0u32;
+        for e in world.recent_events(Tick(0)) {
+            if let EventKind::PriceUpdate { resource, price_micros, .. } = e.kind {
+                match resource {
+                    Resource::Ore => {
+                        panic!("Ore price updated — cap[Ore]==0 must keep it dead")
+                    }
+                    Resource::Fuel => {
+                        fuel_updates += 1;
+                        assert!(
+                            (1_000..=10_000).contains(&price_micros),
+                            "fuel price {price_micros} outside the curve band"
+                        );
+                    }
+                }
+            }
+        }
+        // Non-vacuity: the dest refiners land Fuel within 500 ticks
+        // (interval 60) — stock moves => at least one Fuel PriceUpdate.
+        assert!(fuel_updates > 0, "no Fuel PriceUpdate in 500 ticks — vacuous test");
     }
 }
