@@ -1,0 +1,153 @@
+export const meta = {
+  name: 'wgb-plan-pipeline',
+  description: 'Ground, draft, assemble, and adversarially review the world-gets-big implementation plan',
+  phases: [
+    { title: 'Ground', detail: '7 citation-grade code-surface extracts' },
+    { title: 'Draft', detail: '7 phase drafters writing code-complete plan sections' },
+    { title: 'Assemble', detail: 'merge sections into one plan document' },
+    { title: 'Review', detail: '4 adversarial plan reviewers' },
+    { title: 'Synthesize', detail: 'unified verdict + prioritized fixes' },
+  ],
+}
+
+const ROOT = '/home/john/jumpgate'
+const SPEC = ROOT + '/docs/superpowers/specs/2026-06-11-world-gets-big-design.md'
+const DIR = '/tmp/wgb-plan'
+const HEAD = 'e7e490e'
+
+const GROUND_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    summary: { type: 'string' },
+    gotchas: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['path', 'summary', 'gotchas'],
+}
+
+const GROUND_COMMON = `You are a citation-grade grounding reader for an implementation-plan pipeline in ${ROOT} (HEAD ${HEAD}, branch jumpgate-v1-design). Read the ACTUAL code with Read/Grep — never recall from memory; every claim must carry file:line you verified this session. Downstream plan drafters know NOTHING about this codebase except your extract and the spec (${SPEC} — read the sections relevant to your beat). Write your extract as markdown to the output file given below: exact current code snippets (signatures, struct fields, the precedent code a drafter will clone, existing test names + their assertion style, stage-ordering context, hash/golden touchpoints), each with file:line. Include a GOTCHAS section (things a zero-context engineer would get wrong). Be thorough but only on YOUR beat. Cap ~10KB. Return {path, summary (<=80 words), gotchas (top 5)}.`
+
+const GROUNDS = [
+  { key: 'fuel-edge', out: DIR + '/ground-fuel-edge.md', beat: `Beat: the fuel/energy edge. Extract: events.rs FUEL_EMPTY_EPS and the FuelEmpty edge predicate (the prev > eps arm) with exact lines; ship.rs fuel burn math (exhaust_velocity use, fuel_mass, prev_fuel copy-forward, where burn happens per tick); autopilot.rs dv_remaining derivation + the coast-at-zero condition (~line 61) and BOTH dispatch sites that derive dv via tsiolkovsky; settle_contract_failure and FailureCause (economy.rs or contract.rs — find it) incl. whether FuelEmpty failure is currently silent; ALL test fixtures whose starting fuel straddles 1e-9..1e-11 (grep for 1e-9, FUEL_EMPTY_EPS, fuel_mass in tests) — list each test name + file:line + what it pins, because the plan redesigns them; craft spec/CraftInit fields for fuel (capacity, exhaust_velocity) and where scenario factories set them.` },
+  { key: 'economy-verbs', out: DIR + '/ground-economy-verbs.md', beat: `Beat: economy verbs + prices + corps. Extract: economy.rs run_purchase_policies + resolve_purchases END-TO-END (the BuyUpgrade machinery the refuel verb clones): intent struct, pending_upgrade lifecycle, docked-at-t-1 frame test, wallet checks, stage position, the always-consume-then-gate idiom, deterministic no-op skip arms; where corps/treasuries live (the Yard corp precedent: index, treasury transfers, any corp registry) and what adding a Port corp touches; update_prices demand-deflation curve incl. the cap==0 skip (cite lines), PriceCfg fields (base_micros, cap, slope), initial_price_micros seeding; the scripted ASSIGN dispatch site in run_scripted_dispatch — the candidate eligibility filters today (capacity filter precedent) where a fuel>eps filter would slot, and its params (media_live, staleness_from_rob_tick, AssignDiag); consumed[] resource sinks; escort settle path requiring a vendor at the hideout dock (run_purchase_policies) with lines.` },
+  { key: 'scenario-config', out: DIR + '/ground-scenario-config.md', beat: `Beat: scenario factories + config + golden discipline. Extract: scenario.rs scenario_trophic factory full shape (station/body construction, orbit radii, seed-derived phases via mix, CraftInit fields incl. spec/exhaust_velocity/fuel, hideout_body_index, pirate reach — is 0.6 inherited silently? cite, contracts/tiers/qty/rewards, food_per_unit_micros, Schmitt-stagger initial stocks, vendor flags, initial_price_micros seeding) — the template scenario_frontier clones; apply_knob match arms (the staleness_from_rob_tick arm as the precedent for a new craft.fuel_capacity_scale arm); how examples/trophic_run.rs selects scenario (is there a --scenario flag? cite the arg parsing); config.rs MediaCfg fold precedent (exhaustive destructure into config_hash) for adding RefuelCfg, GOLDEN_CONFIG_HASH current literal + the print_golden_config re-derivation workflow + the comment discipline, where PriceCfg sits in config and its current trophic values; ephemeris_window config. GOTCHA to document: single-cause golden commits; literals NEVER invented, always pasted from print_golden_config output.` },
+  { key: 'world-stages', out: DIR + '/ground-world-stages.md', beat: `Beat: world step stages + stores + hash points. Extract: world.rs step() stage ordering with the substage naming (1a/1b/1c/1d/...) and exact call order around run_purchase_policies/resolve_purchases — where 1c3b run_refuel_policies and 1d2 resolve_refuels would slot (cite neighbors); CraftStore fields incl. pending_upgrade: Vec<Option<...>> (type, reset sizing, the all-None-at-every-hash-point assert — cite the assert and every hash point it guards); ingest.rs verb enum + dispatch (the precedent for adding a Refuel verb — is BuyUpgrade an ingest verb? cite); reset() n-generic sizing (route vectors, RouteEvidence, per-route lab vectors — cite that sizing derives from n); state hash word layout tail (where gossip words 30-32 ended; confirm refuel transient is NOT hashed under the pending_upgrade precedent); replay/command-log surface a new verb must satisfy; stage-4 prev_fuel copy-forward (Class-3 pinning) if it lives here.` },
+  { key: 'pirate', out: DIR + '/ground-pirate.md', beat: `Beat: pirate.rs. Extract: nav_lurk — the exact code path where a post-refuge pirate's nav-derived lurk is adopted, and the haven exclusion that guards only fresh draws (cite both, with the doc comment "a pirate does not rob where it fences"); the relocation write site where a LurkMoved event would emit (and how breakout vs local relocation is distinguishable at that site); the hunger gate (fed pirate never relocates); reach-bounded draw machinery (pirate_max_reach_au — where set, where consumed); the stale "nearest station" marooned doc comment to fix; refuge/lie-low state machine fields; haven/hideout station resolution (hideout_body_index → station row); how a fix "nav_lurk == haven_station → treat as None → fresh reach-bounded draw" slots in (name the function + insertion point). Also: existing pirate tests covering lurk/refuge — names + what they pin.` },
+  { key: 'lab', out: DIR + '/ground-lab.md', beat: `Beat: lab bench. Extract: diagnostics.rs TrophicSample full current field list + sample_window signature and how fields are gathered (the additive-field precedent from assign_flips_cum); examples/trophic_run.rs anchored stdout lines (RESULT/MEDIA/ASSIGN/FUEL if any) exact formats + JSONL emission keys + where META would slot; any existing FUEL line (does one exist? cite) and what fuel stats are currently sampled; python/ sweep_trophic.py (find exact path) parsing contract — the N_HAULERS mirror constant the spec kills, version-gating precedent for parsers, existing panels (media_log.py etc.) as templates for I1 haves_havenots.py / I2 radial-zone; the HHI/slack heterogeneity calibration constants (HHI_NORM_MIN_MILLI 2204, HOT_PERSISTENCE_SLACK_CHANGES 3) — file:line + the labeled-run fit method description + hungry-roamer positive control location; media_classify + escaped_milli (W1 reads); where per-station stock/price would be read for per_station_fuel_stock/price fields.` },
+  { key: 'events-chronicle', out: DIR + '/ground-events-chronicle.md', beat: `Beat: events + chronicle + ephemeris + goldens. Extract: events.rs event enum — full variant list + payload shapes (Refueled/ContractFailed/LurkMoved precedents: how AlertBorn/GossipHeard were added; permille FLOOR-rounding precedent if any), emit plumbing (single-emit discipline), and the chronicle printer (where epilogues/narration print — find the printer that would gain the per-craft epilogue: role, workplace radius, tank permille, credits, ADRIFT since t=...); whether ContractFailed-style settle narration exists for Robbed (the spec says Robbed keeps its own narration — cite it); ephemeris.rs body_pos clamp (~106-111) + ephemeris_window plumbing — where a runner guard (abort if ticks > ephemeris_window) goes in trophic_run.rs; trajectory golden test precedent (the existing determinism goldens: GOLDEN_ZERO_STATE_HASH, zero-world state_hash test, print_golden) — cite the test file + how a NEW frontier trajectory golden would be added and re-derived; HASH_FORMAT_VERSION=5 location.` },
+]
+
+const DRAFT_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    tasks: { type: 'array', items: { type: 'string' } },
+    deviations: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['path', 'tasks', 'deviations'],
+}
+
+const DRAFT_COMMON = `You are a plan-section drafter (writing-plans discipline) for the world-gets-big rung in ${ROOT} (HEAD ${HEAD}). Read the spec ${SPEC} (your sections below) and your grounding extracts (paths below) FIRST; consult real code with Read/Grep whenever the extract is thin — never invent symbols. Write your plan section as markdown to the output file given below.
+
+FORMAT (non-negotiable, per task): "### Task <your phase-prefixed id>: <name>" + a Files block (Create:/Modify: with exact paths, line refs from grounding) + checkbox steps "- [ ] **Step N: ...**". TDD: failing test first (REAL test code in fenced rust/python blocks), run command + expected failure text, minimal implementation (REAL code, matching surrounding idiom — Rust 2024, exhaustive destructures where the codebase does that), run + expected pass, then a commit step. Every code step shows the code. NO placeholders ("TBD", "add validation", "similar to task N" — repeat the code).
+
+HOUSE RULES the plan must encode in its steps: commit messages end with the exact trailer line "Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>" (use git commit -F - heredoc); git add EXPLICIT paths only (never -A, never '.'); never stage runs/; test commands are "cargo test -p jumpgate-core <filter>" / "cargo test --workspace" / "cargo clippy --all-targets -- -D warnings" / "PYTHONPATH=${ROOT}/python pytest python/tests" as appropriate; GOLDEN literals are NEVER written by the planner — any golden-touching step must instruct the builder to run the print_golden/print_golden_config test and paste ITS output, single-cause commit, with a provenance comment citing the cause and the old literal; reward surfaces untouched (no shaping); use the spec's pinned names VERBATIM (RefuelCfg{lot_mass, corp_index}, pending_refuel, run_refuel_policies at 1c3b, resolve_refuels at 1d2, fuel_capacity_scale, FRONTIER_ORBIT_AU, scenario_frontier, Port corp, Refueled/ContractFailed/LurkMoved, META line, role-split FUEL line). Windows are recorded, never gated — no plan step may make a metric a pass/fail gate (determinism/unit tests excepted).
+
+Return {path, tasks (list of "<id>: <title>"), deviations (anything where you had to deviate from or interpret the spec — empty if none)}.`
+
+const DRAFTS = [
+  { key: 'd0a', out: DIR + '/draft-0a.md', grounds: ['ground-pirate.md'], brief: `Phase 0a — the haven-lurk leak fix (spec §6 first bullet, §9 phase 0a). 1-2 tasks, ids 0a.1... Single-cause behavior commit: nav_lurk == haven station → treated as None → fresh reach-bounded draw; fix the stale marooned doc comment IN A SEPARATE later commit only if spec says same commit — re-read §6 (it says the marooned doc fix rides the explicit-reach commit in phase 2; keep 0a pure). Include: failing test that constructs the post-refuge state and asserts the haven is never adopted as lurk; a test that fresh-draw exclusion still holds; note in the commit message that the judged band changes and a console re-judgment is scheduled. No golden literals move (assert which golden tests must STILL pass and add a step running them).` },
+  { key: 'd0b', out: DIR + '/draft-0b.md', grounds: ['ground-lab.md', 'ground-scenario-config.md'], brief: `Phase 0b — lab instruments before mechanics (spec §8, §9 phase 0b). Tasks 0b.1... : META stdout line (seed/scenario/stations/haulers/pirates_initial/station_radii_milli_au) + JSONL keys; kill the N_HAULERS mirror in sweep_trophic.py with version-gated parsing (banked pre-FUEL outputs must still parse — show the gate code); role-split FUEL line with MEASURED fields only (hauler_duty_milli, hauler_burn_total_milli, hauler_median_leg_burn_permille, hauler_min_tank_permille; refuel fields explicitly DEFERRED to phase 1 with a comment) + per-role JSONL rows carrying pirates; zero-refuel sentinel per the MEDIA precedent; --assert-no-fuel-empty stays trophic-only; final task = bank the 20-seed trophic baseline POST-0a-fix with the new instruments (exact run commands, seeds 0-19, output to runs/wgb_baseline/ and a note that runs/ is never staged — the banked summary goes to docs/superpowers/posts/ per the capture practice).` },
+  { key: 'd1a', out: DIR + '/draft-1a.md', grounds: ['ground-fuel-edge.md'], brief: `Phase 1, eps re-bake (spec §4 item 1, §9 phase 1 first clause). Tasks 1.1... : FUEL_EMPTY_EPS 1e-9 → 1e-11 as its OWN single-cause commit; the straddling fixture families REDESIGNED (lower starting fuel so each fixture's intent is preserved at the new eps — from your grounding extract list EVERY affected test and give its redesigned fixture values), not literal-nudged; a new unit test pinning that the edge predicate can arm (prev > eps with a tank that drains through eps); assert band hash-neutrality: which goldens/digests must still pass and the exact commands.` },
+  { key: 'd1b', out: DIR + '/draft-1b.md', grounds: ['ground-economy-verbs.md', 'ground-world-stages.md', 'ground-scenario-config.md', 'ground-fuel-edge.md'], brief: `Phase 1, the refuel verb (spec §5 entire, §7 Refueled/ContractFailed, §9 phase 1 rest). The biggest section — 5-7 tasks, ids 1.2...: (a) RefuelCfg{lot_mass:f64, corp_index:u32} in config + exhaustive-destructure config_hash fold + reset error for the half-on idiom (lot_mass>0 while base_micros[Fuel]==0 or any station initial_price_micros[Fuel]==0) + GOLDEN_CONFIG_HASH re-pin step (builder runs print_golden_config and pastes; single-cause commit); (b) CraftStore.pending_refuel: Vec<Option<()>> transient + join the all-None-at-every-hash-point assert + reset sizing; (c) run_refuel_policies at 1c3b (after run_purchase_policies): scripted non-pirate craft, docked at t-1 frame, headroom >= 1 lot, wallet covers a unit → intent; top-to-full, threshold-free; (d) resolve_refuels at 1d2 (after resolve_purchases, pre-physics): always-consume-then-gate, deterministic no-op skips (undocked / stock 0 / wallet short / tank full / unit_price < 1 / stale corp row), integer quantization need=floor((cap_eff−fuel)/lot), afford=credits/price, units=min(need,stock,afford), four legs (stock−=units; consumed[Fuel]+=units; wallet→Port corp treasury pure transfer; fuel_mass+=units·lot clamped, one rounding) + Refueled event (tank_before_permille FLOOR before, after derives from decided units) + same-tick burn draws from refilled tank with prev_fuel untouched; (e) FUEL-C1 dv_remaining re-derivation for refueled Seeking craft (the tsiolkovsky derivation both dispatch sites use); (f) PLAY-C1 dispatch eligibility fuel_mass > FUEL_EMPTY_EPS in ASSIGN (capacity-filter precedent) + ContractFailed event emitted in settle_contract_failure for FailureCause::FuelEmpty ONLY (stale-corp degrade arm reports actual 0 refund) + Refuel ingest verb; (g) the trophic-inertness gate: lot_mass==0 early-returns BOTH stages, proven by a cross-branch 2000-tick digest test (give the exact digest test pattern from the codebase digest precedent) — trophic cross-branch digest green is the phase exit. Port corp creation rides the config/corp task (Yard precedent, treasury 0). Every behavioral claim grounded in your extracts.` },
+  { key: 'd2a', out: DIR + '/draft-2a.md', grounds: ['ground-scenario-config.md', 'ground-economy-verbs.md', 'ground-events-chronicle.md'], brief: `Phase 2, the frontier factory (spec §2, §3, §5 Pricing, §6 reach bullet, §9 phase 2 first half). Tasks 2.1...: FRONTIER_ORBIT_AU [f64;10] with the pinned-law test (a_k = 0.35·r^k, r=(3.0/0.35)^(1/9), endpoints exact — test recomputes the law and asserts endpoints + the 8-9 gap 0.637 > 0.6); scenario_frontier factory (star + 10 bodies, body k+1 hosts station row k, seed phases via mix; 20 haulers 2/station, 10 pirates; physics block verbatim from the band: dt 0.25, softening 1e-4, substeps {3e-4,64}; ephemeris_window 120_000); partitioned tier loops per §3 EXACTLY (tier 0: sources {0,1}→dest 2, Fuel return 2→3 sink 3, vendor 2, 1.0M qty 5; tier 1: {3,4}→5, return 5→4 sink 4, vendor 5, 2.3M qty 10; tier 2: {7,8}→9, return 9→8 sink 8, vendor 9, 3.9M qty 15; haven station 6 = body index 7, vendor, NO producer, NO contract endpoint); factory invariant TESTS verbatim from §3 (disjoint per-tier dests/sinks; every station in sources∪dests∪sinks∪{haven}; haven in no contract endpoint; every tier loop touches a vendor; haulers ≡ 0 mod n; seam-haven assertion replaces hideout-outermost; per-tier Schmitt-stagger stocks); food_per_unit_micros 15_000; PriceCfg Fuel-only live (base_micros [0, 5_000], cap [0, 40], slope 1800; curve full 1000 → dry 10000; cap[Ore]==0 keeps Ore dead — test it), initial_price_micros[Fuel] seeded from the curve at factory build; Port corp wired; explicit pirate reach 0.6 in BOTH factories + the stale marooned doc fix (same commit per §6); per-class CraftInit specs (haulers placeholder v_e pending calibration — factory takes the value from a named const with a doc comment that 2.x bakes it; pirates v_e 20); RefuelCfg lot_mass 5e-11; --scenario flag in trophic_run.rs + the NEW runner guard aborting when ticks > ephemeris_window.` },
+  { key: 'd2b', out: DIR + '/draft-2b.md', grounds: ['ground-pirate.md', 'ground-lab.md', 'ground-events-chronicle.md', 'ground-scenario-config.md'], brief: `Phase 2 second half (spec §6 LurkMoved context, §7, §8 TrophicSample, §9 phase 2 tail). Tasks 2.x (continue after d2a's — use ids 2.6+ to be safe; assembler will not renumber): LurkMoved{pirate,to_station,breakout} at the relocation write site (single emit, hash-neutral — events precedent); chronicle per-craft epilogue (printer-side: role, workplace radius, tank permille, credits, ADRIFT since t=… computed from final world state); TrophicSample additive pure-read fields (per_station_lurking_pirates, pirates_commuting, pirates_at_haven, per_station_fuel_stock, per_station_fuel_price, refuels, refuel_units, refuel_spend_micros) flowing through sample_window (TROPHIC-C2: lab cannot read pub(crate) from an example binary) + FUEL line gains the refuel fields deferred from 0b; NEW frontier trajectory golden (builder derives via the print_golden precedent — exact derivation commands, never invented literals); craft.fuel_capacity_scale apply_knob arm; the calibration ensemble task: run scenario_frontier at fuel_capacity_scale=100 over 20 seeds (exact commands; endurance provably exceeds run length so the burn tail is uncorrupted), read W8 per-leg burn from the FUEL line, derive hauler v_e from measured worst HAULER-leg burn × k≈2.5 (OD-5b), bake the value into the factory const WITH the derivation in the doc comment, re-derive the frontier trajectory golden (the bake moves it — second pin, cause documented), re-run the calibration sanity at scale=1.` },
+  { key: 'd3', out: DIR + '/draft-3.md', grounds: ['ground-lab.md'], brief: `Phase 3 — science + console (spec §8 panels/ensembles, §9 phase 3, §11 windows). Tasks 3.1...: dual-map HHI/slack re-fit post-leak-fix (labeled-run method, held-out seeds; constants re-derived not nudged — show the fit procedure commands; hungry-roamer positive control must read RiskEqualized on frontier BEFORE any frontier reading is recorded — that ordering is a procedure step, not a gate on shipping); I1 haves_havenots.py (per-craft workplace radius × hearing lag joined on BORN tick × end credits; PLAY-C3 confound pre-registered in the panel's emitted text; the 6-station control actually run); I2 radial-zone panel with the fuel_starve death-spiral-vs-boom-bust discriminator + coverage re-denominated to contract-endpoint stations (scenario-conditional) + per-row refuel fill share; the headline 20-seed × 6-arm grid (name the six arms from §11 W4: blind/ring/gossip × anchor arms — re-read W4 and define exactly; exact run commands, rate-normalized cross-map reads); the owner console packet task (assemble band re-judgment materials: post-fix trophic band vs frontier, W1-W12 readings, pre-registered band text) — recorded, never gated. Python tasks use PYTHONPATH=${ROOT}/python pytest python/tests for any new parser tests; panels follow media_log.py idioms from grounding.` },
+]
+
+phase('Ground')
+log('Dispatching 7 grounding readers')
+const groundResults = await parallel(GROUNDS.map(g => () =>
+  agent(`${GROUND_COMMON}\n\nOutput file: ${g.out}\n\n${g.beat}`,
+    { label: `ground:${g.key}`, phase: 'Ground', schema: GROUND_SCHEMA })))
+const groundOk = groundResults.filter(Boolean)
+log(`Grounding complete: ${groundOk.length}/7 extracts`)
+if (groundOk.length < 5) throw new Error('too many grounding failures')
+
+const gotchaDigest = groundOk.flatMap(g => (g.gotchas || []).slice(0, 5)).map(s => '- ' + s).join('\n')
+
+phase('Draft')
+log('Dispatching 7 phase drafters')
+const draftResults = await parallel(DRAFTS.map(d => () =>
+  agent(`${DRAFT_COMMON}\n\nOutput file: ${d.out}\nGrounding extracts to read first: ${d.grounds.map(x => DIR + '/' + x).join(', ')}\nCross-beat gotchas from all grounding readers (respect these):\n${gotchaDigest}\n\nYOUR SECTION: ${d.brief}`,
+    { label: `draft:${d.key}`, phase: 'Draft', schema: DRAFT_SCHEMA })))
+const draftOk = draftResults.filter(Boolean)
+log(`Drafts complete: ${draftOk.length}/7`)
+if (draftOk.length < 7) throw new Error('a drafter failed — resume after inspecting ' + DIR)
+
+phase('Assemble')
+const ASSEMBLED = DIR + '/assembled-plan.md'
+const assembleResult = await agent(`Assemble the world-gets-big implementation plan at ${ASSEMBLED} from the section files, in this exact order: ${DRAFTS.map(d => d.out).join(', ')}.
+
+1. Start the document with EXACTLY this header (fill nothing in differently):
+
+# The World Gets Big (scenario_frontier) Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (\`- [ ]\`) syntax for tracking.
+
+**Goal:** Build the frontier rung — a 10-station geometric map (0.35→3.0 AU) with partitioned tier loops, a real propellant economy (eps re-bake + refuel verb + first live Fuel price), the haven-lurk leak fix, and the lab instruments/panels to read it — per the APPROVED spec docs/superpowers/specs/2026-06-11-world-gets-big-design.md (OD-1..7 resolved).
+
+**Architecture:** Five landing phases (0a leak fix → 0b instruments-before-mechanics → 1 eps+refuel gated off at lot 0 → 2 scenario_frontier factory + calibration-derived v_e bake → 3 dual-map re-fit, panels, headline grid, console). Hash discipline: no HASH_FORMAT_VERSION bump; exactly one GOLDEN_CONFIG_HASH re-pin (RefuelCfg) and one new frontier trajectory golden (re-pinned once more by the v_e bake, cause documented); trophic stays bit-identical (cross-branch digest is the phase-1 exit).
+
+**Tech Stack:** Rust 2024 (jumpgate-core), examples/trophic_run.rs runner, Python panels (python/, pytest with PYTHONPATH), deterministic seeded ensembles.
+
+---
+
+2. Concatenate the section files in order, each under a "## Phase ..." H2 you derive from the section content (0a, 0b, 1 — eps, 1 — refuel verb, 2 — factory, 2 — instruments+calibration, 3 — science+console). Do NOT rewrite task content; you may only fix: duplicate task ids (renumber the LATER duplicate, updating any references to it inside the same file), broken intra-document references, and trailing whitespace.
+3. Scan the assembled doc for the forbidden placeholder patterns (TBD, TODO, "similar to Task", "add appropriate", "fill in") and for invented golden literals (a hex literal in a golden re-pin step that is asserted as the NEW value rather than "paste print_golden output") — fix invented literals by rewriting the step to derive-and-paste, and list every fix you made.
+4. Append a final "## Cross-cutting checklist" section listing: the single GOLDEN_CONFIG_HASH re-pin rule, the trophic digest exit criterion, the never-gate rule (windows recorded), the commit trailer, explicit git add paths, never stage runs/.
+Return {path: "${ASSEMBLED}", tasks: [all task ids+titles in order], deviations: [fixes you made]}.`,
+  { label: 'assemble', phase: 'Assemble', schema: DRAFT_SCHEMA })
+if (!assembleResult) throw new Error('assembler failed')
+log(`Assembled: ${assembleResult.tasks.length} tasks`)
+
+const REVIEW_SCHEMA = {
+  type: 'object',
+  properties: {
+    path: { type: 'string' },
+    critical: { type: 'number' },
+    major: { type: 'number' },
+    minor: { type: 'number' },
+    headline: { type: 'string' },
+  },
+  required: ['path', 'critical', 'major', 'minor', 'headline'],
+}
+
+const REVIEWERS = [
+  { key: 'reality', type: 'axiom-planning:plan-review-reality', extra: `Hunt hallucinations: verify EVERY file path, symbol, line ref, function signature, stage name, config field, test name, and CLI flag in the plan against the actual codebase at ${ROOT} (HEAD ${HEAD}). Pay special attention to: the BuyUpgrade-clone surfaces (do the claimed intent/resolve functions and stage hooks exist as described?), the claimed test fixtures straddling FUEL_EMPTY_EPS, sweep_trophic.py parsing claims, the nav_lurk/haven-exclusion code path, print_golden/print_golden_config test names, and any code block that references a symbol the plan never defines.` },
+  { key: 'quality', type: 'axiom-planning:plan-review-quality', extra: `Test strategy and observability: does every behavior change land test-first with a real failing test? Are the determinism proofs (cross-branch digest, golden re-pins, replay) placed at the right phase exits? Are fixture redesigns (eps re-bake) principled per-fixture rather than blanket? Do the lab tasks keep windows RECORDED never gated (flag any step that turns a metric into a pass/fail gate — determinism/unit tests excepted)? Is the calibration→bake chain (fuel_capacity_scale ensemble → v_e derivation → golden re-derive) ordered so the instrument lands before the field?` },
+  { key: 'architecture', type: 'axiom-planning:plan-review-architecture', extra: `Architecture: does the refuel verb genuinely follow the pending_upgrade transient precedent (not hashed, all-None asserts, reset sizing)? Is the stage insertion (1c3b/1d2) coherent with the documented stage order? Does scenario_frontier stay a pure factory (no engine special-cases leaking in)? Is the trophic-inertness gate (lot_mass==0) structurally sound? Single-cause golden commits respected? Any task that couples two causes into one commit?` },
+  { key: 'systems', type: 'axiom-planning:plan-review-systems', extra: `Systemic risks and second-order effects: the 0a leak fix changes the judged band — does the plan sequence the baseline re-bake AFTER 0a and schedule the console re-judgment? Does the dispatch fuel-eligibility filter risk deadlocking contracts (liveness window W9 present?)? Does the v_e bake invalidate earlier-phase artifacts (trajectory golden re-pin ordering)? Cross-map comparability claims (rate-normalized only)? The half-on reset error (lot>0, price 0) — covered both directions? Anything in phase 3 that silently depends on a phase-2 output the plan never produces?` },
+]
+
+phase('Review')
+log('Dispatching 4 adversarial plan reviewers')
+const reviews = await parallel(REVIEWERS.map(r => () =>
+  agent(`Review the implementation plan at ${ASSEMBLED} for the world-gets-big rung. The authoritative spec is ${SPEC} (APPROVED; §13 records owner resolutions OD-1..7). The codebase is ${ROOT} at HEAD ${HEAD}. Grounding extracts (context the drafters used) are in ${DIR}/ground-*.md.\n\n${r.extra}\n\nWrite your full findings report (severity-rated CRITICAL/MAJOR/MINOR, each with plan location + evidence file:line + the concrete fix) to ${DIR}/review-${r.key}.md. Return {path, critical, major, minor, headline (<=40 words)}.`,
+    { label: `review:${r.key}`, phase: 'Review', agentType: r.type, schema: REVIEW_SCHEMA })))
+const reviewsOk = reviews.filter(Boolean)
+log(`Reviews complete: ${reviewsOk.length}/4 — ${reviewsOk.map(r => r.critical + 'C/' + r.major + 'M').join(', ')}`)
+
+phase('Synthesize')
+const synth = await agent(`Synthesize the four plan reviews into one prioritized fix list for the world-gets-big implementation plan.\nPlan: ${ASSEMBLED}\nSpec: ${SPEC}\nReviews: ${REVIEWERS.map(r => DIR + '/review-' + r.key + '.md').join(', ')}\nGrounding extracts: ${DIR}/ground-*.md\n\nRead all four reviews + the plan. Deduplicate findings, adjudicate conflicts between reviewers (verify against the actual code at ${ROOT} when reviewers disagree — you have all tools), drop findings that misread the spec (the spec is authoritative; windows are recorded never gated; PDR-0006: no metric gates). Write ${DIR}/synthesis.md with: (1) verdict (SHIP-AS-IS / FIX-THEN-SHIP / REDRAFT-SECTION); (2) the deduplicated CRITICAL list with for each the exact plan task id + the concrete edit to make; (3) MAJOR list likewise; (4) findings you REJECTED with one-line reasons. Return {path, critical, major, minor, headline}.`,
+  { label: 'synthesize', phase: 'Synthesize', agentType: 'axiom-planning:plan-review-synthesizer', schema: REVIEW_SCHEMA })
+
+return {
+  ground: groundOk.map(g => g.path),
+  drafts: draftOk.map(d => ({ path: d.path, tasks: d.tasks, deviations: d.deviations })),
+  assembled: assembleResult.path,
+  taskList: assembleResult.tasks,
+  assemblerFixes: assembleResult.deviations,
+  reviews: reviewsOk,
+  synthesis: synth,
+}
