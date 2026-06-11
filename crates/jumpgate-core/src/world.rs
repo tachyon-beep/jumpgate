@@ -543,26 +543,41 @@ impl World {
         self.ship_index(id).map(|i| self.ships.credits_micros[i])
     }
 
-    /// Dock-gated route-evidence read (spec §7) — **the degenerate
-    /// proto-channel**: replace the propagation model BEHIND this signature.
-    /// The accessor takes the READER, not a timestamp, precisely so the media
-    /// layer can later swap "your own last dock" for a real propagation model
-    /// (lag, locality, loss) without touching a single call site.
+    /// Route-evidence read (media rung spec §7) — the propagation model now
+    /// lives BEHIND this unchanged signature (the spec-§7 promise kept: the
+    /// accessor took the READER, not a timestamp, precisely so this swap
+    /// would touch no call site).
     ///
-    /// Returns the count of recorded robs on the directed `route` (dense
-    /// row-major `from_row * n_stations + to_row`) inside
-    /// `(info_tick - evidence_window, info_tick]`, where `info_tick` is the
-    /// READER's own last-dock tick — a hauler acts on the world as of its own
-    /// last dock. Stale readers and out-of-range routes read 0 (spec §8).
+    /// MEDIA-LIVE (`media_live()`): the RAW count of the reader's OWN
+    /// comms-log alerts on the directed `route` (dense row-major
+    /// `from_row * n_stations + to_row`) still inside its window — staleness
+    /// anchors on each copy's `first_heard` at THIS reader (the per-reader
+    /// forgetting clock; the return to a cooled route staggers by lived
+    /// docking rhythms). Unweighted: valence stays in the consumer
+    /// (PDR-0006). Pirate rows hold no buffer and read 0 (information-blind).
+    ///
+    /// MEDIA-OFF: the legacy ring read, byte-identical — recorded robs inside
+    /// `(info_tick - evidence_window, info_tick]` where `info_tick` is the
+    /// reader's own last-dock tick. The ring keeps being written either way
+    /// (the media-off fallback; retirement = cut 2, OD-2), and `info_tick`
+    /// keeps refreshing (it is the dock detector); its evidence-read role
+    /// ends when media is live. Stale readers and out-of-range routes read 0
+    /// (spec §8).
     pub fn route_evidence(&self, reader: CraftId, route: usize) -> u32 {
         let Some(crow) = self.ship_index(reader) else {
             return 0;
         };
-        self.route_evidence.count_recent(
-            route,
-            self.ships.info_tick[crow],
-            self.config.trophic.evidence_window,
-        )
+        if self.media_live() {
+            self.ships.gossip[crow].as_ref().map_or(0, |buf| {
+                buf.count_route_recent(route, self.tick, self.config.trophic.evidence_window)
+            })
+        } else {
+            self.route_evidence.count_recent(
+                route,
+                self.ships.info_tick[crow],
+                self.config.trophic.evidence_window,
+            )
+        }
     }
 
     /// Shipyard config (the Yard's corp index) for the diagnostics sampler's
@@ -662,12 +677,18 @@ impl World {
         //       commands. Placed AFTER run_producers (so demand reflects this tick's
         //       production) and BEFORE resolve_contracts (so a same-tick accept is
         //       escrowed/loaded). Identity-neutral: touches no counter/stock/cargo.
+        // Media-live flips the ASSIGN evidence read from the legacy ring to
+        // each hauler's own comms-log (media spec §7, Task 7). Config is
+        // reset-pinned, so this is constant for a run (hoisted: a pure config
+        // read, before the disjoint &mut field borrows below).
+        let media_live = self.media_live();
         crate::economy::run_scripted_dispatch(
             &mut self.contracts,
             &self.stations,
             &mut self.ships,
             &self.config.craft,
             &self.route_evidence,
+            media_live,
             &self.config.dispatch_cfg,
             &self.config.shipyard,
             &self.config.trophic,
@@ -1725,6 +1746,173 @@ mod tests {
             w_off.ships.gossip.iter().all(Option::is_none),
             "no comms-logs when media is off"
         );
+    }
+
+    /// Media-live 2-station fixture with two scripted Hauler craft on rows 1
+    /// and 2 (row 0 is the fixture's Idle craft) — the Task-7 read-swap test
+    /// bed: reset media-live, hand-sit alerts, read the accessor.
+    fn media_live_two_haulers() -> RunConfig {
+        use crate::stores::CraftRole;
+        let mut cfg = one_body_two_stations_one_miner();
+        let mut hauler = cfg.craft[0].clone();
+        hauler.role = CraftRole::Hauler;
+        cfg.craft.push(hauler.clone());
+        cfg.craft.push(hauler);
+        cfg.media.station_gossip_slots = 16;
+        cfg.media.craft_gossip_slots = 8;
+        cfg.trophic.engage_radius_au = 0.05;
+        cfg
+    }
+
+    /// A hand-sat `GossipAlert` for the read-swap tests: only `route` and
+    /// `first_heard` are load-bearing at the read (raw count — the cover
+    /// payload is deliberately ignored by `route_evidence`, PDR-0006).
+    fn test_alert(seq: u32, route: u32, first_heard: Tick) -> crate::media::GossipAlert {
+        crate::media::GossipAlert {
+            alert_seq: seq,
+            route,
+            pirate_slot: 0,
+            rob_tick: Tick(1),
+            claimed_value_micros: 2_000_000,
+            first_heard,
+            hops: 1,
+        }
+    }
+
+    /// Live `CraftId` of a dense row (test helper; rows here are config-minted).
+    fn craft_id_at(w: &World, row: usize) -> crate::ids::CraftId {
+        let (slot, generation) = w.ships.ids.id_at(row).expect("live craft row");
+        crate::ids::CraftId { slot, generation }
+    }
+
+    #[test]
+    fn route_evidence_media_path_counts_own_recent_route_matches() {
+        // Spec §7 (Task 7): media-live, the accessor counts the READER's OWN
+        // buffer items on the route still inside its window — per-reader
+        // CONTENT, not just per-reader staleness.
+        let (mut w, _) =
+            World::reset(media_live_two_haulers()).expect("resolvable media-live config");
+        assert!(w.media_live(), "fixture must be media-live");
+        let window = w.config.trophic.evidence_window;
+        let a = craft_id_at(&w, 1);
+        let b = craft_id_at(&w, 2);
+        // Advance the clock so staleness can bite, then hand-sit hauler A's
+        // comms-log: route 3 fresh, route 3 stale by 1 past the window,
+        // route 5 fresh. Hauler B's buffer stays empty.
+        w.tick = Tick(window + 1000);
+        let now = w.tick;
+        {
+            let buf = w.ships.gossip[1].as_mut().expect("hauler row mints a comms-log");
+            buf.slots[0] = Some(test_alert(0, 3, now));
+            buf.slots[1] = Some(test_alert(1, 3, Tick(now.0 - window - 1)));
+            buf.slots[2] = Some(test_alert(2, 5, now));
+        }
+        assert_eq!(w.route_evidence(a, 3), 1, "route 3: one fresh, one aged out");
+        assert_eq!(w.route_evidence(a, 5), 1, "route 5: the fresh alert counts");
+        assert_eq!(w.route_evidence(a, 9), 0, "unmentioned route reads 0");
+        for route in [3usize, 5, 9] {
+            assert_eq!(
+                w.route_evidence(b, route),
+                0,
+                "B's empty buffer reads 0 on every route: per-reader CONTENT"
+            );
+        }
+    }
+
+    #[test]
+    fn route_evidence_media_off_is_byte_identical_legacy() {
+        // The legacy parity pin (Task 7): media OFF, the accessor returns
+        // exactly `count_recent(route, info_tick[reader], evidence_window)`
+        // on a hand-seeded ring — the media-off fallback is byte-identical.
+        let (mut w, _) =
+            World::reset(one_body_two_stations_one_miner()).expect("resolvable config");
+        assert!(!w.media_live(), "default media caps must be off");
+        let window = w.config.trophic.evidence_window;
+        let reader = craft_id_at(&w, 0);
+        // 2 stations -> 4 directed routes; seed route 1's ring by hand.
+        w.route_evidence.robs[1][0] = Tick(10);
+        w.route_evidence.robs[1][1] = Tick(50);
+        w.route_evidence.robs[1][2] = Tick(70);
+        w.ships.info_tick[0] = Tick(60);
+        assert_eq!(
+            w.route_evidence(reader, 1),
+            2,
+            "(info_tick - window, info_tick] holds ticks 10 and 50; 70 is after the dock"
+        );
+        assert_eq!(
+            w.route_evidence(reader, 1),
+            w.route_evidence.count_recent(1, w.ships.info_tick[0], window),
+            "media-off accessor == the legacy ring read"
+        );
+        assert_eq!(w.route_evidence(reader, 9), 0, "out-of-range route reads 0");
+    }
+
+    #[test]
+    fn deaf_control_behavioral_trace_identity() {
+        // The deaf control (media spec §9, instrument-kill discipline): media
+        // LIVE but UNREAD (`hauler_belief_scoring = false`) must leave
+        // behavior untouched — the pre-registered behavioral trace (per-window
+        // robs / laden_trips / per_route_accepts / per_craft_credits) is
+        // element-identical to the media-OFF belief-off arm. Deliberately NOT
+        // state_hash: gossip state legitimately differs between the arms.
+        use crate::scenario::{apply_knob, scenario_trophic};
+        let mut live_cfg = scenario_trophic(7);
+        apply_knob(&mut live_cfg, "station_gossip_slots", "16").expect("media knob");
+        apply_knob(&mut live_cfg, "craft_gossip_slots", "8").expect("media knob");
+        apply_knob(&mut live_cfg, "hauler_belief_scoring", "false").expect("belief knob");
+        let mut off_cfg = scenario_trophic(7);
+        apply_knob(&mut off_cfg, "hauler_belief_scoring", "false").expect("belief knob");
+        let (mut w_live, _) = World::reset(live_cfg).expect("media-live arm resolves");
+        let (mut w_off, _) = World::reset(off_cfg).expect("media-off arm resolves");
+        assert!(w_live.media_live(), "arm 1 must be media-live");
+        assert!(!w_off.media_live(), "arm 2 must be media-off");
+        let mut cmds: Vec<Command> = Vec::new();
+        let mut ws_live = Tick(0);
+        let mut ws_off = Tick(0);
+        for t in 1..=6_000u64 {
+            w_live.step(&mut cmds);
+            w_off.step(&mut cmds);
+            if t % 2_000 == 0 {
+                let sl = crate::diagnostics::sample_window(&w_live, ws_live);
+                let so = crate::diagnostics::sample_window(&w_off, ws_off);
+                assert_eq!(sl.robs, so.robs, "robs diverge at tick {t}: media leaked");
+                assert_eq!(
+                    sl.laden_trips, so.laden_trips,
+                    "laden_trips diverge at tick {t}: media leaked"
+                );
+                assert_eq!(
+                    sl.per_route_accepts, so.per_route_accepts,
+                    "per_route_accepts diverge at tick {t}: media leaked"
+                );
+                assert_eq!(
+                    sl.per_craft_credits, so.per_craft_credits,
+                    "per_craft_credits diverge at tick {t}: media leaked"
+                );
+                ws_live = w_live.tick();
+                ws_off = w_off.tick();
+            }
+        }
+    }
+
+    #[test]
+    fn per_reader_forgetting_clock() {
+        // Spec §7 (the staggered-return mechanism): the SAME alert copied into
+        // two readers at different first-heard ticks ages out on each reader's
+        // own acquisition clock, never on one synchronized world clock.
+        let (mut w, _) =
+            World::reset(media_live_two_haulers()).expect("resolvable media-live config");
+        let window = w.config.trophic.evidence_window;
+        let a = craft_id_at(&w, 1);
+        let b = craft_id_at(&w, 2);
+        let t0 = Tick(1000);
+        w.ships.gossip[1].as_mut().expect("comms-log").slots[0] =
+            Some(test_alert(9, 2, t0));
+        w.ships.gossip[2].as_mut().expect("comms-log").slots[0] =
+            Some(test_alert(9, 2, Tick(t0.0 + 3000)));
+        // Past A's horizon (t0 + window) but not past B's (t0 + 3000 + window).
+        w.tick = Tick(t0.0 + window + 1500);
+        assert_eq!(w.route_evidence(a, 2), 0, "A forgets on its own clock");
+        assert_eq!(w.route_evidence(b, 2), 1, "B still holds it: the return staggers");
     }
 
     /// One station (Ore=0) with a ∅->Ore(5) miner at interval 1, attached to it.

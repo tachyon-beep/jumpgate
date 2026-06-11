@@ -57,6 +57,22 @@ impl GossipBuffer {
     pub fn occupied(&self) -> u32 {
         self.slots.iter().filter(|s| s.is_some()).count() as u32
     }
+    /// RAW count of held alerts on `route` still inside THIS node's read
+    /// window (spec §7, the media-live `route_evidence` body — Task 7's ONE
+    /// shared read so the accessor and the ASSIGN site cannot drift):
+    /// staleness anchors on `first_heard` at this node — the per-reader
+    /// forgetting clock, never one synchronized world clock — and the count
+    /// is unweighted (valence stays in the consumer, PDR-0006).
+    pub fn count_route_recent(&self, route: usize, now: Tick, evidence_window: u64) -> u32 {
+        self.slots
+            .iter()
+            .flatten()
+            .filter(|a| {
+                a.route as usize == route
+                    && now.0.saturating_sub(a.first_heard.0) <= evidence_window
+            })
+            .count() as u32
+    }
 }
 
 /// Which node heard (the GossipHeard carrier).

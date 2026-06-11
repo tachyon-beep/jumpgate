@@ -373,10 +373,16 @@ pub fn cargo_capacity(
 ///       With `trophic.hauler_belief_scoring` OFF (default) the pick is the
 ///       lowest-`ContractId`; ON, it is the spec-§7 evidence-scored argmax
 ///       `reward_micros * (1000 - min(route_evidence * evidence_penalty_milli, 900)) / 1000`
-///       read through the hauler's OWN dock-gated `info_tick` (ties -> lowest
-///       `ContractId`). One hauler -> one contract. `resolve_contracts` settles the
-///       accept next. `stagger_period == 0` disables ASSIGN entirely (manual / RL
-///       `AcceptContract` only); REPOST is unaffected.
+///       (ties -> lowest `ContractId`). The COUNT is the media rung's swapped
+///       read (media spec §7, Task 7): `media_live` -> the hauler's OWN
+///       comms-log on the contract's route, per-reader `first_heard` window
+///       (`info_tick`'s evidence-read role ends; it stays the dock detector);
+///       media off -> the legacy ring through the hauler's dock-gated
+///       `info_tick`, byte-identical. The 900-clamp valence around the count
+///       is untouched either way. One hauler -> one contract.
+///       `resolve_contracts` settles the accept next. `stagger_period == 0`
+///       disables ASSIGN entirely (manual / RL `AcceptContract` only); REPOST
+///       is unaffected.
 #[allow(clippy::too_many_arguments)]
 pub fn run_scripted_dispatch(
     contracts: &mut ContractStore,
@@ -384,6 +390,7 @@ pub fn run_scripted_dispatch(
     ships: &mut CraftStore,
     craft_cfg: &[crate::config::CraftInit],
     route_evidence: &crate::world::RouteEvidence,
+    media_live: bool,
     dispatch: &crate::config::DispatchCfg,
     shipyard: &crate::config::ShipyardCfg,
     trophic: &crate::config::TrophicCfg,
@@ -538,11 +545,15 @@ pub fn run_scripted_dispatch(
                 pick = Some((kidx, 0));
                 break;
             }
-            // Evidence-scored pick (spec §7): the route's recent-rob count read
-            // through the hauler's OWN info_tick (dock-gated staleness), penalty
-            // milli per rob clamped at 900 — the score never hits zero, so a
-            // hot route is avoided, not erased. Saturating integer arithmetic
-            // throughout (spec §8).
+            // Evidence-scored pick (spec §7): the route's recent-rob count,
+            // penalty milli per rob clamped at 900 — the score never hits
+            // zero, so a hot route is avoided, not erased. Saturating integer
+            // arithmetic throughout (spec §8). The count is the media rung's
+            // swapped read (media spec §7): media-live -> the hauler's OWN
+            // comms-log (per-reader `first_heard` window at the dispatch
+            // tick; a missing buffer — e.g. a pirate row — reads 0); media
+            // off -> the legacy ring through the hauler's dock-gated
+            // `info_tick`, byte-identical.
             let from = contracts.from_station[kidx];
             let to = contracts.to_station[kidx];
             let count = stations
@@ -551,11 +562,17 @@ pub fn run_scripted_dispatch(
                 .zip(stations.ids.dense_index(to.slot, to.generation))
                 .map_or(0, |(f, t)| {
                     let route = f.saturating_mul(stations.ids.len()).saturating_add(t);
-                    route_evidence.count_recent(
-                        route,
-                        ships.info_tick[crow],
-                        trophic.evidence_window,
-                    )
+                    if media_live {
+                        ships.gossip[crow].as_ref().map_or(0, |buf| {
+                            buf.count_route_recent(route, tick, trophic.evidence_window)
+                        })
+                    } else {
+                        route_evidence.count_recent(
+                            route,
+                            ships.info_tick[crow],
+                            trophic.evidence_window,
+                        )
+                    }
                 });
             let penalty =
                 (count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
@@ -1800,6 +1817,7 @@ mod tests {
             &mut ships,
             &[],
             &no_evidence,
+            false,
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
@@ -1817,6 +1835,7 @@ mod tests {
             &mut ships,
             &[],
             &no_evidence,
+            false,
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
@@ -1899,6 +1918,7 @@ mod tests {
             &mut ships,
             &[],
             &re,
+            false,
             &dispatch,
             &shipyard,
             &TrophicCfg::default(),
@@ -1917,6 +1937,7 @@ mod tests {
             &mut ships,
             &[],
             &re,
+            false,
             &dispatch,
             &shipyard,
             &scoring,
@@ -1937,6 +1958,7 @@ mod tests {
             &mut ships,
             &[],
             &re,
+            false,
             &dispatch,
             &shipyard,
             &scoring,
@@ -1944,6 +1966,80 @@ mod tests {
             &mut EventStream::new(),
         );
         assert_eq!(ships.contract[0], Some(c0), "aged evidence decays the avoidance away");
+    }
+
+    #[test]
+    fn evidence_scored_assign_reads_gossip_when_media_live() {
+        // Task 7 (media rung spec §7/§13): media LIVE, the ASSIGN site's
+        // evidence count is the hauler's OWN comms-log — `info_tick`'s
+        // evidence-read role has ended — while the 900-clamp valence
+        // arithmetic around the count is untouched.
+        use crate::config::{DispatchCfg, ShipyardCfg, TrophicCfg};
+        use crate::media::{GossipAlert, GossipBuffer};
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let shipyard = ShipyardCfg::default();
+        let scoring = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
+        let hot_route_1 = GossipAlert {
+            alert_seq: 0,
+            route: 1, // directed A->B (0*3 + 1) — c0's route
+            pirate_slot: 0,
+            rob_tick: Tick(0),
+            claimed_value_micros: 2_000_000,
+            first_heard: Tick(0),
+            hops: 1,
+        };
+
+        // (1) Gossip-hot route 1, ring EMPTY, media live: the scripted claim
+        // flips to A->C — the count came from the comms-log.
+        let (mut contracts, stations, mut ships, re, _c0, c1) = scoring_fix();
+        let mut buf = GossipBuffer::empty(8);
+        buf.slots[0] = Some(hot_route_1);
+        ships.gossip[0] = Some(buf);
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &re,
+            true,
+            &dispatch,
+            &shipyard,
+            &scoring,
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(ships.contract[0], Some(c1), "live media: own gossip flags the hot route");
+
+        // (2) Ring-hot route 1, comms-log EMPTY, media live: the ring no
+        // longer reaches the score — lowest ContractId wins.
+        let (mut contracts, stations, mut ships, mut re, c0, _c1) = scoring_fix();
+        re.robs[1][0] = Tick(50);
+        ships.info_tick[0] = Tick(60); // docked after the rob: legacy would see it
+        ships.gossip[0] = Some(GossipBuffer::empty(8));
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &re,
+            true,
+            &dispatch,
+            &shipyard,
+            &scoring,
+            Tick(1),
+            &mut EventStream::new(),
+        );
+        assert_eq!(
+            ships.contract[0],
+            Some(c0),
+            "live media: the legacy ring is dead to the reader"
+        );
     }
 
     #[test]
@@ -1980,6 +2076,7 @@ mod tests {
             &mut ships,
             &unscripted,
             &re,
+            false,
             &dispatch,
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
@@ -2156,6 +2253,7 @@ mod tests {
             &mut ships,
             &[],
             &crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() },
+            false,
             &dispatch,
             &crate::config::ShipyardCfg::default(),
             &crate::config::TrophicCfg::default(),
