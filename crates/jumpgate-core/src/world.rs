@@ -278,6 +278,7 @@ impl World {
             upgrades: Vec::new(),
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
+            pending_refuel: Vec::new(),
             gossip: Vec::new(),
         };
         for c in cfg.craft.iter() {
@@ -320,6 +321,7 @@ impl World {
             ships.upgrades.push(crate::stores::UpgradeLevels::default());
             ships.info_tick.push(Tick(0));
             ships.pending_upgrade.push(None);
+            ships.pending_refuel.push(None);
             // Media column (v5): a comms-log for non-pirate craft on a
             // media-live world; pirates are information-blind by construction
             // (spec §16 OD-6) — `None`, like every row when media is off.

@@ -90,6 +90,9 @@
 //!  written and consumed within the same tick (stage 1d), always `None` at every
 //!  hash point; `state_hash` debug_asserts that invariant (the `prev_*` doc
 //!  pattern, but stricter — emptiness is enforced, not just transitivity).
+//!  NOT folded at v5+ (transient): `CraftStore.pending_refuel` — refuel intent
+//!  with the same same-tick consumption discipline and all-None hash-point
+//!  debug assertion.
 //!
 //! ## Piracy stream cursor — Class-3 transitively-pinned state (the `prev_*` precedent)
 //!
@@ -306,6 +309,12 @@ pub fn state_hash(world: &World) -> u64 {
     debug_assert!(
         world.ships.pending_upgrade.iter().all(Option::is_none),
         "pending_upgrade must be fully consumed (all None) at every state-hash point"
+    );
+    // `pending_refuel` is TRANSIENT intent (world-gets-big §5): written and
+    // consumed within one tick, just like `pending_upgrade`.
+    debug_assert!(
+        world.ships.pending_refuel.iter().all(Option::is_none),
+        "pending_refuel must be fully consumed (all None) at every state-hash point"
     );
 
     h.finish()

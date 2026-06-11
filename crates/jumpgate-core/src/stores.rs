@@ -201,6 +201,11 @@ pub struct CraftStore {
     /// every hash point — `state_hash` debug_asserts exactly that. NOT folded
     /// into HASH_FIELD_ORDER.
     pub pending_upgrade: Vec<Option<UpgradeKind>>,
+    /// TRANSIENT refuel intent (world-gets-big §5 — the `pending_upgrade`
+    /// pattern): written by ingest or the scripted refuel policy, consumed by
+    /// `resolve_refuels` the SAME tick, and debug-asserted all-None at hash
+    /// points. NOT folded into HASH_FIELD_ORDER.
+    pub pending_refuel: Vec<Option<()>>,
     // --- Media-rung column (length-parallel, state v5) ---
     /// Per-craft gossip comms-log: `Some(GossipBuffer)` ONLY for non-pirate
     /// rows on a media-live world — pirates are information-blind by
@@ -243,6 +248,7 @@ impl CraftStore {
             upgrades: Vec::new(),
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
+            pending_refuel: Vec::new(),
             gossip: Vec::new(),
         }
     }
@@ -278,6 +284,7 @@ impl CraftStore {
         self.upgrades.push(UpgradeLevels::default());
         self.info_tick.push(Tick(0));
         self.pending_upgrade.push(None);
+        self.pending_refuel.push(None);
         // Media: `Some` only for non-pirate rows on a media-live world; the
         // generic push seeds `None` (World::reset's mint loop decides).
         self.gossip.push(None);
@@ -480,6 +487,7 @@ mod tests {
         assert_eq!(ship.upgrades.len(), ship.ids.len());
         assert_eq!(ship.info_tick.len(), ship.ids.len());
         assert_eq!(ship.pending_upgrade.len(), ship.ids.len());
+        assert_eq!(ship.pending_refuel.len(), ship.ids.len());
     }
 
     #[test]
