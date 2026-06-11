@@ -10,9 +10,14 @@
 //! Diagnosis` that names a row of the spec-§9 diagnosis matrix. Sampling reads
 //! the world; classification reads only samples (synthetic series test it).
 
+use crate::autopilot::ARRIVAL_RADIUS;
 use crate::contract::{EventKind, StateView};
-use crate::ids::ContractId;
+use crate::economy::Resource;
+use crate::ids::{BodyId, ContractId, StationId};
+use crate::math::Vec3;
+use crate::stores::NavState;
 use crate::time::Tick;
+use crate::types::{EntityRef, NavDest};
 use crate::world::World;
 
 // DIAGNOSTIC WINDOWS, NOT GATES (PDR-0006): the named thresholds below tune the
@@ -185,6 +190,26 @@ pub struct TrophicSample {
     pub per_craft_min_tank_permille: Vec<u32>,
     /// Burn of each completed contract leg in the window, permille of capacity.
     pub leg_burn_permille: Vec<u32>,
+    // -- world-gets-big lab fields (phase 2; TROPHIC-C2) -- ADDITIVE: every
+    // pre-frontier JSONL key above is byte-untouched. All integers: samples
+    // are hash-adjacent evidence, never float analytics.
+    /// Settled lurkers per dense station row: active pirates whose nav-derived
+    /// lurk is this station and whose position is inside the engagement
+    /// envelope of the station body at the sample tick.
+    pub per_station_lurking_pirates: Vec<u32>,
+    /// Active pirates with no settled lurk, plus lying-low pirates still
+    /// commuting to the haven.
+    pub pirates_commuting: u32,
+    /// Lying-low pirates arrived at the hideout body.
+    pub pirates_at_haven: u32,
+    /// Station fuel-side cargo book at the sample point: traded Fuel, not
+    /// craft propellant.
+    pub per_station_fuel_stock: Vec<i64>,
+    pub per_station_fuel_price: Vec<i64>,
+    /// Windowed `Refueled` event reads.
+    pub refuels: u32,
+    pub refuel_units: u64,
+    pub refuel_spend_micros: i64,
 }
 
 /// A named row of the spec-§9 diagnosis matrix. Diagnosis vocabulary only —
@@ -496,6 +521,9 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
     let mut purchases_escort: u32 = 0;
     let mut gossip_born: u32 = 0;
     let mut gossip_first_heard: u32 = 0;
+    let mut refuels: u32 = 0;
+    let mut refuel_units: u64 = 0;
+    let mut refuel_spend_micros: i64 = 0;
     let mut heard_lag_ticks: Vec<u32> = Vec::new();
     let mut heard_hops: Vec<u32> = Vec::new();
     for e in world.recent_events(Tick(window_start.0.saturating_add(1))) {
@@ -530,6 +558,12 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
                     purchases_escort = purchases_escort.saturating_add(1);
                 }
             },
+            EventKind::Refueled { units, price_micros, .. } => {
+                refuels = refuels.saturating_add(1);
+                refuel_units = refuel_units.saturating_add(units.max(0) as u64);
+                refuel_spend_micros =
+                    refuel_spend_micros.saturating_add(units.saturating_mul(price_micros));
+            }
             EventKind::AlertBorn { .. } => {
                 gossip_born = gossip_born.saturating_add(1);
             }
@@ -605,6 +639,64 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             laden_in_transit = laden_in_transit.saturating_add(1);
         }
     }
+    // World-gets-big pirate-location partition (TROPHIC-C2): nav-derived lurk
+    // plus geometry at the sample tick. Pure read; stale config/id reads
+    // degrade to "commuting" so the partition stays total.
+    let trophic = world.trophic_cfg();
+    let station_pos_now: Vec<Option<Vec3>> = (0..n_stations)
+        .map(|srow| {
+            world
+                .stations
+                .ids
+                .id_at(srow)
+                .map(|(slot, generation)| StationId { slot, generation })
+                .and_then(|sid| world.station_pos(sid))
+        })
+        .collect();
+    let hideout_pos: Option<Vec3> = world
+        .bodies
+        .ids
+        .id_at(trophic.hideout_body_index as usize)
+        .map(|(slot, generation)| BodyId { slot, generation })
+        .and_then(|bid| world.body_pos(bid, tick));
+    let mut per_station_lurking_pirates = vec![0u32; n_stations];
+    let mut pirates_commuting: u32 = 0;
+    let mut pirates_at_haven: u32 = 0;
+    for r in 0..world.ships.ids.len() {
+        let Some(p) = world.ships.pirate[r] else {
+            continue;
+        };
+        if p.lie_low_until > tick {
+            let arrived =
+                hideout_pos.is_some_and(|hp| world.ships.pos[r].sub(hp).length() <= ARRIVAL_RADIUS);
+            if arrived {
+                pirates_at_haven = pirates_at_haven.saturating_add(1);
+            } else {
+                pirates_commuting = pirates_commuting.saturating_add(1);
+            }
+            continue;
+        }
+
+        let nav_lurk: Option<usize> = match world.ships.nav[r] {
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
+                (0..n_stations).find(|&s| world.stations.body[s] == b)
+            }
+            _ => None,
+        };
+        let settled = nav_lurk.is_some_and(|s| {
+            station_pos_now[s]
+                .is_some_and(|sp| world.ships.pos[r].sub(sp).length() <= trophic.engage_radius_au)
+        });
+        match nav_lurk {
+            Some(s) if settled => {
+                per_station_lurking_pirates[s] =
+                    per_station_lurking_pirates[s].saturating_add(1);
+            }
+            _ => {
+                pirates_commuting = pirates_commuting.saturating_add(1);
+            }
+        }
+    }
     TrophicSample {
         tick: tick.0,
         active_pirates,
@@ -676,6 +768,24 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .filter(|(t, _)| t.0 > window_start.0 && t.0 <= tick.0)
             .map(|&(_, p)| p)
             .collect(),
+        per_station_lurking_pirates,
+        pirates_commuting,
+        pirates_at_haven,
+        per_station_fuel_stock: world
+            .stations
+            .stock
+            .iter()
+            .map(|st| st[Resource::Fuel.index()])
+            .collect(),
+        per_station_fuel_price: world
+            .stations
+            .price_micros
+            .iter()
+            .map(|pr| pr[Resource::Fuel.index()])
+            .collect(),
+        refuels,
+        refuel_units,
+        refuel_spend_micros,
     }
 }
 
@@ -1000,6 +1110,178 @@ mod tests {
             vec![77, 123],
             "window filter: window_start < close_tick <= sample tick only"
         );
+    }
+
+    #[test]
+    fn sample_window_reads_fuel_book_and_pirate_partition() {
+        use crate::config::{
+            BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
+            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
+            TrophicCfg,
+        };
+        use crate::math::Vec3;
+        use crate::stores::{CraftRole, NavState};
+        use crate::time::Dt;
+        use crate::world::World;
+
+        fn cfg(hideout: u32) -> RunConfig {
+            RunConfig {
+                master_seed: 7,
+                dt: Dt::new(0.25),
+                softening: 1e-3,
+                substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+                ephemeris_window: 256,
+                bodies: vec![BodyInit {
+                    mass: 1e-9,
+                    elements: OrbitalElements {
+                        a: 0.0,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                }],
+                craft: vec![CraftInit {
+                    spec: BaseSpec {
+                        base_dry_mass: 1e-9,
+                        base_max_thrust: 1e-12,
+                        base_exhaust_velocity: 1e-2,
+                        base_fuel_capacity: 1e-9,
+                        base_cargo_capacity: 5,
+                    },
+                    pos: Vec3::ZERO,
+                    vel: Vec3::ZERO,
+                    fuel_mass: 1e-9,
+                    role: CraftRole::Pirate,
+                    scripted: true,
+                }],
+                guidance: GuidanceParams::default(),
+                stations: vec![StationInit {
+                    body_index: 0,
+                    initial_stock: [3, 17],
+                    initial_price_micros: [0, 5_000],
+                    sells_upgrades: false,
+                }],
+                producers: vec![],
+                corporations: vec![CorporationInit {
+                    treasury_micros: 0,
+                    home_station_index: 0,
+                }],
+                contracts: vec![],
+                price_cfg: PriceCfg::default(),
+                dispatch_cfg: DispatchCfg::default(),
+                trophic: TrophicCfg {
+                    engage_radius_au: 5.0e-4,
+                    hideout_body_index: hideout,
+                    ..TrophicCfg::default()
+                },
+                shipyard: ShipyardCfg::default(),
+                media: crate::config::MediaCfg::default(),
+                refuel: crate::config::RefuelCfg::default(),
+            }
+        }
+
+        let (world, _h) = World::reset(cfg(99)).expect("resolvable cfg");
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.per_station_fuel_stock, vec![17], "Fuel-side stock book");
+        assert_eq!(s.per_station_fuel_price, vec![5_000], "Fuel-side price book");
+        assert_eq!(s.per_station_lurking_pirates, vec![1], "settled lurker at its station");
+        assert_eq!(s.pirates_commuting, 0);
+        assert_eq!(s.pirates_at_haven, 0);
+        assert_eq!(s.refuels, 0, "no Refueled events on an inert-refuel world");
+        assert_eq!(s.refuel_units, 0);
+        assert_eq!(s.refuel_spend_micros, 0);
+        let lurking: u32 = s.per_station_lurking_pirates.iter().sum();
+        assert_eq!(lurking + s.pirates_commuting + s.pirates_at_haven, 1, "partition is total");
+
+        let (mut world, _h) = World::reset(cfg(99)).expect("resolvable cfg");
+        world.ships.nav[0] = NavState::Idle;
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.per_station_lurking_pirates, vec![0]);
+        assert_eq!(s.pirates_commuting, 1, "no settled lurk reads as commuting");
+
+        let (mut world, _h) = World::reset(cfg(0)).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().lie_low_until = Tick(10_000);
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.pirates_at_haven, 1, "lying low on the hideout body reads at-haven");
+        assert_eq!(s.pirates_commuting, 0);
+        assert_eq!(s.per_station_lurking_pirates, vec![0], "a refugee is not a lurker");
+    }
+
+    #[test]
+    fn sample_window_counts_refuels() {
+        use crate::config::{
+            BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
+            OrbitalElements, PriceCfg, RefuelCfg, RunConfig, ShipyardCfg, StationInit,
+            SubstepCfg, TrophicCfg,
+        };
+        use crate::math::Vec3;
+        use crate::stores::CraftRole;
+        use crate::time::Dt;
+        use crate::world::World;
+
+        let cfg = RunConfig {
+            master_seed: 7,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 256,
+            bodies: vec![BodyInit {
+                mass: 1e-9,
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
+            }],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
+                },
+                pos: Vec3::ZERO,
+                vel: Vec3::ZERO,
+                fuel_mass: 2.5e-10,
+                role: CraftRole::Idle,
+                scripted: true,
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![StationInit {
+                body_index: 0,
+                initial_stock: [0, 10],
+                initial_price_micros: [0, 5_000],
+                sells_upgrades: false,
+            }],
+            producers: vec![],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            contracts: vec![],
+            price_cfg: PriceCfg {
+                base_micros: [0, 5_000],
+                cap: [0, 40],
+                slope_milli: 1800,
+                reprice_interval: 1,
+            },
+            dispatch_cfg: DispatchCfg::default(),
+            trophic: TrophicCfg::default(),
+            shipyard: ShipyardCfg::default(),
+            media: crate::config::MediaCfg::default(),
+            refuel: RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 },
+        };
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 1_000_000;
+        world.step(&mut Vec::new());
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.refuels, 1, "one Refueled event in the window");
+        assert_eq!(s.refuel_units, 3, "units = min(need 3, stock 10, afford 200)");
+        assert_eq!(s.refuel_spend_micros, 15_000, "3 units x seeded 5_000 micros");
+        assert_eq!(s.per_station_fuel_stock, vec![7], "stock book debited by the purchase");
     }
 
     /// Phase-0b FLOOR pin (world-gets-big spec §7/§8): no f64-to-fixed-point

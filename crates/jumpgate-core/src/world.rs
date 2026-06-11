@@ -648,6 +648,14 @@ impl World {
         &self.config.shipyard
     }
 
+    /// Trophic config for the diagnostics sampler (the `shipyard_cfg`
+    /// precedent — `config` is private): the hideout index and engage radius
+    /// feed the pirate-location partition read. Plain read over already-hashed
+    /// config — never a behavior input.
+    pub(crate) fn trophic_cfg(&self) -> &crate::config::TrophicCfg {
+        &self.config.trophic
+    }
+
     /// The media-live dual gate (spec §11): BOTH gossip slot caps > 0 AND the
     /// trophic inert lever open (`engage_radius_au > 0`). Pure read over
     /// already-hashed config — pub so tests (and instruments) can read it.

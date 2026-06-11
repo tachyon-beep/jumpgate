@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! trophic_run — the pirates-rung game runner + chronicle (plan Tasks 0 + 6).
 //!
 //! FRAME (PDR-0006): a designer's window, not a gate. This runner steps a
@@ -276,6 +278,16 @@ fn sample_json(s: &TrophicSample) -> String {
         "per_craft_burn_milli": s.per_craft_burn_milli,
         "per_craft_min_tank_permille": s.per_craft_min_tank_permille,
         "leg_burn_permille": s.leg_burn_permille,
+        // world-gets-big lab keys (Task 2.8) — ADDITIVE: every pre-frontier
+        // key above is byte-untouched.
+        "per_station_lurking_pirates": s.per_station_lurking_pirates,
+        "pirates_commuting": s.pirates_commuting,
+        "pirates_at_haven": s.pirates_at_haven,
+        "per_station_fuel_stock": s.per_station_fuel_stock,
+        "per_station_fuel_price": s.per_station_fuel_price,
+        "refuels": s.refuels,
+        "refuel_units": s.refuel_units,
+        "refuel_spend_micros": s.refuel_spend_micros,
     })
     .to_string()
 }
