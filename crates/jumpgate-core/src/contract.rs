@@ -179,6 +179,17 @@ pub enum EventKind {
         tank_before_permille: u32,
         tank_after_permille: u32,
     },
+    /// A contract failed on propellant exhaustion (world-gets-big §7). Emitted
+    /// for `FailureCause::FuelEmpty` only; robbery keeps its own `Robbed`
+    /// narration. The refund and lost-cargo quantities are the actual settled
+    /// legs, including degrade arms.
+    ContractFailed {
+        contract: ContractId,
+        hauler: CraftId,
+        cause: crate::economy::FailureCause,
+        escrow_refunded_micros: i64,
+        cargo_lost: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

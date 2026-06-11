@@ -240,6 +240,8 @@ pub fn resolve_encounters(
                 counters,
                 kidx,
                 FailureCause::Robbed,
+                tick,
+                events,
             );
             // Takings: ransom = min(wallet, cap), hauler → pirate wallet — a
             // pure TRANSFER, no new identity leg (spec §3).

@@ -1095,6 +1095,8 @@ impl World {
             &mut self.ships,
             &mut self.econ,
             &failed_craft,
+            next,
+            &mut self.events,
         );
 
         // (3c2) UNHASHED fuel-leg diagnostics: open on ContractAccepted, close

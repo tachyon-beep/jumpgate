@@ -544,6 +544,12 @@ pub fn run_scripted_dispatch(
         if tick.0 % stagger != crow as u64 % stagger {
             continue;
         }
+        // PLAY-C1 (world-gets-big §5): dispatch eligibility requires a live
+        // tank. Filter-at-choice, never claim-and-strand; a stranded craft
+        // remains Idle with fuel <= eps as the recorded adrift end state.
+        if ships.fuel_mass[crow] <= crate::events::FUEL_EMPTY_EPS {
+            continue;
+        }
         let capacity = cargo_capacity(&ships.spec[crow], ships.upgrades[crow], shipyard);
         // One pass, ascending dense row == ascending ContractId: with scoring
         // OFF the FIRST eligible row wins (lowest ContractId, the original
@@ -1373,6 +1379,8 @@ pub fn resolve_failures(
     ships: &mut CraftStore,
     counters: &mut EconCounters,
     failed_craft: &[CraftId],
+    tick: Tick,
+    events: &mut EventStream,
 ) {
     for kidx in 0..contracts.ids.len() {
         // jumpgate-2c0c2d92bb: ALL THREE escrow-holding non-terminal statuses fail
@@ -1392,9 +1400,7 @@ pub fn resolve_failures(
         if !failed_craft.contains(&hauler) {
             continue;
         }
-        // No dedicated failure event: the FuelEmpty event already fired this
-        // tick and carries the cause (the robbery path emits `Robbed` at its
-        // own emission site in stage 3b2).
+        // ContractFailed (FuelEmpty-cause) is emitted inside the settle body (§7).
         settle_contract_failure(
             contracts,
             corporations,
@@ -1402,6 +1408,8 @@ pub fn resolve_failures(
             counters,
             kidx,
             FailureCause::FuelEmpty,
+            tick,
+            events,
         );
     }
 }
@@ -1410,6 +1418,7 @@ pub fn resolve_failures(
 /// `resolve_failures` settle body generalized to take a cause). The legs are
 /// cause-INDEPENDENT — the cause names the caller's stage and pins which
 /// source statuses are legal there.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FailureCause {
     /// Propellant exhaustion (stage 3c): every escrow-holding non-terminal status
     /// can fail — `Accepted` (the deadhead leg), `CargoLoaded` (the one-tick load
@@ -1435,6 +1444,7 @@ pub enum FailureCause {
 ///
 /// The ransom leg of a robbery is NOT here — it is pirate-side state, settled
 /// by the 3b2 caller. Saturating arithmetic per the spec §8 totality discipline.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn settle_contract_failure(
     contracts: &mut ContractStore,
     corporations: &mut CorporationStore,
@@ -1442,6 +1452,8 @@ pub(crate) fn settle_contract_failure(
     counters: &mut EconCounters,
     kidx: usize,
     cause: FailureCause,
+    tick: Tick,
+    events: &mut EventStream,
 ) {
     debug_assert!(
         match cause {
@@ -1462,14 +1474,19 @@ pub(crate) fn settle_contract_failure(
         },
         "settle_contract_failure: source status inconsistent with the cause"
     );
-    // Refund escrow -> owning corp treasury (credit TRANSFER; identity invariant).
+    // Refund escrow -> owning corp treasury (credit TRANSFER; identity
+    // invariant). Capture the actual refunded amount: a stale corp row skips
+    // the refund and leaves escrow in place, so the narrated refund is 0.
     let corp = contracts.corp[kidx];
+    let mut escrow_refunded_micros: i64 = 0;
     if let Some(corp_row) = corporations.ids.dense_index(corp.slot, corp.generation) {
+        escrow_refunded_micros = contracts.escrow_micros[kidx];
         corporations.treasury_micros[corp_row] =
             corporations.treasury_micros[corp_row].saturating_add(contracts.escrow_micros[kidx]);
         contracts.escrow_micros[kidx] = 0;
     }
     // Cargo loss: account the lost cargo as a SINK leg, then release the hauler.
+    let mut cargo_lost: u32 = 0;
     if let Some(hauler) = contracts.hauler[kidx]
         && let Some(crow) = ships.index_of(hauler)
     {
@@ -1477,11 +1494,26 @@ pub(crate) fn settle_contract_failure(
             counters.consumed[resource.index()] =
                 counters.consumed[resource.index()].saturating_add(qty as i64);
             ships.cargo[crow] = None;
+            cargo_lost = qty;
         }
         ships.contract[crow] = None;
         ships.role[crow] = CraftRole::Idle;
     }
     contracts.status[kidx] = ContractStatus::Failed;
+    if matches!(cause, FailureCause::FuelEmpty)
+        && let Some(hauler) = contracts.hauler[kidx]
+    {
+        events.emit(Event {
+            tick,
+            kind: EventKind::ContractFailed {
+                contract: contract_id(contracts, kidx),
+                hauler,
+                cause,
+                escrow_refunded_micros,
+                cargo_lost,
+            },
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1489,7 +1521,7 @@ mod tests {
     use super::*;
     use crate::contract::EventKind;
     use crate::events::EventStream;
-    use crate::ids::BodyId;
+    use crate::ids::{BodyId, CorporationId};
 
     /// A station whose Body is a throwaway (BodyId not resolved here; producers
     /// read by StationId row, not body).
@@ -2302,7 +2334,7 @@ mod tests {
             },
             Vec3::ZERO,
             Vec3::ZERO,
-            0.0,
+            1.0,
         );
         // High demand edges so REPOST stays quiet (the route has a live Offered
         // row -> bursting, but projected 10 >= demand_high 5 posts nothing).
@@ -2358,6 +2390,54 @@ mod tests {
         assert_eq!(ships.role[0], CraftRole::Hauler);
     }
 
+    #[test]
+    fn scripted_assign_filters_dry_tank_craft_play_c1() {
+        use crate::contract::Command;
+        use crate::world::World;
+        let mut cfg = capacity_world_fixture();
+        cfg.dispatch_cfg.stagger_period = 1;
+        cfg.contracts[0].qty = 5;
+        cfg.craft[0].fuel_mass = 0.0;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        let mut empty: Vec<Command> = Vec::new();
+        for _ in 0..8 {
+            world.step(&mut empty);
+        }
+        assert_eq!(world.contracts.status[0], ContractStatus::Offered, "dry tank: never claimed");
+        assert_eq!(world.ships.role[0], CraftRole::Idle, "stays Idle forever");
+        assert_eq!(world.ships.contract[0], None, "no binding written");
+
+        let mut cfg = capacity_world_fixture();
+        cfg.dispatch_cfg.stagger_period = 1;
+        cfg.contracts[0].qty = 5;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        for _ in 0..8 {
+            world.step(&mut empty);
+        }
+        assert_ne!(world.contracts.status[0], ContractStatus::Offered, "live tank: claimed");
+    }
+
+    #[test]
+    fn trophic_world_still_dispatches_under_fuel_eligibility() {
+        use crate::world::World;
+        let cfg = crate::scenario::scenario_trophic(7);
+        let (mut world, _h) = World::reset(cfg).expect("trophic resolves");
+        let mut cmds = Vec::new();
+        for _ in 0..3_000u64 {
+            world.step(&mut cmds);
+        }
+        let accepts = world
+            .events_mut()
+            .since(Tick(0))
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::ContractAccepted { .. }))
+            .count();
+        assert!(
+            accepts > 0,
+            "trophic world dispatched ZERO contracts — the fuel-eligibility filter is binding on full-tank band haulers"
+        );
+    }
+
     // ---- Pirates rung Commit E: evidence-scored ASSIGN + scripted purchases ----
 
     /// ASSIGN-scoring fixture: stations A/B/C (rows 0/1/2), two same-reward
@@ -2394,7 +2474,7 @@ mod tests {
             },
             Vec3::ZERO,
             Vec3::ZERO,
-            0.0,
+            1.0,
         );
         let route_evidence = crate::world::RouteEvidence {
             robs: vec![[Tick(0); 8]; 9],
@@ -3016,12 +3096,15 @@ mod tests {
         assert_eq!((lost_res, lost_qty), (Resource::Fuel, 5));
 
         world.ships.fuel_mass[crow] = 0.0; // drained dry pre-dispatch
+        let mut failure_events = EventStream::new();
         resolve_failures(
             &mut world.contracts,
             &mut world.corporations,
             &mut world.ships,
             &mut world.econ,
             &[craft],
+            Tick(2),
+            &mut failure_events,
         );
 
         assert_eq!(
@@ -3044,6 +3127,99 @@ mod tests {
             "lost cargo accounted into consumed[Fuel]"
         );
         assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+    }
+
+    #[test]
+    fn fuel_empty_failure_emits_contract_failed_with_actual_refund() {
+        use crate::contract::Command;
+        use crate::types::{CommandKind, EntityRef, Target};
+        use crate::world::World;
+        let (mut world, _h) =
+            World::reset(starved_two_body_contract_fixture(1, 0)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let cid = contract_id(&world.contracts, 0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(world.contracts.status[0], ContractStatus::Accepted, "deadhead leg armed");
+        let escrow_before = world.contracts.escrow_micros[0];
+        assert!(escrow_before > 0, "escrow held");
+
+        world.ships.fuel_mass[0] = 0.0;
+        world.step(&mut Vec::new());
+
+        assert_eq!(world.contracts.status[0], ContractStatus::Failed);
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::ContractFailed {
+                    contract,
+                    hauler,
+                    cause: FailureCause::FuelEmpty,
+                    escrow_refunded_micros,
+                    cargo_lost: 0,
+                } if contract == cid && hauler == craft && escrow_refunded_micros == escrow_before
+            )),
+            "FuelEmpty failure narrated with the actual refund"
+        );
+
+        let (mut world, _h) =
+            World::reset(starved_two_body_contract_fixture(1, 0)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let cid = contract_id(&world.contracts, 0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        world.step(&mut cmds);
+        world.contracts.corp[0] = CorporationId { slot: 99, generation: 0 };
+        world.ships.fuel_mass[0] = 0.0;
+        world.step(&mut Vec::new());
+        assert_eq!(world.contracts.status[0], ContractStatus::Failed);
+        assert!(world.contracts.escrow_micros[0] > 0, "escrow stays put on the degrade arm");
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::ContractFailed { escrow_refunded_micros: 0, .. }
+            )),
+            "degrade arm reports the actual 0 refund"
+        );
+    }
+
+    #[test]
+    fn robbed_teardown_is_not_narrated_by_contract_failed() {
+        use crate::contract::Command;
+        use crate::types::{CommandKind, EntityRef, Target};
+        use crate::world::World;
+        let (mut world, _h) =
+            World::reset(starved_two_body_contract_fixture(0, 1)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let cid = contract_id(&world.contracts, 0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract: cid },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(world.contracts.status[0], ContractStatus::CargoLoaded, "the load-tick window");
+
+        let mut ev = EventStream::default();
+        settle_contract_failure(
+            &mut world.contracts,
+            &mut world.corporations,
+            &mut world.ships,
+            &mut world.econ,
+            0,
+            FailureCause::Robbed,
+            Tick(99),
+            &mut ev,
+        );
+        assert_eq!(world.contracts.status[0], ContractStatus::Failed);
+        assert!(
+            !ev.since(Tick(0)).iter().any(|e| matches!(e.kind, EventKind::ContractFailed { .. })),
+            "Robbed teardown emits no ContractFailed"
+        );
     }
 
     /// The WHY-panel windows (2026-06-11): the candidate-count histogram bumps
@@ -3074,7 +3250,7 @@ mod tests {
         contracts.push(corp, Resource::Fuel, 5, s0, s1, 1_000_000); // k0, route 1
         contracts.push(corp, Resource::Fuel, 5, s1, s0, 1_000_000); // k1, route 2
         let mut ships = CraftStore::empty();
-        ships.push(spec(), Vec3::ZERO, Vec3::ZERO, 0.0);
+        ships.push(spec(), Vec3::ZERO, Vec3::ZERO, 1.0);
         // The hauler's OWN gossip says route 1 (k0) is hot...
         let mut buf = GossipBuffer::empty(8);
         buf.slots[0] = Some(GossipAlert {
@@ -3121,7 +3297,7 @@ mod tests {
 
         // Control: agreeing sources (no evidence anywhere) -> no flip.
         let mut ships2 = CraftStore::empty();
-        ships2.push(spec(), Vec3::ZERO, Vec3::ZERO, 0.0);
+        ships2.push(spec(), Vec3::ZERO, Vec3::ZERO, 1.0);
         ships2.gossip[0] = Some(GossipBuffer::empty(8));
         ships2.info_tick[0] = Tick(100);
         let mut contracts2 = ContractStore::empty();

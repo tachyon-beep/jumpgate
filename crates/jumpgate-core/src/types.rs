@@ -74,6 +74,11 @@ pub enum CommandKind {
     /// debit, Yard credit, count bump) lives in `resolve_purchases` (stage 1d),
     /// which consumes the intent the same tick.
     BuyUpgrade { kind: crate::stores::UpgradeKind },
+    /// Intent to top up propellant at the docked station (world-gets-big §5):
+    /// ingestion writes the transient `pending_refuel` column only; the settle
+    /// lives in `resolve_refuels` (stage 1d2), which consumes the intent the
+    /// same tick. Top-to-full, threshold-free: the verb carries no quantity.
+    Refuel,
 }
 
 #[cfg(test)]

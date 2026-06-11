@@ -202,6 +202,15 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
                         world.ships.pending_upgrade[i] = Some(kind);
                     }
                 }
+                CommandKind::Refuel => {
+                    // Record INTENT only (the BuyUpgrade template): write the
+                    // transient `pending_refuel` column. The settle is deferred
+                    // to `resolve_refuels` (stage 1d2), which consumes the
+                    // intent the same tick, including as a lot-0 no-op.
+                    if let Some(i) = world.ships.index_of(id) {
+                        world.ships.pending_refuel[i] = Some(());
+                    }
+                }
             }
         }
         world.events_mut().emit(Event {
@@ -460,6 +469,29 @@ mod tests {
         assert_eq!(world.ships.credits_micros[0], 0, "no credit movement at ingest");
 
         // Logged + ActionIngested (the seam fires for every command).
+        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+        let emitted = world.events_mut().since(Tick(0));
+        assert_eq!(emitted.len(), 1);
+        assert!(matches!(
+            emitted[0].kind,
+            EventKind::ActionIngested { target } if target == Target::Entity(EntityRef::Craft(id0))
+        ));
+    }
+
+    #[test]
+    fn refuel_writes_pending_intent_logs_and_emits_action_ingested() {
+        let (mut world, _h) = World::reset(one_body_one_craft_cfg()).expect("resolvable cfg");
+        let id0 = world.ships.ids_at(0);
+
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(id0)),
+            kind: CommandKind::Refuel,
+        }];
+        ingest_commands(&mut world, Tick(2), &mut cmds);
+
+        assert_eq!(world.ships.pending_refuel[0], Some(()), "intent column set");
+        assert_eq!(world.ships.fuel_mass[0], world.ships.prev_fuel[0], "no tank movement at ingest");
+        assert_eq!(world.ships.credits_micros[0], 0, "no credit movement at ingest");
         assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
         let emitted = world.events_mut().since(Tick(0));
         assert_eq!(emitted.len(), 1);
