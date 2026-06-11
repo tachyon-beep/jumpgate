@@ -11,7 +11,13 @@ run's RESULT line, aggregates the per-window JSONL, and prints:
   * the per-mechanic discriminator panels: endpoint-ambush trip-phase
     histogram, purchase-desync spread, Yard-circulation treasury panel,
     population alternations, occupied-route rob concentration (HHI),
-    and the endurance (FuelEmpty) count.
+    and the endurance (FuelEmpty) count,
+  * the media panels (media cut 1, Task 8.3): per-knobset MediaReading
+    distribution + escaped_milli, the pooled knowledge-front lag histogram,
+    the news-geography hub/backwater ratio, and — when a media-on AND a
+    media-off knobset run in the SAME invocation — the value-of-information
+    line (median final hauler credits per arm; for the spec section-9 VoI
+    panel give BOTH arms hauler_belief_scoring=true). REPORTED, never gated.
 
 Usage:
     python3 python/analysis/sweep_trophic.py --seeds 7 11 13 --ticks 50000 \
@@ -49,7 +55,21 @@ RESULT_RE = re.compile(
     r"robs=(?P<robs>\d+) laden_trips=(?P<trips>\d+) purchases=(?P<purchases>\d+)$"
 )
 
+# The MEDIA line (media rung Task 8.3) — lands in the SAME commit as the
+# runner's println! (the lockstep rule): exactly the anchored shape.
+MEDIA_RE = re.compile(
+    r"^MEDIA seed=(?P<seed>\d+) born=(?P<born>\d+) "
+    r"escaped_milli=(?P<escaped_milli>\d+) median_lag=(?P<median_lag>\d+) "
+    r"p90_lag=(?P<p90_lag>\d+) reading=(?P<reading>\w+)$"
+)
+
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli
+
+LAG_BINS = 10  # knowledge-front histogram bins over the pooled lag range
+
+# Hauler rows in `scenario_trophic` (mirrors scenario::NUM_HAULERS: haulers
+# are dense rows 0..12, pirates after) — the VoI panel's wallet slice.
+N_HAULERS = 12
 
 
 def parse_knobset(spec: str):
@@ -80,15 +100,22 @@ def run_one(args, name, knobs, seed, out_dir):
         sys.stderr.write(proc.stdout + proc.stderr)
         raise SystemExit(f"run failed: {name} seed={seed}")
     result = None
+    media = None
     for line in proc.stdout.splitlines():
         m = RESULT_RE.match(line.strip())
         if m:
             result = {k: v for k, v in m.groupdict().items()}
+        m = MEDIA_RE.match(line.strip())
+        if m:
+            media = {k: v for k, v in m.groupdict().items()}
     if result is None:
         sys.stderr.write(proc.stdout)
         raise SystemExit(f"no RESULT line: {name} seed={seed}")
+    if media is None:
+        sys.stderr.write(proc.stdout)
+        raise SystemExit(f"no MEDIA line: {name} seed={seed}")
     windows = [json.loads(l) for l in jsonl.read_text().splitlines() if l.strip()]
-    return result, windows
+    return result, media, windows
 
 
 def occupied_hhi_milli(w):
@@ -115,18 +142,18 @@ def alternations(series):
 def panel(name, runs):
     """Print the per-mechanic discriminator panels for one knob set."""
     print(f"\n=== knob set: {name} ({len(runs)} runs) ===")
-    verdicts = Counter(r["verdict"] for r, _ in runs)
+    verdicts = Counter(r["verdict"] for r, _, _ in runs)
     print("diagnosis-matrix rows (windows, not gates — PDR-0006):")
     for v, n in verdicts.most_common():
         print(f"  {v:<24} {n}")
 
     # Endurance window: FuelEmpty must be 0 on every run (spec section 6).
-    fuel = [int(r["fuel_empty"]) for r, _ in runs]
+    fuel = [int(r["fuel_empty"]) for r, _, _ in runs]
     print(f"endurance: fuel_empty per run = {fuel} (window expects all 0)")
 
     # Endpoint-ambush trip-phase histogram (the owner's pre-registered
     # discriminator, spec section 2: bimodal at trip endpoints).
-    phases = [p for _, ws in runs for w in ws for p in w["engagement_phase_milli"]]
+    phases = [p for _, _, ws in runs for w in ws for p in w["engagement_phase_milli"]]
     print(f"endpoint-ambush: {len(phases)} engagements; trip-phase histogram (0..1000):")
     if phases:
         bins = [0] * PHASE_BINS
@@ -142,14 +169,14 @@ def panel(name, runs):
     # Purchase-desync spread: windows between the first and last escort
     # purchase (near-zero spread = the synchronization death, spec section 9).
     spreads = []
-    for _, ws in runs:
+    for _, _, ws in runs:
         buy_windows = [i for i, w in enumerate(ws) if w["purchases_escort"] > 0]
         if buy_windows:
             spreads.append(buy_windows[-1] - buy_windows[0])
     print(f"purchase-desync: escort-purchase window spread per run = {spreads}")
 
     # Yard circulation: treasury bounded? monotone? (broken-flow diagnostic).
-    for (r, ws) in runs[:1]:
+    for (r, _, ws) in runs[:1]:
         ts = [w["yard_treasury_micros"] for w in ws]
         mono = all(a <= b for a, b in zip(ts, ts[1:]))
         print(
@@ -165,7 +192,7 @@ def panel(name, runs):
     # equalized 1472-1490) plus the slacked hot-route persistence clause
     # (diagnostics.rs). Both raw reads stay printed as context beside the
     # window, not as the instrument.
-    for (r, ws) in runs:
+    for (r, _, ws) in runs:
         act = [w["active_pirates"] for w in ws]
         alts = alternations(act)
         hhis = [h for w in ws if (h := occupied_hhi_milli(w)) is not None]
@@ -187,6 +214,88 @@ def panel(name, runs):
             f"per-window-HHI(milli)={mean_hhi} RUN-AGGREGATE-HHI(milli)={agg_hhi} "
             f"routes-robbed={sum(1 for i in occupied if agg[i] > 0)}"
         )
+
+    media_panel(runs)
+
+
+def media_panel(runs):
+    """Media propagation panels for one knob set (Task 8.3; spec section 9 —
+    windows, never gates)."""
+    # Reading distribution (the MEDIA line's classifier, per run).
+    readings = Counter(m["reading"] for _, m, _ in runs)
+    print("media readings (windows, not gates — PDR-0006):")
+    for v, n in readings.most_common():
+        print(f"  {v:<24} {n}")
+    print(
+        "media escaped_milli per run = "
+        f"{[int(m['escaped_milli']) for _, m, _ in runs]}"
+    )
+
+    # Knowledge front: pooled craft first-hearing lag histogram (raw ticks).
+    lags = [l for _, _, ws in runs for w in ws for l in w["heard_lag_ticks"]]
+    print(f"knowledge front: {len(lags)} craft hearings; lag histogram (ticks):")
+    if lags:
+        hi = max(lags) + 1
+        width = max(1, -(-hi // LAG_BINS))  # ceil
+        bins = [0] * LAG_BINS
+        for l in lags:
+            bins[min(l // width, LAG_BINS - 1)] += 1
+        peak = max(bins)
+        for i, n in enumerate(bins):
+            bar = "#" * (0 if peak == 0 else round(40 * n / peak))
+            print(f"  [{i * width:>6}-{(i + 1) * width - 1:>6}] {n:>5} {bar}")
+
+    # News geography (hub/backwater): run-summed held-alert windows per
+    # station, ratio max/min over stations that saw any dock traffic.
+    for (r, _, ws) in runs:
+        if not ws or not ws[0]["per_station_alerts"]:
+            continue
+        n_st = len(ws[0]["per_station_alerts"])
+        alerts = [sum(w["per_station_alerts"][i] for w in ws) for i in range(n_st)]
+        contacts = [sum(w["per_station_contacts"][i] for w in ws) for i in range(n_st)]
+        trafficked = [alerts[i] for i in range(n_st) if contacts[i] > 0]
+        if trafficked:
+            lo = min(trafficked)
+            ratio = f"{max(trafficked) / lo:.1f}" if lo > 0 else "inf"
+        else:
+            ratio = "n/a"
+        print(
+            f"news geography (seed {r['seed']}): per-station summed alerts={alerts} "
+            f"contacts={contacts} hub/backwater ratio={ratio}"
+        )
+
+
+def knobset_is_media_on(knobs):
+    """Media-on arm: the knobset opens the gossip caps (default config is 0)."""
+    return any(k == "station_gossip_slots" and int(v) > 0 for k, v in knobs)
+
+
+def voi_line(all_runs, all_knobs):
+    """Value-of-information line (spec section 9): media-on vs media-off arms
+    in the SAME invocation — median final hauler-row credits per arm.
+    REPORTED, NEVER GATED (PDR-0006): a ~0 reading is a finding that points
+    the next bet at world prices — owner's call."""
+    on = [n for n in all_runs if knobset_is_media_on(all_knobs[n])]
+    off = [n for n in all_runs if not knobset_is_media_on(all_knobs[n])]
+    if not on or not off:
+        return
+
+    def median_final_hauler_credits(names):
+        pool = []
+        for n in names:
+            for _, _, ws in all_runs[n]:
+                if ws:
+                    pool.extend(ws[-1]["per_craft_credits"][:N_HAULERS])
+        pool.sort()
+        return pool[(len(pool) - 1) // 2] if pool else None
+
+    on_med = median_final_hauler_credits(on)
+    off_med = median_final_hauler_credits(off)
+    print(
+        f"\nvalue-of-information (REPORTED, NEVER GATED — PDR-0006): "
+        f"median final hauler credits media-on({'+'.join(on)})={on_med} "
+        f"media-off({'+'.join(off)})={off_med}"
+    )
 
 
 def main():
@@ -219,27 +328,32 @@ def main():
         f"seeds={args.seeds} ticks={args.ticks} sets={specs}"
     )
     all_runs = {}
+    all_knobs = {}
     for spec in specs:
         name, knobs = parse_knobset(spec)
         runs = []
         for seed in args.seeds:
-            result, windows = run_one(args, name, knobs, seed, out_dir)
-            runs.append((result, windows))
+            result, media, windows = run_one(args, name, knobs, seed, out_dir)
+            runs.append((result, media, windows))
             print(
                 f"  ran {name} seed={seed}: verdict={result['verdict']} "
-                f"robs={result['robs']} fuel_empty={result['fuel_empty']}"
+                f"robs={result['robs']} fuel_empty={result['fuel_empty']} "
+                f"media={media['reading']}"
             )
         all_runs[name] = runs
+        all_knobs[name] = knobs
 
     for name, runs in all_runs.items():
         panel(name, runs)
+
+    voi_line(all_runs, all_knobs)
 
     # The live positive control, restated wherever the default grid ran it
     # (spec section 1 instrument-kill: the hungry-roamer injection MUST read
     # RiskEqualized; if it does not, fix the INSTRUMENT before tuning
     # anything).
     if "control" in all_runs:
-        n = sum(1 for r, _ in all_runs["control"] if r["verdict"] == "RiskEqualized")
+        n = sum(1 for r, _, _ in all_runs["control"] if r["verdict"] == "RiskEqualized")
         total = len(all_runs["control"])
         print(
             f"\npositive control (hungry roamers, reach=inf): {n}/{total} runs read "

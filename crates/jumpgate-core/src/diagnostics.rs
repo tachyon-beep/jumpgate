@@ -98,6 +98,36 @@ pub struct TrophicSample {
     /// Trip-phase (fraction-of-trip-elapsed × 1000) of each engagement in the
     /// window — the endpoint-ambush histogram input (Task 4 pushes these).
     pub engagement_phase_milli: Vec<u32>,
+    // --- media lab fields (media rung cut 1, spec §9; windows, not gates).
+    // Additive: every pre-media JSONL key is untouched. ---
+    /// `AlertBorn` events in the window.
+    pub gossip_born: u32,
+    /// Craft-carrier `GossipHeard` in the window — the propagation signal.
+    /// Pier deposits are draw-free, so Station hearings deliberately do NOT
+    /// count here.
+    pub gossip_first_heard: u32,
+    /// Run-cumulative alerts born (pure read over `recent_events(Tick(0))`).
+    pub gossip_born_cum: u32,
+    /// Run-cumulative distinct `alert_seq`s with ≥ 1 Craft-carrier hearing
+    /// (pure read over `recent_events(Tick(0))`) — the escape numerator.
+    pub gossip_escaped_cum: u32,
+    /// Σ occupied craft comms-log slots at the sample point.
+    pub alerts_carried: u32,
+    /// Station reservoirs holding ≥ 1 alert at the sample point.
+    pub stations_with_news: u32,
+    /// Occupied reservoir slots per station (the news-desert map; empty when
+    /// media is off — the vectors size to the reservoirs).
+    pub per_station_alerts: Vec<u32>,
+    /// Dock EDGES per station in the window (`media_diag.contacts`) — the
+    /// P(escape) denominator.
+    pub per_station_contacts: Vec<u32>,
+    /// Per Craft-carrier first-hearing in the window: `e.tick − rob_tick`
+    /// (news age at hearing — the knowledge-front input).
+    pub heard_lag_ticks: Vec<u32>,
+    /// Per Craft-carrier first-hearing in the window: hops at hearing.
+    pub heard_hops: Vec<u32>,
+    /// The `media_diag.evictions` snapshot at the sample point (run-cumulative).
+    pub alerts_evicted_cum: u64,
 }
 
 /// A named row of the spec-§9 diagnosis matrix. Diagnosis vocabulary only —
@@ -306,6 +336,91 @@ fn outcome_dispersion(samples: &[TrophicSample]) -> bool {
     spread_milli >= u128::from(OUTCOME_DISPERSION_MIN_MILLI)
 }
 
+// ---- media classifier (media rung cut 1, spec §9) ----
+
+/// DIAGNOSTIC WINDOWS, NOT GATES (PDR-0006): a named row of the media
+/// propagation-reading matrix. A separate pure classifier beside `classify`
+/// (`Verdict`/`classify()`/the RESULT line are byte-untouched).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaReading {
+    /// No alerts born all run (media off, or a world with no robberies).
+    NoMedia,
+    /// Alerts born but ZERO Craft-carrier hearings all run — news never
+    /// escapes the piers. Operationalized correction to spec §9's "zero
+    /// hops≥1 hearings": pier deposits are draw-free hops-1 inserts, so the
+    /// meaningful propagation zero is CRAFT hearings (M-DEAD, sig forced 0,
+    /// must read NewsDesert).
+    NewsDesert,
+    /// Hearings present in the first half, ZERO across the second, while
+    /// robs CONTINUE and stale copies still ride in buffers — the network
+    /// went deaf over a live predation field (the PermanentPeace analogue).
+    /// Operationalized correction to spec §9's "births first half, zero
+    /// second": births ≡ robs by construction, so the dead coupling is
+    /// HEARINGS dying under continuing robs.
+    StaleEcho,
+    /// Run-aggregate escape ≥ `COMMON_KNOWLEDGE_ESCAPE_MILLI` AND the final
+    /// window's coverage is complete — the self-averaging alarm (locality
+    /// is what the cut is buying; everyone-knows-everything destroys it).
+    CommonKnowledge,
+    /// The alive reading: news propagates, stays partial, stays local.
+    Localized,
+}
+
+/// CommonKnowledge escape threshold (milli). DIAGNOSTIC WINDOW, NOT A GATE
+/// (PDR-0006): a readout band for the console loop, free to move there.
+pub const COMMON_KNOWLEDGE_ESCAPE_MILLI: u32 = 950;
+
+/// Run-aggregate escape fraction in milli: `1000 × escaped_cum / born_cum`
+/// read at the LAST sample (the fields are run-cumulative). 0 sentinel when
+/// nothing was born (spec §9).
+pub fn escaped_milli(samples: &[TrophicSample]) -> u32 {
+    let Some(last) = samples.last() else {
+        return 0;
+    };
+    if last.gossip_born_cum == 0 {
+        return 0;
+    }
+    (u64::from(last.gossip_escaped_cum).saturating_mul(1000)
+        / u64::from(last.gossip_born_cum)) as u32
+}
+
+/// Classify a windowed run's MEDIA propagation field (spec §9). Pure over the
+/// samples, like `classify`; precedence is the listed reading order. The
+/// operationalized rule deviations from the spec's wording are recorded on
+/// the `MediaReading` variants.
+pub fn media_classify(samples: &[TrophicSample]) -> MediaReading {
+    let born: u64 = samples.iter().map(|s| u64::from(s.gossip_born)).sum();
+    if born == 0 {
+        return MediaReading::NoMedia;
+    }
+    let heard: u64 = samples.iter().map(|s| u64::from(s.gossip_first_heard)).sum();
+    if heard == 0 {
+        return MediaReading::NewsDesert;
+    }
+    // StaleEcho: hearings died in the second half (heard > 0 overall, so they
+    // were in the first) while robs continued AND the mean held-alert count
+    // over the second half stayed ≥ 1 (stale copies echo in buffers). The
+    // quiet-but-alive trap (robs also stopped) falls through to Localized.
+    let mid = samples.len() / 2;
+    let late = &samples[mid..];
+    if mid >= 1 {
+        let late_heard: u64 = late.iter().map(|s| u64::from(s.gossip_first_heard)).sum();
+        let late_robs: u64 = late.iter().map(|s| u64::from(s.robs)).sum();
+        let late_carried: u64 = late.iter().map(|s| u64::from(s.alerts_carried)).sum();
+        if late_heard == 0 && late_robs > 0 && late_carried >= late.len() as u64 {
+            return MediaReading::StaleEcho;
+        }
+    }
+    let last = samples.last().expect("non-empty: born > 0");
+    if escaped_milli(samples) >= COMMON_KNOWLEDGE_ESCAPE_MILLI
+        && !last.per_station_alerts.is_empty()
+        && last.stations_with_news as usize == last.per_station_alerts.len()
+    {
+        return MediaReading::CommonKnowledge;
+    }
+    MediaReading::Localized
+}
+
 /// Read one window's `TrophicSample` off the live world: events with
 /// `tick > window_start` (and ≤ the current tick) plus an instantaneous
 /// population/wallet snapshot at the sample point. The runner calls this every
@@ -322,6 +437,10 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
     let mut drivenoffs: u32 = 0;
     let mut purchases_hull: u32 = 0;
     let mut purchases_escort: u32 = 0;
+    let mut gossip_born: u32 = 0;
+    let mut gossip_first_heard: u32 = 0;
+    let mut heard_lag_ticks: Vec<u32> = Vec::new();
+    let mut heard_hops: Vec<u32> = Vec::new();
     for e in world.recent_events(Tick(window_start.0.saturating_add(1))) {
         match e.kind {
             EventKind::ContractAccepted { contract, .. } => {
@@ -354,7 +473,64 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
                     purchases_escort = purchases_escort.saturating_add(1);
                 }
             },
+            EventKind::AlertBorn { .. } => {
+                gossip_born = gossip_born.saturating_add(1);
+            }
+            // Craft-carrier hearings ONLY (the propagation signal): pier
+            // deposits are draw-free Station inserts and deliberately do not
+            // count. Lag = news age at hearing (the knowledge front).
+            EventKind::GossipHeard {
+                carrier: crate::media::GossipNode::Craft(_),
+                rob_tick,
+                hops,
+                ..
+            } => {
+                gossip_first_heard = gossip_first_heard.saturating_add(1);
+                heard_lag_ticks.push(
+                    u32::try_from(e.tick.0.saturating_sub(rob_tick.0)).unwrap_or(u32::MAX),
+                );
+                heard_hops.push(u32::from(hops));
+            }
             _ => {}
+        }
+    }
+    // Run-cumulative media reads (pure scan over the whole retained stream):
+    // total alerts born + distinct alert_seqs with ≥ 1 Craft-carrier hearing.
+    let mut gossip_born_cum: u32 = 0;
+    let mut escaped_seqs = std::collections::BTreeSet::new();
+    for e in world.recent_events(Tick(0)) {
+        match e.kind {
+            EventKind::AlertBorn { .. } => {
+                gossip_born_cum = gossip_born_cum.saturating_add(1);
+            }
+            EventKind::GossipHeard {
+                carrier: crate::media::GossipNode::Craft(_),
+                alert_seq,
+                ..
+            } => {
+                escaped_seqs.insert(alert_seq);
+            }
+            _ => {}
+        }
+    }
+    // Buffer snapshots at the sample point + windowed dock-edge counts.
+    let alerts_carried = world
+        .ships
+        .gossip
+        .iter()
+        .flatten()
+        .map(crate::media::GossipBuffer::occupied)
+        .fold(0u32, u32::saturating_add);
+    let per_station_alerts: Vec<u32> =
+        world.station_gossip.iter().map(crate::media::GossipBuffer::occupied).collect();
+    let stations_with_news = per_station_alerts.iter().filter(|&&n| n > 0).count() as u32;
+    let mut per_station_contacts = vec![0u32; world.station_gossip.len()];
+    for &(t, srow) in &world.media_diag.contacts {
+        if t.0 > window_start.0
+            && t.0 <= tick.0
+            && let Some(c) = per_station_contacts.get_mut(srow as usize)
+        {
+            *c = c.saturating_add(1);
         }
     }
     let mut active_pirates: u32 = 0;
@@ -402,12 +578,25 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .filter(|s| s.tick.0 > window_start.0 && s.tick.0 <= tick.0)
             .map(|s| s.phase_milli)
             .collect(),
+        gossip_born,
+        gossip_first_heard,
+        gossip_born_cum,
+        gossip_escaped_cum: escaped_seqs.len() as u32,
+        alerts_carried,
+        stations_with_news,
+        per_station_alerts,
+        per_station_contacts,
+        heard_lag_ticks,
+        heard_hops,
+        alerts_evicted_cum: world.media_diag.evictions,
     }
 }
 
 /// Directed route index of a contract: `from_row * n_stations + to_row`
-/// (dense `n_stations²` layout, matching the per-route vectors).
-fn route_of(world: &World, contract: ContractId) -> Option<usize> {
+/// (dense `n_stations²` layout, matching the per-route vectors). Pub since
+/// Task 8: the gossip-log writer (`trophic_run --gossip-log`) joins Robbed /
+/// ContractAccepted events onto routes through this same read.
+pub fn route_of(world: &World, contract: ContractId) -> Option<usize> {
     let k = world
         .contracts
         .ids
@@ -450,6 +639,8 @@ mod tests {
             yard_treasury_micros: 0,
             per_craft_credits: credits.to_vec(),
             engagement_phase_milli: Vec::new(),
+            // Media lab fields default-zero: `classify` never reads them.
+            ..Default::default()
         }
     }
 
@@ -675,5 +866,128 @@ mod tests {
             5_000_000 + 8_000_000,
             "Yard treasury read at the sample point (escort L1 + hull L1)"
         );
+        // Media lab fields (Task 8) on a media-OFF world: all zero/empty —
+        // the vectors size to the reservoirs (none when media is off).
+        assert_eq!(s.gossip_born, 0);
+        assert_eq!(s.gossip_first_heard, 0);
+        assert_eq!(s.gossip_born_cum, 0);
+        assert_eq!(s.gossip_escaped_cum, 0);
+        assert_eq!(s.alerts_carried, 0);
+        assert_eq!(s.stations_with_news, 0);
+        assert!(s.per_station_alerts.is_empty(), "no reservoirs when media is off");
+        assert!(s.per_station_contacts.is_empty(), "no contacts when media is off");
+        assert!(s.heard_lag_ticks.is_empty());
+        assert!(s.heard_hops.is_empty());
+        assert_eq!(s.alerts_evicted_cum, 0);
+    }
+
+    // ---- media lab bench (Task 8): labeled synthetics, one per
+    // `MediaReading`, plus the quiet-but-alive StaleEcho trap (the seed-7
+    // rule: every new metric ships with a synthetic that would catch it
+    // lying) ----
+
+    /// Media-field synthetic: everything non-media defaulted except `robs`
+    /// (StaleEcho's coupling term).
+    #[allow(clippy::too_many_arguments)]
+    fn m(
+        tick: u64,
+        born: u32,
+        heard: u32,
+        robs: u32,
+        carried: u32,
+        born_cum: u32,
+        escaped_cum: u32,
+        station_alerts: &[u32],
+    ) -> TrophicSample {
+        TrophicSample {
+            tick,
+            robs,
+            gossip_born: born,
+            gossip_first_heard: heard,
+            gossip_born_cum: born_cum,
+            gossip_escaped_cum: escaped_cum,
+            alerts_carried: carried,
+            stations_with_news: station_alerts.iter().filter(|&&n| n > 0).count() as u32,
+            per_station_alerts: station_alerts.to_vec(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn media_no_media_when_nothing_born() {
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| m((w + 1) * WINDOW_TICKS, 0, 0, 2, 0, 0, 0, &[0, 0, 0]))
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::NoMedia);
+    }
+
+    #[test]
+    fn media_news_desert_when_no_craft_hearings() {
+        // M-DEAD (sig forced 0) must read NewsDesert: alerts are born (pier
+        // deposits are draw-free hops-1 inserts) but NO craft ever hears one
+        // — the meaningful propagation zero is CRAFT hearings.
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                m((w + 1) * WINDOW_TICKS, 1, 0, 1, 0, (w + 1) as u32, 0, &[1, 0, 0])
+            })
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::NewsDesert);
+    }
+
+    #[test]
+    fn media_stale_echo_when_network_goes_deaf_under_continuing_robs() {
+        // Hearings present in the first half, ZERO across the second, while
+        // robs CONTINUE and stale copies still sit in buffers — the network
+        // went deaf over a live predation field (the PermanentPeace analogue).
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                let heard = if w < 6 { 2 } else { 0 };
+                m((w + 1) * WINDOW_TICKS, 1, heard, 1, 3, (w + 1) as u32, 4, &[2, 1, 0])
+            })
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::StaleEcho);
+    }
+
+    #[test]
+    fn media_stale_echo_trap_quiet_but_alive_reads_localized() {
+        // The seed-7 rule's trap: hearings drop to zero in the second half
+        // but robs ALSO stop — a peaceful world, not a deaf network. An
+        // instrument that cries wolf over peace is lying: must read
+        // Localized, NOT StaleEcho.
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                let (born, heard, robs) = if w < 6 { (1, 2, 1) } else { (0, 0, 0) };
+                let cum = (w + 1).min(6) as u32;
+                m((w + 1) * WINDOW_TICKS, born, heard, robs, 3, cum, 4, &[2, 1, 0])
+            })
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::Localized);
+    }
+
+    #[test]
+    fn media_common_knowledge_when_escape_saturates_and_coverage_completes() {
+        // Run-aggregate escape 23/24 = 958‰ ≥ 950 at the last sample AND the
+        // final window's coverage is complete (every station holds news) —
+        // the self-averaging alarm.
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                let born_cum = ((w + 1) * 2) as u32;
+                let escaped_cum = born_cum.saturating_sub(1);
+                m((w + 1) * WINDOW_TICKS, 2, 3, 1, 6, born_cum, escaped_cum, &[2, 1, 1])
+            })
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::CommonKnowledge);
+    }
+
+    #[test]
+    fn media_localized_is_the_alive_reading() {
+        // Propagation alive in both halves, escape below saturation, coverage
+        // incomplete: the reading the cut is aiming for.
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                m((w + 1) * WINDOW_TICKS, 1, 1, 1, 2, (w + 1) as u32, 6, &[2, 0, 0])
+            })
+            .collect();
+        assert_eq!(media_classify(&samples), MediaReading::Localized);
     }
 }

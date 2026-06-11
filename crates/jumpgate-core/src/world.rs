@@ -1895,6 +1895,56 @@ mod tests {
     }
 
     #[test]
+    fn media_default_is_inert() {
+        // The instrument-kill control (media spec §9, plan Task 8.5): the
+        // UNMODIFIED scenario (media caps default 0) and the single-lever
+        // case (caps open, `engage_radius_au = 0.0`) must both be media-dead
+        // — zero media events, zero gossip state, and the Media stream
+        // cursor untouched (the draw-one-and-compare-to-fresh trick: one
+        // draw from the stepped world equals the first draw of a fresh
+        // RngStreams, so the run consumed ZERO Media draws).
+        use crate::rng::{RngStream, RngStreams};
+        use crate::scenario::{apply_knob, scenario_trophic};
+        use rand_core::Rng;
+        let arm = |cfg: crate::config::RunConfig| {
+            let master = cfg.master_seed;
+            let (mut w, _) = World::reset(cfg).expect("scenario resolves");
+            assert!(!w.media_live(), "the dual gate must read closed");
+            let mut cmds: Vec<Command> = Vec::new();
+            for _ in 0..3_000 {
+                w.step(&mut cmds);
+            }
+            assert!(
+                !w.recent_events(Tick(0)).iter().any(|e| matches!(
+                    e.kind,
+                    EventKind::AlertBorn { .. } | EventKind::GossipHeard { .. }
+                )),
+                "zero media events over 3k ticks"
+            );
+            assert!(
+                w.ships.gossip.iter().all(Option::is_none),
+                "every gossip column None"
+            );
+            assert!(w.station_gossip.is_empty(), "no station reservoirs");
+            assert_eq!(w.next_alert_seq, 0, "mint counter untouched");
+            assert_eq!(
+                w.rng.stream(RngStream::Media).next_u64(),
+                RngStreams::from_master(master).stream(RngStream::Media).next_u64(),
+                "Media stream cursor untouched (zero draws consumed)"
+            );
+        };
+        // Arm 1: scenario_trophic(7) UNMODIFIED — caps default 0.
+        arm(scenario_trophic(7));
+        // Arm 2 (the dual gate's single lever): caps 16/8 but engage 0.0 —
+        // reset mints nothing, so the same assertions hold verbatim.
+        let mut cfg = scenario_trophic(7);
+        apply_knob(&mut cfg, "station_gossip_slots", "16").expect("media knob");
+        apply_knob(&mut cfg, "craft_gossip_slots", "8").expect("media knob");
+        apply_knob(&mut cfg, "engage_radius_au", "0.0").expect("trophic knob");
+        arm(cfg);
+    }
+
+    #[test]
     fn per_reader_forgetting_clock() {
         // Spec §7 (the staggered-return mechanism): the SAME alert copied into
         // two readers at different first-heard ticks ages out on each reader's

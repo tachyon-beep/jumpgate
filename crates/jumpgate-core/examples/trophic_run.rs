@@ -45,6 +45,10 @@ struct Args {
     chronicle_gossip_min_micros: i64,
     replay_check: bool,
     assert_no_fuel_empty: bool,
+    /// Post-run media event log (JSONL; media rung plan Task 8.4): one line
+    /// per AlertBorn / GossipHeard / Robbed / ContractAccepted, written from
+    /// the retained event stream for `python/analysis/media_log.py`.
+    gossip_log: Option<String>,
     sets: Vec<(String, String)>,
 }
 
@@ -57,6 +61,7 @@ fn parse_args() -> Result<Args, String> {
         chronicle_gossip_min_micros: 0,
         replay_check: false,
         assert_no_fuel_empty: false,
+        gossip_log: None,
         sets: Vec::new(),
     };
     let mut it = std::env::args().skip(1);
@@ -79,6 +84,9 @@ fn parse_args() -> Result<Args, String> {
             }
             "--replay-check" => args.replay_check = true,
             "--assert-no-fuel-empty" => args.assert_no_fuel_empty = true,
+            "--gossip-log" => {
+                args.gossip_log = Some(it.next().ok_or("--gossip-log needs a path")?);
+            }
             "--set" => {
                 let kv = it.next().ok_or("--set needs knob=value")?;
                 let (k, v) = kv
@@ -148,8 +156,80 @@ fn sample_json(s: &TrophicSample) -> String {
         "yard_treasury_micros": s.yard_treasury_micros,
         "per_craft_credits": s.per_craft_credits,
         "engagement_phase_milli": s.engagement_phase_milli,
+        // Media lab keys (Task 8.1) — ADDITIVE: every pre-media key above is
+        // byte-untouched.
+        "gossip_born": s.gossip_born,
+        "gossip_first_heard": s.gossip_first_heard,
+        "gossip_born_cum": s.gossip_born_cum,
+        "gossip_escaped_cum": s.gossip_escaped_cum,
+        "alerts_carried": s.alerts_carried,
+        "stations_with_news": s.stations_with_news,
+        "per_station_alerts": s.per_station_alerts,
+        "per_station_contacts": s.per_station_contacts,
+        "heard_lag_ticks": s.heard_lag_ticks,
+        "heard_hops": s.heard_hops,
+        "alerts_evicted_cum": s.alerts_evicted_cum,
     })
     .to_string()
+}
+
+/// Post-run media event log (plan Task 8.4): one JSONL line per
+/// media-relevant event from the retained stream — AlertBorn ("born"),
+/// GossipHeard ("heard"), Robbed ("rob"), ContractAccepted ("accept") — for
+/// `python/analysis/media_log.py`. Routes join through the now-public
+/// `diagnostics::route_of` (a settled/unresolvable contract reads `null`).
+/// Carrier encoding: `"s<row>"` station / `"c<slot>"` craft — station slot ==
+/// dense row in v1 (stations mint once at reset and never despawn).
+fn write_gossip_log(world: &World, path: &str) {
+    let mut w =
+        BufWriter::new(File::create(path).unwrap_or_else(|e| panic!("--gossip-log {path}: {e}")));
+    for e in world.recent_events(Tick(0)) {
+        let line = match e.kind {
+            EventKind::AlertBorn {
+                alert_seq,
+                route,
+                pirate,
+                hauler,
+                truth_value_micros,
+                claimed_value_micros,
+            } => serde_json::json!({
+                "e": "born", "tick": e.tick.0, "alert": alert_seq, "route": route,
+                "pirate": pirate.slot, "hauler": hauler.slot,
+                "truth": truth_value_micros, "claimed": claimed_value_micros,
+            }),
+            EventKind::GossipHeard {
+                carrier,
+                alert_seq,
+                route,
+                claimed_value_micros,
+                hops,
+                rob_tick,
+                ..
+            } => {
+                let carrier = match carrier {
+                    GossipNode::Station(s) => format!("s{}", s.slot),
+                    GossipNode::Craft(c) => format!("c{}", c.slot),
+                };
+                serde_json::json!({
+                    "e": "heard", "tick": e.tick.0, "alert": alert_seq,
+                    "carrier": carrier, "route": route, "hops": hops,
+                    "claimed": claimed_value_micros, "rob_tick": rob_tick.0,
+                })
+            }
+            EventKind::Robbed { contract, .. } => serde_json::json!({
+                "e": "rob", "tick": e.tick.0,
+                "route": diagnostics::route_of(world, contract),
+            }),
+            EventKind::ContractAccepted { contract, hauler } => serde_json::json!({
+                "e": "accept", "tick": e.tick.0,
+                "route": diagnostics::route_of(world, contract),
+                "hauler": hauler.slot,
+            }),
+            _ => continue,
+        };
+        writeln!(w, "{line}").expect("gossip-log write");
+    }
+    w.flush().expect("gossip-log flush");
 }
 
 /// The craft a chronicle line belongs to. Per-tick noise (ThrustApplied,
@@ -311,6 +391,32 @@ fn main() -> ExitCode {
         trips_total,
         buys_total,
     );
+
+    // The MEDIA line (Task 8.3; spec §9 — a window, not a gate): anchored
+    // machine-readable shape, parsed by sweep_trophic.py's MEDIA_RE (the
+    // lockstep rule: line and regex land in the SAME commit). Lags pool over
+    // all windows' Craft-carrier first-hearings; integer lower-median and
+    // p90 with a 0 sentinel when no craft ever heard news.
+    let born_total: u64 = samples.iter().map(|s| u64::from(s.gossip_born)).sum();
+    let mut lags: Vec<u32> =
+        samples.iter().flat_map(|s| s.heard_lag_ticks.iter().copied()).collect();
+    lags.sort_unstable();
+    let median_lag = if lags.is_empty() { 0 } else { lags[(lags.len() - 1) / 2] };
+    let p90_lag =
+        if lags.is_empty() { 0 } else { lags[(lags.len() * 9 / 10).min(lags.len() - 1)] };
+    println!(
+        "MEDIA seed={} born={} escaped_milli={} median_lag={} p90_lag={} reading={:?}",
+        args.seed,
+        born_total,
+        diagnostics::escaped_milli(&samples),
+        median_lag,
+        p90_lag,
+        diagnostics::media_classify(&samples),
+    );
+
+    if let Some(path) = &args.gossip_log {
+        write_gossip_log(&world, path);
+    }
 
     if args.chronicle {
         print_chronicle(&world, args.chronicle_gossip_min_micros);
