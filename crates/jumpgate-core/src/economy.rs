@@ -383,6 +383,26 @@ pub fn cargo_capacity(
 ///       `resolve_contracts` settles the accept next. `stagger_period == 0`
 ///       disables ASSIGN entirely (manual / RL `AcceptContract` only); REPOST
 ///       is unaffected.
+/// UNHASHED ASSIGN instrumentation (the `engagement_diag` pattern — read only
+/// by the diagnostics sampler, NEVER a behavior input; PDR-0006: a window,
+/// not a gate). The two WHY-panel windows (2026-06-11): how often the
+/// evidence count at decision time sits on the flat (clamped) region of the
+/// avoidance transfer function, and how often the gossip read and the legacy
+/// ring read would pick a DIFFERENT contract (the argmax-flip share — the
+/// direct measure of how much of the channel's realism reaches play).
+#[derive(Default)]
+pub struct AssignDiag {
+    /// Belief-scored picks made.
+    pub decisions: u64,
+    /// Picks where the counterfactual source's argmax differed. Counted only
+    /// when media is live (gossip = the active source, the legacy ring = the
+    /// pure-read counterfactual); the ring arm has no defined counterfactual.
+    pub flips: u64,
+    /// Histogram of the ACTIVE evidence count per scored candidate:
+    /// buckets 0,1,2,3,4,5,>=6 (>=6 == the 900-clamp flat region).
+    pub candidate_counts: [u64; 7],
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_scripted_dispatch(
     contracts: &mut ContractStore,
@@ -391,6 +411,7 @@ pub fn run_scripted_dispatch(
     craft_cfg: &[crate::config::CraftInit],
     route_evidence: &crate::world::RouteEvidence,
     media_live: bool,
+    diag: &mut AssignDiag,
     dispatch: &crate::config::DispatchCfg,
     shipyard: &crate::config::ShipyardCfg,
     trophic: &crate::config::TrophicCfg,
@@ -527,6 +548,10 @@ pub fn run_scripted_dispatch(
         // behavior); with scoring ON the strictly-greatest score wins, so ties
         // keep the lowest ContractId.
         let mut pick: Option<(usize, i64)> = None;
+        // Counterfactual pick under the legacy ring (media-live only) — the
+        // argmax-flip window. PURE READ: never feeds the actual assignment.
+        let mut ring_pick: Option<(usize, i64)> = None;
+        let mut scored = false;
         for kidx in 0..contracts.ids.len() {
             if contracts.status[kidx] != ContractStatus::Offered {
                 continue;
@@ -545,6 +570,7 @@ pub fn run_scripted_dispatch(
                 pick = Some((kidx, 0));
                 break;
             }
+            scored = true;
             // Evidence-scored pick (spec §7): the route's recent-rob count,
             // penalty milli per rob clamped at 900 — the score never hits
             // zero, so a hot route is avoided, not erased. Saturating integer
@@ -553,27 +579,32 @@ pub fn run_scripted_dispatch(
             // comms-log (per-reader `first_heard` window at the dispatch
             // tick; a missing buffer — e.g. a pirate row — reads 0); media
             // off -> the legacy ring through the hauler's dock-gated
-            // `info_tick`, byte-identical.
+            // `info_tick`, byte-identical. The ring count is ALWAYS computed:
+            // it is the active count when media is off, and the diagnostics
+            // counterfactual when media is live.
             let from = contracts.from_station[kidx];
             let to = contracts.to_station[kidx];
-            let count = stations
+            let (count, ring_count) = stations
                 .ids
                 .dense_index(from.slot, from.generation)
                 .zip(stations.ids.dense_index(to.slot, to.generation))
-                .map_or(0, |(f, t)| {
+                .map_or((0, 0), |(f, t)| {
                     let route = f.saturating_mul(stations.ids.len()).saturating_add(t);
-                    if media_live {
+                    let ring = route_evidence.count_recent(
+                        route,
+                        ships.info_tick[crow],
+                        trophic.evidence_window,
+                    );
+                    let active = if media_live {
                         ships.gossip[crow].as_ref().map_or(0, |buf| {
                             buf.count_route_recent(route, tick, trophic.evidence_window)
                         })
                     } else {
-                        route_evidence.count_recent(
-                            route,
-                            ships.info_tick[crow],
-                            trophic.evidence_window,
-                        )
-                    }
+                        ring
+                    };
+                    (active, ring)
                 });
+            diag.candidate_counts[(count as usize).min(6)] += 1;
             let penalty =
                 (count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
             let score =
@@ -581,10 +612,26 @@ pub fn run_scripted_dispatch(
             if pick.is_none_or(|(_, best)| score > best) {
                 pick = Some((kidx, score));
             }
+            if media_live {
+                let ring_penalty = (ring_count
+                    .saturating_mul(trophic.evidence_penalty_milli))
+                .min(900) as i64;
+                let ring_score =
+                    contracts.reward_micros[kidx].saturating_mul(1000 - ring_penalty) / 1000;
+                if ring_pick.is_none_or(|(_, best)| ring_score > best) {
+                    ring_pick = Some((kidx, ring_score));
+                }
+            }
         }
         if let Some((kidx, _)) = pick {
             ships.contract[crow] = Some(contract_id(contracts, kidx));
             ships.role[crow] = CraftRole::Hauler;
+            if scored {
+                diag.decisions += 1;
+                if media_live && ring_pick.map(|(k, _)| k) != Some(kidx) {
+                    diag.flips += 1;
+                }
+            }
         }
     }
 }
@@ -1818,6 +1865,7 @@ mod tests {
             &[],
             &no_evidence,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
@@ -1836,6 +1884,7 @@ mod tests {
             &[],
             &no_evidence,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
@@ -1919,6 +1968,7 @@ mod tests {
             &[],
             &re,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &TrophicCfg::default(),
@@ -1938,6 +1988,7 @@ mod tests {
             &[],
             &re,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &scoring,
@@ -1959,6 +2010,7 @@ mod tests {
             &[],
             &re,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &scoring,
@@ -2008,6 +2060,7 @@ mod tests {
             &[],
             &re,
             true,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &scoring,
@@ -2029,6 +2082,7 @@ mod tests {
             &[],
             &re,
             true,
+            &mut AssignDiag::default(),
             &dispatch,
             &shipyard,
             &scoring,
@@ -2077,6 +2131,7 @@ mod tests {
             &unscripted,
             &re,
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
@@ -2254,6 +2309,7 @@ mod tests {
             &[],
             &crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() },
             false,
+            &mut AssignDiag::default(),
             &dispatch,
             &crate::config::ShipyardCfg::default(),
             &crate::config::TrophicCfg::default(),
@@ -2512,5 +2568,105 @@ mod tests {
             "lost cargo accounted into consumed[Fuel]"
         );
         assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+    }
+
+    /// The WHY-panel windows (2026-06-11): the candidate-count histogram bumps
+    /// per scored candidate, and a gossip-vs-ring argmax disagreement is
+    /// counted as a flip (media-live only); agreeing sources never flip.
+    #[test]
+    fn assign_diag_counts_candidates_and_flags_argmax_flips() {
+        use crate::config::{BaseSpec, DispatchCfg, ShipyardCfg, TrophicCfg};
+        use crate::ids::BodyId;
+        use crate::math::Vec3;
+        use crate::media::{GossipAlert, GossipBuffer};
+        use crate::world::RouteEvidence;
+        let spec = || BaseSpec {
+            base_dry_mass: 1.0,
+            base_max_thrust: 0.0,
+            base_exhaust_velocity: 1.0,
+            base_fuel_capacity: 1.0,
+            base_cargo_capacity: 5,
+        };
+        // Two stations, two equal-reward offers on opposite directed routes
+        // (dense 2-station layout: s0->s1 = route 1, s1->s0 = route 2).
+        let mut stations = StationStore::empty();
+        let s0 = stations.push(BodyId { slot: 0, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let s1 = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let mut corporations = CorporationStore::empty();
+        let corp = corporations.push(0, s0);
+        let mut contracts = ContractStore::empty();
+        contracts.push(corp, Resource::Fuel, 5, s0, s1, 1_000_000); // k0, route 1
+        contracts.push(corp, Resource::Fuel, 5, s1, s0, 1_000_000); // k1, route 2
+        let mut ships = CraftStore::empty();
+        ships.push(spec(), Vec3::ZERO, Vec3::ZERO, 0.0);
+        // The hauler's OWN gossip says route 1 (k0) is hot...
+        let mut buf = GossipBuffer::empty(8);
+        buf.slots[0] = Some(GossipAlert {
+            alert_seq: 0,
+            route: 1,
+            pirate_slot: 9,
+            rob_tick: Tick(90),
+            claimed_value_micros: 3_000_000,
+            first_heard: Tick(95),
+            hops: 1,
+        });
+        ships.gossip[0] = Some(buf);
+        // ...while the legacy ring says route 2 (k1) is hot.
+        let mut ring = RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] };
+        ring.robs[2][0] = Tick(90);
+        ships.info_tick[0] = Tick(100); // ring read is dock-fresh
+        let trophic = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
+        let dispatch = DispatchCfg { stagger_period: 1, ..DispatchCfg::default() };
+        let mut diag = AssignDiag::default();
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &ring,
+            true,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &trophic,
+            Tick(100),
+            &mut events,
+        );
+        // Gossip avoids route 1 -> picks k1 (slot 1); the ring would have
+        // avoided route 2 and picked k0 -> an argmax flip, counted.
+        assert_eq!(ships.contract[0].map(|c| c.slot), Some(1), "gossip pick is k1");
+        assert_eq!(diag.decisions, 1, "one belief-scored pick");
+        assert_eq!(diag.flips, 1, "gossip vs ring argmax disagreement is a flip");
+        // Candidate histogram: k0's active (gossip) count 1, k1's count 0.
+        assert_eq!(diag.candidate_counts[0], 1, "one zero-count candidate");
+        assert_eq!(diag.candidate_counts[1], 1, "one count-1 candidate");
+
+        // Control: agreeing sources (no evidence anywhere) -> no flip.
+        let mut ships2 = CraftStore::empty();
+        ships2.push(spec(), Vec3::ZERO, Vec3::ZERO, 0.0);
+        ships2.gossip[0] = Some(GossipBuffer::empty(8));
+        ships2.info_tick[0] = Tick(100);
+        let mut contracts2 = ContractStore::empty();
+        contracts2.push(corp, Resource::Fuel, 5, s0, s1, 1_000_000);
+        contracts2.push(corp, Resource::Fuel, 5, s1, s0, 1_000_000);
+        let empty_ring = RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] };
+        let mut diag2 = AssignDiag::default();
+        run_scripted_dispatch(
+            &mut contracts2,
+            &stations,
+            &mut ships2,
+            &[],
+            &empty_ring,
+            true,
+            &mut diag2,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &trophic,
+            Tick(100),
+            &mut events,
+        );
+        assert_eq!(diag2.decisions, 1);
+        assert_eq!(diag2.flips, 0, "agreeing sources never flip");
     }
 }

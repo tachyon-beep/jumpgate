@@ -75,6 +75,9 @@ pub struct World {
     /// behavior input): eviction count + dock-edge contact records. Written by
     /// the stage-3b2 media mechanics and read ONLY by instruments.
     pub(crate) media_diag: crate::media::MediaDiag,
+    /// UNHASHED ASSIGN instrumentation (the WHY-panel windows: count
+    /// histogram + gossip-vs-ring argmax-flip share). Never a behavior input.
+    pub(crate) assign_diag: crate::economy::AssignDiag,
     /// Per-engagement kinematic snapshots, pushed by the stage-3b2 emission
     /// sites and read ONLY by the diagnostics sampler (`sample_window`).
     /// UNHASHED diagnostics-only state — never an input to any behavior stage
@@ -440,6 +443,7 @@ impl World {
             station_gossip,
             next_alert_seq: 0,
             media_diag: Default::default(),
+            assign_diag: Default::default(),
             engagement_diag: Vec::new(),
             eph,
             rng,
@@ -689,6 +693,7 @@ impl World {
             &self.config.craft,
             &self.route_evidence,
             media_live,
+            &mut self.assign_diag,
             &self.config.dispatch_cfg,
             &self.config.shipyard,
             &self.config.trophic,

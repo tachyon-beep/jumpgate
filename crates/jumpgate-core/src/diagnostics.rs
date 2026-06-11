@@ -128,6 +128,15 @@ pub struct TrophicSample {
     pub heard_hops: Vec<u32>,
     /// The `media_diag.evictions` snapshot at the sample point (run-cumulative).
     pub alerts_evicted_cum: u64,
+    /// `assign_diag.decisions` snapshot (run-cumulative): belief-scored picks.
+    pub assign_decisions_cum: u64,
+    /// `assign_diag.flips` snapshot (run-cumulative): picks where the
+    /// gossip read and the legacy-ring read disagree on the argmax
+    /// (media-live only) — the WHY-panel channel-liveness window.
+    pub assign_flips_cum: u64,
+    /// `assign_diag.candidate_counts` snapshot (run-cumulative): evidence
+    /// count per scored candidate, buckets 0..=5 then >=6 (the clamp region).
+    pub assign_counts_cum: Vec<u64>,
 }
 
 /// A named row of the spec-§9 diagnosis matrix. Diagnosis vocabulary only —
@@ -589,6 +598,9 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         heard_lag_ticks,
         heard_hops,
         alerts_evicted_cum: world.media_diag.evictions,
+        assign_decisions_cum: world.assign_diag.decisions,
+        assign_flips_cum: world.assign_diag.flips,
+        assign_counts_cum: world.assign_diag.candidate_counts.to_vec(),
     }
 }
 

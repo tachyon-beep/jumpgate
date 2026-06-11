@@ -169,6 +169,9 @@ fn sample_json(s: &TrophicSample) -> String {
         "heard_lag_ticks": s.heard_lag_ticks,
         "heard_hops": s.heard_hops,
         "alerts_evicted_cum": s.alerts_evicted_cum,
+        "assign_decisions_cum": s.assign_decisions_cum,
+        "assign_flips_cum": s.assign_flips_cum,
+        "assign_counts_cum": s.assign_counts_cum,
     })
     .to_string()
 }
@@ -413,6 +416,25 @@ fn main() -> ExitCode {
         p90_lag,
         diagnostics::media_classify(&samples),
     );
+
+    // The ASSIGN line (WHY-panel windows, 2026-06-11; a window, not a gate):
+    // how many belief-scored picks were made, how often the gossip read and
+    // the legacy-ring read would have picked DIFFERENTLY (media-live only;
+    // flip_milli = 0 means the channel's realism never reached a decision),
+    // and where the evidence counts sat on the avoidance curve (buckets
+    // 0..=5 then >=6 == the 900-clamp flat region).
+    if let Some(last) = samples.last() {
+        let flip_milli =
+            last.assign_flips_cum.saturating_mul(1000) / last.assign_decisions_cum.max(1);
+        println!(
+            "ASSIGN seed={} decisions={} flips={} flip_milli={} counts={:?}",
+            args.seed,
+            last.assign_decisions_cum,
+            last.assign_flips_cum,
+            flip_milli,
+            last.assign_counts_cum,
+        );
+    }
 
     if let Some(path) = &args.gossip_log {
         write_gossip_log(&world, path);
