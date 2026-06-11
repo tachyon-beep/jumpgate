@@ -591,6 +591,14 @@ impl World {
         self.ship_index(id).map(|i| self.ships.credits_micros[i])
     }
 
+    /// Role of a live craft (the chronicle epilogue's read — world-gets-big
+    /// spec §7), or `None` for a stale id. Plain read over already-hashed
+    /// state (the trader-accessor pattern): no layout, fold-order, or
+    /// stepping change.
+    pub fn craft_role(&self, id: CraftId) -> Option<crate::stores::CraftRole> {
+        self.ship_index(id).map(|i| self.ships.role[i])
+    }
+
     /// Route-evidence read (media rung spec §7) — the propagation model now
     /// lives BEHIND this unchanged signature (the spec-§7 promise kept: the
     /// accessor took the READER, not a timestamp, precisely so this swap
@@ -1366,6 +1374,18 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
         }
+    }
+
+    #[test]
+    fn craft_role_reads_role_and_none_for_stale() {
+        // World-gets-big spec §7: the chronicle epilogue's role read — a
+        // plain pub accessor over already-hashed state (trader-accessor
+        // pattern; no layout, fold-order, or stepping change).
+        let (world, _) = World::reset(one_body_one_craft()).expect("resolvable cfg");
+        let id = world.ships.ids_at(0);
+        assert_eq!(world.craft_role(id), Some(crate::stores::CraftRole::Idle), "live read");
+        let stale = CraftId { slot: id.slot, generation: id.generation + 1 };
+        assert_eq!(world.craft_role(stale), None, "stale id reads None");
     }
 
     /// A config for the velocity-targeting braking law: one craft at REST in a

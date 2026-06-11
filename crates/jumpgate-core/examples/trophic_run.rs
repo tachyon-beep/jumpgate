@@ -28,8 +28,9 @@ use std::process::ExitCode;
 
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
-    Command, CraftId, CraftRole, EventKind, GossipNode, RunConfig, StateView, Tick, World,
-    apply_knob, scenario_frontier, scenario_trophic, state_hash,
+    Command, ContractId, CraftId, CraftRole, EntityRef, EventKind, FUEL_EMPTY_EPS, GossipNode,
+    NavDest, RunConfig, StateView, Tick, World, apply_knob, scenario_frontier, scenario_trophic,
+    state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -121,9 +122,15 @@ struct MetaFacts {
     station_radii_milli_au: Vec<u32>,
 }
 
-/// `simulate`'s product: per-window samples, the sampled `(tick, state_hash)`
-/// stream, the final world (chronicle + event counts), and the META facts.
-type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts);
+/// Runner-side W9 liveness read: open-contract age at final tick.
+struct LivenessFacts {
+    max_open_contract_age: u64,
+    open_contracts: usize,
+}
+
+/// `simulate`'s product: per-window samples, sampled `(tick, state_hash)`,
+/// final world, META facts, and runner-side liveness facts.
+type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts, LivenessFacts);
 
 /// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
 /// the replay-check's second run shares nothing but the recipe.
@@ -168,6 +175,8 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
     let mut cmds: Vec<Command> = Vec::new();
     let mut samples = Vec::new();
     let mut hashes = Vec::new();
+    let mut open_contracts: std::collections::HashMap<ContractId, u64> =
+        std::collections::HashMap::new();
     let mut window_start = Tick(0);
     if let Some(w) = jsonl.as_mut() {
         // META row first. It has no "tick" key, so window consumers can gate on
@@ -189,6 +198,19 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
     for _ in 0..args.ticks {
         world.step(&mut cmds);
         let t = world.tick().0;
+        for e in world.recent_events(Tick(t)) {
+            match e.kind {
+                EventKind::ContractAccepted { contract, .. } => {
+                    open_contracts.insert(contract, e.tick.0);
+                }
+                EventKind::ContractFulfilled { contract, .. }
+                | EventKind::ContractFailed { contract, .. }
+                | EventKind::Robbed { contract, .. } => {
+                    open_contracts.remove(&contract);
+                }
+                _ => {}
+            }
+        }
         if t % HASH_SAMPLE_EVERY == 0 {
             hashes.push((t, state_hash(&world)));
         }
@@ -201,7 +223,16 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             samples.push(s);
         }
     }
-    Ok((samples, hashes, world, meta))
+    let final_tick = world.tick().0;
+    let liveness = LivenessFacts {
+        max_open_contract_age: open_contracts
+            .values()
+            .map(|&t0| final_tick.saturating_sub(t0))
+            .max()
+            .unwrap_or(0),
+        open_contracts: open_contracts.len(),
+    };
+    Ok((samples, hashes, world, meta, liveness))
 }
 
 /// Serialize one window sample as a JSONL line (field-for-field).
@@ -448,6 +479,52 @@ fn print_chronicle(world: &World, gossip_min_micros: i64) {
             }
         }
         flush(&pending);
+        // ---- per-craft epilogue (world-gets-big spec §7): final-state
+        // summary — printer-side only (PDR-0006: a window, never a gate) ----
+        let role = world
+            .craft_role(id)
+            .map_or_else(|| "stale".to_string(), |r| format!("{r:?}"));
+        let fuel = world.craft_fuel(id).unwrap_or(0.0);
+        let cap = world.craft_fuel_capacity(id).unwrap_or(0.0);
+        let tank_permille = if cap > 0.0 { ((fuel / cap) * 1000.0).floor() as u32 } else { 0 };
+        let credits = world.craft_credits(id).unwrap_or(0);
+        // Mean radial distance (milli-AU, FLOOR) of bodies this craft arrived
+        // at over the whole run. Factory orbits are circular, so radius is
+        // time-invariant for these scenarios.
+        let (mut r_sum, mut r_n) = (0.0f64, 0u64);
+        for e in world.recent_events(Tick(0)) {
+            if let EventKind::Arrival { craft, dest: NavDest::Entity(EntityRef::Body(b)) } =
+                e.kind
+                && craft == id
+                && let Some(p) = world.body_pos(b, world.tick())
+            {
+                r_sum += p.length();
+                r_n += 1;
+            }
+        }
+        let workplace_radius_milli_au =
+            if r_n == 0 { 0 } else { ((r_sum / r_n as f64) * 1000.0).floor() as u64 };
+        let adrift = world.craft_is_idle(id) == Some(true) && fuel <= FUEL_EMPTY_EPS;
+        let line = format!(
+            "  == epilogue: role={role} workplace_radius_milli_au={workplace_radius_milli_au} \
+             tank_permille={tank_permille} credits_micros={credits}"
+        );
+        if adrift {
+            let since = world
+                .recent_events(Tick(0))
+                .iter()
+                .rev()
+                .find_map(|e| match e.kind {
+                    EventKind::FuelEmpty { craft } if craft == id => Some(e.tick.0),
+                    _ => None,
+                });
+            match since {
+                Some(t) => println!("{line} ADRIFT since t={t}"),
+                None => println!("{line} ADRIFT since t=reset"),
+            }
+        } else {
+            println!("{line}");
+        }
     }
 }
 
@@ -464,7 +541,7 @@ fn main() -> ExitCode {
         .jsonl
         .as_ref()
         .map(|p| BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}"))));
-    let (samples, hashes, world, meta) = match simulate(&args, jsonl_writer.as_mut()) {
+    let (samples, hashes, world, meta, liveness) = match simulate(&args, jsonl_writer.as_mut()) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("trophic_run: {e}");
@@ -616,6 +693,11 @@ fn main() -> ExitCode {
         hauler_fuel.median_leg_burn_permille,
         hauler_fuel.min_tank_permille,
     );
+    println!(
+        "LIVENESS max_open_contract_age={} open_contracts={}",
+        liveness.max_open_contract_age,
+        liveness.open_contracts,
+    );
 
     // The ASSIGN line (WHY-panel windows, 2026-06-11; a window, not a gate):
     // how many belief-scored picks were made, how often the gossip read and
@@ -650,7 +732,7 @@ fn main() -> ExitCode {
     }
 
     if args.replay_check {
-        let (_, hashes2, _, _) = match simulate(&args, None) {
+        let (_, hashes2, _, _, _) = match simulate(&args, None) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("trophic_run: replay arm: {e}");
