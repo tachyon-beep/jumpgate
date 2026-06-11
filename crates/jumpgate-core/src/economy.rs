@@ -23,6 +23,7 @@ impl Resource {
     }
 }
 
+use crate::diagnostics::permille_floor;
 use crate::ids::{BodyId, ContractId, CorporationId, CraftId, ProducerId, SlotMap, StationId};
 use crate::time::Tick;
 
@@ -951,6 +952,124 @@ fn docked_at_vendor(
     })
 }
 
+/// Any-station dock predicate (world-gets-big §5): the first, lowest dense row
+/// station whose body is within `ARRIVAL_RADIUS` of the craft, compared in the
+/// craft's frame at `prev == t - 1`. Unlike `docked_at_vendor`, every dock can
+/// sell propellant when its live Fuel price row is valid.
+fn docked_station_row(
+    ships: &CraftStore,
+    crow: usize,
+    stations: &StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    prev: Tick,
+) -> Option<usize> {
+    (0..stations.ids.len()).find(|&srow| {
+        let body = stations.body[srow];
+        bodies
+            .ids
+            .dense_index(body.slot, body.generation)
+            .is_some_and(|brow| {
+                let bpos = eph.body_pos(bodies.eph_index[brow], prev);
+                ships.pos[crow].sub(bpos).length() <= crate::autopilot::ARRIVAL_RADIUS
+            })
+    })
+}
+
+/// Refuel settle stage — stage 1d2, world-gets-big §5. Consumes every
+/// `pending_refuel` intent this tick, then gates deterministically. Integer lots
+/// decide before writes: `need = floor((cap_eff - fuel)/lot)`, `afford =
+/// credits/price`, and `units = min(need, stock, afford)`. Settled lots perform
+/// four legs: station stock decreases, `consumed[Fuel]` increases, wallet moves
+/// to the Port corporation treasury, and the craft tank receives one clamped
+/// write. Tank fill permilles go through the shared FLOOR seam.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_refuels(
+    ships: &mut CraftStore,
+    stations: &mut StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    corporations: &mut CorporationStore,
+    counters: &mut EconCounters,
+    refuel: &crate::config::RefuelCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    if refuel.lot_mass <= 0.0 {
+        for intent in ships.pending_refuel.iter_mut() {
+            *intent = None;
+        }
+        return;
+    }
+
+    let lot = refuel.lot_mass;
+    let prev = Tick(tick.0.saturating_sub(1));
+    let fuel_r = Resource::Fuel.index();
+    for crow in 0..ships.ids.len() {
+        if ships.pending_refuel[crow].is_none() {
+            continue;
+        }
+        ships.pending_refuel[crow] = None;
+
+        let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
+            continue;
+        };
+        let unit_price = stations.price_micros[srow][fuel_r];
+        if unit_price < 1 {
+            continue;
+        }
+        let stock = stations.stock[srow][fuel_r];
+        if stock <= 0 {
+            continue;
+        }
+        let port_row = refuel.corp_index as usize;
+        if corporations.ids.id_at(port_row).is_none() {
+            continue;
+        }
+
+        let eff = effective_params(&ships.spec[crow], &ships.mods[crow]);
+        let cap_eff = eff.fuel_capacity;
+        let fuel = ships.fuel_mass[crow];
+        let need = ((cap_eff - fuel) / lot).floor() as i64;
+        if need < 1 {
+            continue;
+        }
+        let afford = ships.credits_micros[crow].max(0) / unit_price;
+        if afford < 1 {
+            continue;
+        }
+        let units = need.min(stock).min(afford);
+        let cost = units.saturating_mul(unit_price);
+        let tank_before_permille = permille_floor(fuel, cap_eff);
+
+        stations.stock[srow][fuel_r] -= units;
+        counters.consumed[fuel_r] = counters.consumed[fuel_r].saturating_add(units);
+        ships.credits_micros[crow] = ships.credits_micros[crow].saturating_sub(cost);
+        corporations.treasury_micros[port_row] =
+            corporations.treasury_micros[port_row].saturating_add(cost);
+        ships.fuel_mass[crow] = (fuel + units as f64 * lot).min(cap_eff);
+        let tank_after_permille = permille_floor(ships.fuel_mass[crow], cap_eff);
+        let craft = ships.ids_at(crow);
+        if let Some(station) = stations
+            .ids
+            .id_at(srow)
+            .map(|(slot, generation)| StationId { slot, generation })
+        {
+            events.emit(Event {
+                tick,
+                kind: EventKind::Refueled {
+                    craft,
+                    station,
+                    units,
+                    price_micros: unit_price,
+                    tank_before_permille,
+                    tank_after_permille,
+                },
+            });
+        }
+    }
+}
+
 /// The next rung of the scripted hauler purchase ladder (spec §6): the FIRST
 /// un-met `(kind, target_level)` in policy order, skipping rungs at/above the
 /// structural cap. `EscortFirst`: Escort L1 -> Hull L1 -> Escort L2 -> Hull L2;
@@ -1741,6 +1860,167 @@ mod tests {
         world.ships.credits_micros[0] = 50_000_000;
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
         assert_purchase_skipped(&mut world, 50_000_000, UpgradeLevels::default(), "non-vendor");
+    }
+
+    /// Refuel fixture: the vendor fixture's one-body/one-station/one-craft dock
+    /// with the Fuel price surface live, station Fuel stock 40, and
+    /// `RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 }`. The reprice clock is
+    /// off, so the seeded 5_000 micros is the exact settle price.
+    fn refuel_world_fixture() -> crate::config::RunConfig {
+        let mut cfg = vendor_world_fixture(false);
+        cfg.craft[0].fuel_mass = 0.0;
+        cfg.stations[0].initial_stock = [0, 40];
+        cfg.stations[0].initial_price_micros = [0, 5_000];
+        cfg.price_cfg = crate::config::PriceCfg {
+            base_micros: [0, 5_000],
+            cap: [0, 40],
+            slope_milli: 1800,
+            reprice_interval: 0,
+        };
+        cfg.refuel = crate::config::RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 };
+        cfg
+    }
+
+    #[test]
+    fn refuel_settles_quantized_with_four_legs_and_exact_event() {
+        use crate::world::World;
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        // need = floor((1e-9 - 0)/2.5e-10) = 4; afford = 12_000/5_000 = 2.
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+
+        let f = Resource::Fuel.index();
+        assert_eq!(world.stations.stock[0][f], 38, "stock leg: -= units");
+        assert_eq!(world.econ.consumed[f], 2, "sink leg: consumed[Fuel] += units");
+        assert_eq!(world.ships.credits_micros[0], 2_000, "wallet leg: debited units*price");
+        assert_eq!(world.corporations.treasury_micros[0], 10_000, "Port treasury credited");
+        assert_eq!(world.ships.fuel_mass[0], 5.0e-10, "tank leg: fuel += units*lot");
+        assert_eq!(world.ships.pending_refuel[0], None, "intent consumed");
+        let stock_now: i64 = world.stations.stock.iter().map(|s| s[f]).sum();
+        assert_eq!(
+            stock_now,
+            40 + world.econ.mined[f] - world.econ.consumed[f],
+            "resource identity holds"
+        );
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::Refueled {
+                    craft: c,
+                    units: 2,
+                    price_micros: 5_000,
+                    tank_before_permille: 0,
+                    tank_after_permille: 500,
+                    ..
+                } if c == craft
+            )),
+            "Refueled emitted with the exact quantized payload"
+        );
+        let _ = crate::hash::state_hash(&world);
+    }
+
+    #[test]
+    fn refuel_tank_permille_is_floor_rounded() {
+        use crate::world::World;
+        let mut cfg = refuel_world_fixture();
+        cfg.craft[0].fuel_mass = 5.555e-10;
+        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 5_000;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::Refueled {
+                    units: 1,
+                    tank_before_permille: 555,
+                    tank_after_permille: 805,
+                    ..
+                }
+            )),
+            "tank permilles are FLOOR-rounded against effective capacity"
+        );
+    }
+
+    /// Skip-arm postcondition: zero movement on every leg, intent consumed,
+    /// NO Refueled event.
+    fn assert_refuel_skipped(
+        world: &mut crate::world::World,
+        credits_before: i64,
+        fuel_before: f64,
+        stock_before: i64,
+        arm: &str,
+    ) {
+        let f = Resource::Fuel.index();
+        assert_eq!(world.ships.fuel_mass[0], fuel_before, "{arm}: tank untouched");
+        assert_eq!(world.ships.credits_micros[0], credits_before, "{arm}: zero wallet movement");
+        assert_eq!(world.stations.stock[0][f], stock_before, "{arm}: stock untouched");
+        assert_eq!(world.econ.consumed[f], 0, "{arm}: no sink leg");
+        assert_eq!(world.corporations.treasury_micros[0], 0, "{arm}: Port treasury untouched");
+        assert_eq!(world.ships.pending_refuel[0], None, "{arm}: intent consumed");
+        assert!(
+            !world
+                .events_mut()
+                .since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::Refueled { .. })),
+            "{arm}: NO Refueled event"
+        );
+    }
+
+    #[test]
+    fn refuel_skips_deterministically() {
+        use crate::math::Vec3;
+        use crate::world::World;
+        let f = Resource::Fuel.index();
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.pos[0] = Vec3::new(1.0, 0.0, 0.0);
+        world.ships.prev_pos[0] = world.ships.pos[0];
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 12_000, 0.0, 40, "undocked");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.stations.stock[0][f] = 0;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 12_000, 0.0, 0, "stock-0");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 4_999;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 4_999, 0.0, 40, "wallet-short");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.fuel_mass[0] = 1.0e-9;
+        world.ships.prev_fuel[0] = 1.0e-9;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 12_000, 1.0e-9, 40, "tank-full");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 12_000;
+        world.stations.price_micros[0][f] = 0;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 12_000, 0.0, 40, "price-0");
+
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        assert!(
+            world.corporations.ids.remove(0, 0).is_some(),
+            "test setup invalidates the live Port corp row after a valid reset"
+        );
+        world.ships.credits_micros[0] = 12_000;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_refuel_skipped(&mut world, 12_000, 0.0, 40, "stale-corp");
     }
 
     /// Capacity-gate fixture: two bodies (origin star hosts station A, a 0.3 AU

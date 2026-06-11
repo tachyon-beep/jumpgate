@@ -166,6 +166,19 @@ pub enum EventKind {
         hops: u8,
         rob_tick: Tick,
     },
+    // --- World-gets-big events (refuel rung §5/§7; hash-neutral like all events) ---
+    /// A craft bought propellant at a station dock (stage 1d2). `units` is the
+    /// integer lot count actually settled (`min(need, stock, afford)`),
+    /// `price_micros` is the per-unit price read from the dock's live price row,
+    /// and tank permilles are FLOOR-rounded against effective capacity.
+    Refueled {
+        craft: CraftId,
+        station: StationId,
+        units: i64,
+        price_micros: i64,
+        tank_before_permille: u32,
+        tank_after_permille: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

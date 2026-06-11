@@ -823,6 +823,23 @@ impl World {
             &mut self.events,
         );
 
+        // (1d2) refuel settle stage (world-gets-big §5): consume every Refuel
+        //       intent written by this tick's ingest or scripted refuel policy.
+        //       AFTER purchases, PRE-physics: same-tick burn draws from the
+        //       refilled tank. `prev_fuel` is untouched here; the stage-4
+        //       copy-forward keeps FuelEmpty edge detection pinned.
+        crate::economy::resolve_refuels(
+            &mut self.ships,
+            &mut self.stations,
+            &self.bodies,
+            &self.eph,
+            &mut self.corporations,
+            &mut self.econ,
+            &self.config.refuel,
+            next,
+            &mut self.events,
+        );
+
         // Snapshot body eph_index + mass to avoid borrowing self inside the closure.
         let body_indices: Vec<(usize, f64)> = (0..self.bodies.mass.len())
             .map(|i| (self.bodies.eph_index[i], self.bodies.mass[i]))
