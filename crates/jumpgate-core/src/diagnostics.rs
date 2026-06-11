@@ -46,6 +46,20 @@ pub const CYCLE_MIN_ALTERNATIONS: u32 = 3;
 /// sat far below the real boundary: BOTH labels passed it, so this clause
 /// never discriminated; the run-aggregate HHI was also measured and does NOT
 /// separate — raw 130–153 vs 123–143, normalized 548–714 vs 551–629.)
+///
+/// RE-FIT ATTEMPT 2026-06-12 (world-gets-big phase 3.2, dual-map labeled-run
+/// method after the haven-lurk-leak fix): NOT ADOPTED because the margin
+/// closed. Same fit seeds 7/23/42/99, held-out 11/31/57/101, 50k ticks, with
+/// baseline as the clumped label and the repaired hungry-roamer control
+/// (`pirate_max_reach_au=999 stay_milli=0 upkeep_per_tick=200
+/// grubstake_micros=2000000000 engage_radius_au=0.05`) as the equalized
+/// label. Measured HHI (milli):
+///   trophic  clumped 910..3715 vs equalized 1009..1206 -> CLOSED
+///   frontier clumped 4512..7646 vs equalized 2732..3311 -> OPEN
+///   pooled candidate threshold 2110 -> CLOSED (min clumped 910 <= max eq 3311)
+/// Therefore the literal remains 2204 and the closed fit is the deferred
+/// trigger for scenario-conditional thresholds or a revised instrument, not a
+/// constant move.
 pub const HHI_NORM_MIN_MILLI: u64 = 2204;
 
 /// Slack (in argmax-change counts) granted to the hot-route persistence
@@ -59,6 +73,14 @@ pub const HHI_NORM_MIN_MILLI: u64 = 2204;
 ///   TRUE-clumped:   +1, -1, -3, -6  (max +1, the seed-7 boundary)
 ///   TRUE-equalized: +6, +5          (min +5)
 /// Slack = margin midpoint (1 + 5) / 2 = 3.
+///
+/// RE-FIT ATTEMPT 2026-06-12 (same phase-3.2 run as above): NOT ADOPTED
+/// because the slack margin closed even where frontier HHI separated:
+///   trophic  clumped 1..6 vs equalized 3..4 -> CLOSED
+///   frontier clumped -1..7 vs equalized 4..10 -> CLOSED
+///   pooled candidate slack 5 -> CLOSED (max clumped 7 >= min eq 3)
+/// Therefore the literal remains 3 and the overlap is recorded for the same
+/// deferred scenario-conditional-threshold / revised-instrument trigger.
 pub const HOT_PERSISTENCE_SLACK_CHANGES: u32 = 3;
 
 /// Minimum final-window per-craft credit spread (milli of the largest
