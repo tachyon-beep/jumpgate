@@ -63,13 +63,25 @@ MEDIA_RE = re.compile(
     r"p90_lag=(?P<p90_lag>\d+) reading=(?P<reading>\w+)$"
 )
 
+# Instrument-format versioning (world-gets-big phase 0b): anchored lines grow
+# over time. Presence is the version gate; older banked outputs parse optional
+# lines as None.
+META_RE = re.compile(
+    r"^META seed=(?P<seed>\d+) scenario=(?P<scenario>\w+) "
+    r"stations=(?P<stations>\d+) haulers=(?P<haulers>\d+) "
+    r"pirates_initial=(?P<pirates_initial>\d+) "
+    r"station_radii_milli_au=\[(?P<radii>[0-9, ]*)\]$"
+)
+
+ANCHORED = {
+    "result": (True, RESULT_RE),
+    "media": (True, MEDIA_RE),
+    "meta": (False, META_RE),
+}
+
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli
 
 LAG_BINS = 10  # knowledge-front histogram bins over the pooled lag range
-
-# Hauler rows in `scenario_trophic` (mirrors scenario::NUM_HAULERS: haulers
-# are dense rows 0..12, pirates after) — the VoI panel's wallet slice.
-N_HAULERS = 12
 
 
 def parse_knobset(spec: str):
@@ -86,6 +98,22 @@ def parse_knobset(spec: str):
     return name, pairs
 
 
+def parse_stdout(text):
+    """Scan one run's stdout for anchored lines.
+
+    Required lines must be present in every format. Optional lines absent from
+    older output read None, which is the version gate for banked artifacts.
+    """
+    found = {key: None for key in ANCHORED}
+    for line in text.splitlines():
+        stripped = line.strip()
+        for key, (_required, rx) in ANCHORED.items():
+            m = rx.match(stripped)
+            if m:
+                found[key] = m.groupdict()
+    return found
+
+
 def run_one(args, name, knobs, seed, out_dir):
     jsonl = out_dir / f"{name}_s{seed}.jsonl"
     cmd = [
@@ -99,23 +127,16 @@ def run_one(args, name, knobs, seed, out_dir):
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
         raise SystemExit(f"run failed: {name} seed={seed}")
-    result = None
-    media = None
-    for line in proc.stdout.splitlines():
-        m = RESULT_RE.match(line.strip())
-        if m:
-            result = {k: v for k, v in m.groupdict().items()}
-        m = MEDIA_RE.match(line.strip())
-        if m:
-            media = {k: v for k, v in m.groupdict().items()}
-    if result is None:
-        sys.stderr.write(proc.stdout)
-        raise SystemExit(f"no RESULT line: {name} seed={seed}")
-    if media is None:
-        sys.stderr.write(proc.stdout)
-        raise SystemExit(f"no MEDIA line: {name} seed={seed}")
-    windows = [json.loads(l) for l in jsonl.read_text().splitlines() if l.strip()]
-    return result, media, windows
+    parsed = parse_stdout(proc.stdout)
+    for key, (required, _rx) in ANCHORED.items():
+        if required and parsed[key] is None:
+            sys.stderr.write(proc.stdout)
+            raise SystemExit(f"no {key.upper()} line: {name} seed={seed}")
+    rows = [json.loads(l) for l in jsonl.read_text().splitlines() if l.strip()]
+    # JSONL version gate: window rows carry "tick"; meta and future tail rows do
+    # not. Banked v1 files are all window rows, so this is a no-op there.
+    parsed["windows"] = [r for r in rows if "tick" in r]
+    return parsed
 
 
 def occupied_hhi_milli(w):
@@ -142,18 +163,28 @@ def alternations(series):
 def panel(name, runs):
     """Print the per-mechanic discriminator panels for one knob set."""
     print(f"\n=== knob set: {name} ({len(runs)} runs) ===")
-    verdicts = Counter(r["verdict"] for r, _, _ in runs)
+    m0 = runs[0]["meta"] if runs else None
+    if m0 is not None:
+        print(
+            f"map: scenario={m0['scenario']} stations={m0['stations']} "
+            f"haulers={m0['haulers']} pirates_initial={m0['pirates_initial']} "
+            f"radii_milli_au=[{m0['radii']}]"
+        )
+    else:
+        print("map: n/a (pre-FUEL instrument format)")
+
+    verdicts = Counter(run["result"]["verdict"] for run in runs)
     print("diagnosis-matrix rows (windows, not gates — PDR-0006):")
     for v, n in verdicts.most_common():
         print(f"  {v:<24} {n}")
 
     # Endurance window: FuelEmpty must be 0 on every run (spec section 6).
-    fuel = [int(r["fuel_empty"]) for r, _, _ in runs]
+    fuel = [int(run["result"]["fuel_empty"]) for run in runs]
     print(f"endurance: fuel_empty per run = {fuel} (window expects all 0)")
 
     # Endpoint-ambush trip-phase histogram (the owner's pre-registered
     # discriminator, spec section 2: bimodal at trip endpoints).
-    phases = [p for _, _, ws in runs for w in ws for p in w["engagement_phase_milli"]]
+    phases = [p for run in runs for w in run["windows"] for p in w["engagement_phase_milli"]]
     print(f"endpoint-ambush: {len(phases)} engagements; trip-phase histogram (0..1000):")
     if phases:
         bins = [0] * PHASE_BINS
@@ -169,14 +200,16 @@ def panel(name, runs):
     # Purchase-desync spread: windows between the first and last escort
     # purchase (near-zero spread = the synchronization death, spec section 9).
     spreads = []
-    for _, _, ws in runs:
+    for run in runs:
+        ws = run["windows"]
         buy_windows = [i for i, w in enumerate(ws) if w["purchases_escort"] > 0]
         if buy_windows:
             spreads.append(buy_windows[-1] - buy_windows[0])
     print(f"purchase-desync: escort-purchase window spread per run = {spreads}")
 
     # Yard circulation: treasury bounded? monotone? (broken-flow diagnostic).
-    for (r, _, ws) in runs[:1]:
+    for run in runs[:1]:
+        r, ws = run["result"], run["windows"]
         ts = [w["yard_treasury_micros"] for w in ws]
         mono = all(a <= b for a, b in zip(ts, ts[1:]))
         print(
@@ -192,7 +225,8 @@ def panel(name, runs):
     # equalized 1472-1490) plus the slacked hot-route persistence clause
     # (diagnostics.rs). Both raw reads stay printed as context beside the
     # window, not as the instrument.
-    for (r, _, ws) in runs:
+    for run in runs:
+        r, ws = run["result"], run["windows"]
         act = [w["active_pirates"] for w in ws]
         alts = alternations(act)
         hhis = [h for w in ws if (h := occupied_hhi_milli(w)) is not None]
@@ -222,17 +256,17 @@ def media_panel(runs):
     """Media propagation panels for one knob set (Task 8.3; spec section 9 —
     windows, never gates)."""
     # Reading distribution (the MEDIA line's classifier, per run).
-    readings = Counter(m["reading"] for _, m, _ in runs)
+    readings = Counter(run["media"]["reading"] for run in runs)
     print("media readings (windows, not gates — PDR-0006):")
     for v, n in readings.most_common():
         print(f"  {v:<24} {n}")
     print(
         "media escaped_milli per run = "
-        f"{[int(m['escaped_milli']) for _, m, _ in runs]}"
+        f"{[int(run['media']['escaped_milli']) for run in runs]}"
     )
 
     # Knowledge front: pooled craft first-hearing lag histogram (raw ticks).
-    lags = [l for _, _, ws in runs for w in ws for l in w["heard_lag_ticks"]]
+    lags = [l for run in runs for w in run["windows"] for l in w["heard_lag_ticks"]]
     print(f"knowledge front: {len(lags)} craft hearings; lag histogram (ticks):")
     if lags:
         hi = max(lags) + 1
@@ -247,7 +281,8 @@ def media_panel(runs):
 
     # News geography (hub/backwater): run-summed held-alert windows per
     # station, ratio max/min over stations that saw any dock traffic.
-    for (r, _, ws) in runs:
+    for run in runs:
+        r, ws = run["result"], run["windows"]
         if not ws or not ws[0]["per_station_alerts"]:
             continue
         n_st = len(ws[0]["per_station_alerts"])
@@ -270,6 +305,17 @@ def knobset_is_media_on(knobs):
     return any(k == "station_gossip_slots" and int(v) > 0 for k, v in knobs)
 
 
+def hauler_rows(run):
+    """Hauler-row count for wallet slices.
+
+    v2 reads META haulers=, killing the module-level mirror. v1 banked output
+    keeps the old scenario_trophic count behind the version gate.
+    """
+    if run["meta"] is not None:
+        return int(run["meta"]["haulers"])
+    return 12
+
+
 def voi_line(all_runs, all_knobs):
     """Value-of-information line (spec section 9): media-on vs media-off arms
     in the SAME invocation — median final hauler-row credits per arm.
@@ -283,9 +329,10 @@ def voi_line(all_runs, all_knobs):
     def median_final_hauler_credits(names):
         pool = []
         for n in names:
-            for _, _, ws in all_runs[n]:
+            for run in all_runs[n]:
+                ws = run["windows"]
                 if ws:
-                    pool.extend(ws[-1]["per_craft_credits"][:N_HAULERS])
+                    pool.extend(ws[-1]["per_craft_credits"][: hauler_rows(run)])
         pool.sort()
         return pool[(len(pool) - 1) // 2] if pool else None
 
@@ -333,12 +380,12 @@ def main():
         name, knobs = parse_knobset(spec)
         runs = []
         for seed in args.seeds:
-            result, media, windows = run_one(args, name, knobs, seed, out_dir)
-            runs.append((result, media, windows))
+            run = run_one(args, name, knobs, seed, out_dir)
+            runs.append(run)
             print(
-                f"  ran {name} seed={seed}: verdict={result['verdict']} "
-                f"robs={result['robs']} fuel_empty={result['fuel_empty']} "
-                f"media={media['reading']}"
+                f"  ran {name} seed={seed}: verdict={run['result']['verdict']} "
+                f"robs={run['result']['robs']} fuel_empty={run['result']['fuel_empty']} "
+                f"media={run['media']['reading']}"
             )
         all_runs[name] = runs
         all_knobs[name] = knobs
@@ -353,7 +400,9 @@ def main():
     # RiskEqualized; if it does not, fix the INSTRUMENT before tuning
     # anything).
     if "control" in all_runs:
-        n = sum(1 for r, _, _ in all_runs["control"] if r["verdict"] == "RiskEqualized")
+        n = sum(
+            1 for run in all_runs["control"] if run["result"]["verdict"] == "RiskEqualized"
+        )
         total = len(all_runs["control"])
         print(
             f"\npositive control (hungry roamers, reach=inf): {n}/{total} runs read "

@@ -210,7 +210,10 @@ def main():
     for e in events:
         if e["e"] == "heard":
             heard_by_alert.setdefault(e["alert"], []).append(e)
-    windows = load(args.windows) if args.windows else None
+    # Instrument-format gate: runner --jsonl now may include meta/tail rows.
+    # Window rows are exactly the rows with "tick"; banked older files pass
+    # through unchanged.
+    windows = [w for w in load(args.windows) if "tick" in w] if args.windows else None
 
     print(
         "media_log (PDR-0006: windows, not gates) — "

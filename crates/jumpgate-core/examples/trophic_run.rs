@@ -28,8 +28,8 @@ use std::process::ExitCode;
 
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
-    Command, CraftId, EventKind, GossipNode, RunConfig, StateView, Tick, World, apply_knob,
-    scenario_trophic, state_hash,
+    Command, CraftId, CraftRole, EventKind, GossipNode, RunConfig, StateView, Tick, World,
+    apply_knob, scenario_trophic, state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -78,9 +78,12 @@ fn parse_args() -> Result<Args, String> {
             "--jsonl" => args.jsonl = Some(it.next().ok_or("--jsonl needs a path")?),
             "--chronicle" => args.chronicle = true,
             "--chronicle-gossip-min-micros" => {
-                let v = it.next().ok_or("--chronicle-gossip-min-micros needs a value")?;
-                args.chronicle_gossip_min_micros =
-                    v.parse().map_err(|e| format!("--chronicle-gossip-min-micros: {e}"))?;
+                let v = it
+                    .next()
+                    .ok_or("--chronicle-gossip-min-micros needs a value")?;
+                args.chronicle_gossip_min_micros = v
+                    .parse()
+                    .map_err(|e| format!("--chronicle-gossip-min-micros: {e}"))?;
             }
             "--replay-check" => args.replay_check = true,
             "--assert-no-fuel-empty" => args.assert_no_fuel_empty = true,
@@ -100,26 +103,70 @@ fn parse_args() -> Result<Args, String> {
     Ok(args)
 }
 
+/// Config-derived facts for the META anchored line (world-gets-big phase 0b).
+/// Computed from the resolved RunConfig before reset consumes it. `scenario`
+/// is hardcoded until the phase-2 `--scenario` flag exists.
+struct MetaFacts {
+    scenario: &'static str,
+    stations: usize,
+    haulers: usize,
+    pirates_initial: usize,
+    station_radii_milli_au: Vec<u32>,
+}
+
 /// `simulate`'s product: per-window samples, the sampled `(tick, state_hash)`
-/// stream, and the final world (chronicle + event counts).
-type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World);
+/// stream, the final world (chronicle + event counts), and the META facts.
+type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts);
 
 /// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
 /// the replay-check's second run shares nothing but the recipe.
-fn simulate(
-    args: &Args,
-    mut jsonl: Option<&mut BufWriter<File>>,
-) -> Result<RunProduct, String> {
+fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunProduct, String> {
     let mut cfg: RunConfig = scenario_trophic(args.seed);
     for (k, v) in &args.sets {
         apply_knob(&mut cfg, k, v)?;
     }
+    let meta = MetaFacts {
+        scenario: "trophic",
+        stations: cfg.stations.len(),
+        haulers: cfg
+            .craft
+            .iter()
+            .filter(|c| c.role != CraftRole::Pirate)
+            .count(),
+        pirates_initial: cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Pirate)
+            .count(),
+        station_radii_milli_au: cfg
+            .stations
+            .iter()
+            .map(|s| diagnostics::permille_floor(cfg.bodies[s.body_index].elements.a, 1.0))
+            .collect(),
+    };
     let (mut world, _config_hash) =
         World::reset(cfg).map_err(|e| format!("scenario_trophic must resolve: {e}"))?;
     let mut cmds: Vec<Command> = Vec::new();
     let mut samples = Vec::new();
     let mut hashes = Vec::new();
     let mut window_start = Tick(0);
+    if let Some(w) = jsonl.as_mut() {
+        // META row first. It has no "tick" key, so window consumers can gate on
+        // row shape and older JSONL stays parseable.
+        writeln!(
+            w,
+            "{}",
+            serde_json::json!({
+                "meta_seed": args.seed,
+                "meta_scenario": meta.scenario,
+                "meta_stations": meta.stations,
+                "meta_haulers": meta.haulers,
+                "meta_pirates_initial": meta.pirates_initial,
+                "meta_station_radii_milli_au": meta.station_radii_milli_au,
+            })
+        )
+        .expect("jsonl write");
+    }
     for _ in 0..args.ticks {
         world.step(&mut cmds);
         let t = world.tick().0;
@@ -135,7 +182,7 @@ fn simulate(
             samples.push(s);
         }
     }
-    Ok((samples, hashes, world))
+    Ok((samples, hashes, world, meta))
 }
 
 /// Serialize one window sample as a JSONL line (field-for-field).
@@ -257,7 +304,10 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         // Craft hearings thread into the carrier's life arc; station hearings
         // feed the gossip log/panels (a station-thread chronicle is a named
         // deferral, media rung spec §8). AlertBorn shadows Robbed: no arm.
-        EventKind::GossipHeard { carrier: GossipNode::Craft(c), .. } => Some(c),
+        EventKind::GossipHeard {
+            carrier: GossipNode::Craft(c),
+            ..
+        } => Some(c),
         EventKind::GossipHeard { .. } | EventKind::AlertBorn { .. } => None,
         _ => None,
     }
@@ -288,7 +338,10 @@ fn print_chronicle(world: &World, gossip_min_micros: i64) {
             if chronicle_subject(&e.kind) != Some(id) {
                 continue;
             }
-            if let EventKind::GossipHeard { claimed_value_micros, .. } = e.kind
+            if let EventKind::GossipHeard {
+                claimed_value_micros,
+                ..
+            } = e.kind
                 && claimed_value_micros < gossip_min_micros
             {
                 continue; // below the watchability threshold (printer-side only)
@@ -315,10 +368,11 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut jsonl_writer = args.jsonl.as_ref().map(|p| {
-        BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}")))
-    });
-    let (samples, hashes, world) = match simulate(&args, jsonl_writer.as_mut()) {
+    let mut jsonl_writer = args
+        .jsonl
+        .as_ref()
+        .map(|p| BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}"))));
+    let (samples, hashes, world, meta) = match simulate(&args, jsonl_writer.as_mut()) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("trophic_run: {e}");
@@ -379,6 +433,18 @@ fn main() -> ExitCode {
         .iter()
         .map(|s| u64::from(s.purchases_hull) + u64::from(s.purchases_escort))
         .sum();
+    // The META anchored line (world-gets-big phase 0b): population and map facts
+    // come from the run, not from mirrored Python constants.
+    println!(
+        "META seed={} scenario={} stations={} haulers={} pirates_initial={} \
+         station_radii_milli_au={:?}",
+        args.seed,
+        meta.scenario,
+        meta.stations,
+        meta.haulers,
+        meta.pirates_initial,
+        meta.station_radii_milli_au,
+    );
     // Machine-readable summary line (the sweep aggregator parses this).
     println!(
         "RESULT seed={} ticks={} verdict={:?} cycled={} risk_heterogeneous={} \
@@ -401,12 +467,21 @@ fn main() -> ExitCode {
     // all windows' Craft-carrier first-hearings; integer lower-median and
     // p90 with a 0 sentinel when no craft ever heard news.
     let born_total: u64 = samples.iter().map(|s| u64::from(s.gossip_born)).sum();
-    let mut lags: Vec<u32> =
-        samples.iter().flat_map(|s| s.heard_lag_ticks.iter().copied()).collect();
+    let mut lags: Vec<u32> = samples
+        .iter()
+        .flat_map(|s| s.heard_lag_ticks.iter().copied())
+        .collect();
     lags.sort_unstable();
-    let median_lag = if lags.is_empty() { 0 } else { lags[(lags.len() - 1) / 2] };
-    let p90_lag =
-        if lags.is_empty() { 0 } else { lags[(lags.len() * 9 / 10).min(lags.len() - 1)] };
+    let median_lag = if lags.is_empty() {
+        0
+    } else {
+        lags[(lags.len() - 1) / 2]
+    };
+    let p90_lag = if lags.is_empty() {
+        0
+    } else {
+        lags[(lags.len() * 9 / 10).min(lags.len() - 1)]
+    };
     println!(
         "MEDIA seed={} born={} escaped_milli={} median_lag={} p90_lag={} reading={:?}",
         args.seed,
@@ -450,7 +525,7 @@ fn main() -> ExitCode {
     }
 
     if args.replay_check {
-        let (_, hashes2, _) = match simulate(&args, None) {
+        let (_, hashes2, _, _) = match simulate(&args, None) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("trophic_run: replay arm: {e}");
