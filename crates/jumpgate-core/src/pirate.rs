@@ -581,6 +581,15 @@ pub fn run_pirate_brains(
             }
             _ => None,
         };
+        // TROPHIC-C3 (spec §6, phase 0a): the haven is NEVER a lurk — not
+        // even by nav inheritance. A post-refuge pirate still
+        // Seeking{Body(hideout)} would otherwise ADOPT the haven station
+        // here, bypassing the exclusion that guards only the fresh and
+        // relocation draws ("a pirate does not rob where it fences").
+        // Treat a haven nav_lurk as None: the arm below performs the fresh
+        // reach-bounded draw from the pirate's current position (marooned
+        // breakout when nothing else is in reach).
+        let nav_lurk = nav_lurk.filter(|&s| Some(s) != haven_station);
         let mut lurk = match nav_lurk {
             Some(s) => s,
             None => {
@@ -1685,6 +1694,7 @@ mod tests {
             let mut c = pirate_world_cfg();
             c.craft = vec![pirate_init(Vec3::ZERO)]; // lone pirate
             c.contracts = vec![];
+            c.trophic.hideout_body_index = 99; // isolate loiter geometry from haven exclusion
             World::reset(c).expect("resolvable cfg").0
         };
         let body0 = |w: &World| {
@@ -1788,6 +1798,110 @@ mod tests {
             }
         }
         assert!(moved, "a hungry pirate roams (relocation re-enabled by hunger)");
+    }
+
+    #[test]
+    fn post_refuge_pirate_never_adopts_the_haven_lurk() {
+        // Spec §6 (TROPHIC-C3, phase 0a): a post-refuge pirate whose nav
+        // still resolves the hideout BODY must not inherit the HAVEN station
+        // as its hunting lurk — the nav-derived lurk path must respect the
+        // same exclusion that guards fresh draws ("a pirate does not rob
+        // where it fences"). Pre-fix this is the rob-where-you-fence
+        // attractor inside every banked baseline.
+        fn cfg() -> RunConfig {
+            let mut cfg = pirate_world_cfg();
+            cfg.contracts = vec![];
+            cfg.craft = vec![pirate_init(Vec3::ZERO)]; // lone pirate, row 0
+            // Body 0 (origin) hosts station 0 -> the haven is station 0.
+            cfg.trophic.hideout_body_index = 0;
+            cfg.trophic.upkeep_per_tick = 0; // hold the FED state constant
+            cfg
+        }
+        let c = cfg();
+        let grubstake = c.trophic.grubstake_micros;
+        let (mut world, _) = World::reset(c).expect("resolvable cfg");
+        let hideout = world
+            .bodies
+            .ids
+            .id_at(0)
+            .map(|(slot, generation)| BodyId { slot, generation })
+            .unwrap();
+        // Construct the post-refuge state: refuge EXPIRED, nav still routed
+        // at the hideout body (exactly what the lie-low arm leaves behind),
+        // FED (food >= grubstake) so the hungry-relocation arm never runs —
+        // the nav-adoption path is the ONLY draw under test.
+        {
+            let p = world.ships.pirate[0].as_mut().unwrap();
+            p.lie_low_until = Tick(0);
+            p.food_micros = grubstake;
+        }
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Entity(EntityRef::Body(hideout)),
+            dv_remaining: 1.0,
+        };
+        let lurk_body = |w: &World| match w.ships.nav[0] {
+            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => Some(b),
+            _ => None,
+        };
+        for _ in 0..8 {
+            world.step(&mut Vec::new());
+            assert_ne!(
+                lurk_body(&world),
+                Some(hideout),
+                "post-refuge pirate adopted the HAVEN as its lurk \
+                 (the rob-where-you-fence leak)"
+            );
+        }
+    }
+
+    #[test]
+    fn post_refuge_redraw_excludes_haven_even_when_marooned() {
+        // Spec §6: the post-refuge redraw goes through relocate_lurk_target
+        // with the haven EXCLUDED — when the haven is the only station in
+        // reach, the draw falls through to the marooned BREAKOUT (uniform
+        // over all huntable stations) rather than back onto the haven. This
+        // is the spec's stated cost, owned: on today's band most post-refuge
+        // draws become map-wide breakouts (console re-judgment scheduled).
+        let mut cfg = pirate_world_cfg();
+        cfg.contracts = vec![];
+        cfg.craft = vec![pirate_init(Vec3::ZERO)]; // lone pirate, row 0
+        cfg.trophic.hideout_body_index = 0; // haven = station 0 at the origin
+        cfg.trophic.upkeep_per_tick = 0; // hold the FED state constant
+        cfg.bodies[1].elements.a = 5.0; // station 1 beyond reach (0.6 AU)
+        let grubstake = cfg.trophic.grubstake_micros;
+        let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
+        let hideout = world
+            .bodies
+            .ids
+            .id_at(0)
+            .map(|(slot, generation)| BodyId { slot, generation })
+            .unwrap();
+        let far_body = world
+            .bodies
+            .ids
+            .id_at(1)
+            .map(|(slot, generation)| BodyId { slot, generation })
+            .unwrap();
+        {
+            let p = world.ships.pirate[0].as_mut().unwrap();
+            p.lie_low_until = Tick(0);
+            p.food_micros = grubstake;
+        }
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Entity(EntityRef::Body(hideout)),
+            dv_remaining: 1.0,
+        };
+        world.step(&mut Vec::new());
+        assert!(
+            matches!(
+                world.ships.nav[0],
+                NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. }
+                    if b == far_body
+            ),
+            "marooned post-refuge pirate must break out to the non-haven \
+             station, got {:?}",
+            world.ships.nav[0]
+        );
     }
 
     #[test]
