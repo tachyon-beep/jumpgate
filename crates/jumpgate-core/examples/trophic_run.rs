@@ -29,7 +29,7 @@ use std::process::ExitCode;
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
     Command, CraftId, CraftRole, EventKind, GossipNode, RunConfig, StateView, Tick, World,
-    apply_knob, scenario_trophic, state_hash,
+    apply_knob, scenario_frontier, scenario_trophic, state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -38,6 +38,9 @@ const HASH_SAMPLE_EVERY: u64 = 1000;
 struct Args {
     seed: u64,
     ticks: u64,
+    /// Scenario factory: "trophic" (default, the banked control world) or
+    /// "frontier" (WGB §2). Unknown names are loud errors.
+    scenario: String,
     jsonl: Option<String>,
     chronicle: bool,
     /// Printer-side filter (media rung spec §8): skip `GossipHeard` chronicle
@@ -56,6 +59,7 @@ fn parse_args() -> Result<Args, String> {
     let mut args = Args {
         seed: 7,
         ticks: 50_000,
+        scenario: "trophic".to_string(),
         jsonl: None,
         chronicle: false,
         chronicle_gossip_min_micros: 0,
@@ -74,6 +78,9 @@ fn parse_args() -> Result<Args, String> {
             "--ticks" => {
                 let v = it.next().ok_or("--ticks needs a value")?;
                 args.ticks = v.parse().map_err(|e| format!("--ticks: {e}"))?;
+            }
+            "--scenario" => {
+                args.scenario = it.next().ok_or("--scenario needs a value")?;
             }
             "--jsonl" => args.jsonl = Some(it.next().ok_or("--jsonl needs a path")?),
             "--chronicle" => args.chronicle = true,
@@ -121,12 +128,24 @@ type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts);
 /// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
 /// the replay-check's second run shares nothing but the recipe.
 fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunProduct, String> {
-    let mut cfg: RunConfig = scenario_trophic(args.seed);
+    let (scenario_name, mut cfg): (&'static str, RunConfig) = match args.scenario.as_str() {
+        "trophic" => ("trophic", scenario_trophic(args.seed)),
+        "frontier" => ("frontier", scenario_frontier(args.seed)),
+        other => return Err(format!("--scenario {other}: unknown scenario (trophic|frontier)")),
+    };
     for (k, v) in &args.sets {
         apply_knob(&mut cfg, k, v)?;
     }
+    // WGB §2 runner guard: past-window ephemeris lookups silently clamp to
+    // the last sample. Checked after knob overrides, against the actual cfg.
+    if args.ticks > cfg.ephemeris_window {
+        return Err(format!(
+            "--ticks {} > ephemeris_window {}: past-window orbits silently freeze; lower --ticks or raise the window",
+            args.ticks, cfg.ephemeris_window
+        ));
+    }
     let meta = MetaFacts {
-        scenario: "trophic",
+        scenario: scenario_name,
         stations: cfg.stations.len(),
         haulers: cfg
             .craft
@@ -145,7 +164,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .collect(),
     };
     let (mut world, _config_hash) =
-        World::reset(cfg).map_err(|e| format!("scenario_trophic must resolve: {e}"))?;
+        World::reset(cfg).map_err(|e| format!("scenario_{} must resolve: {e}", args.scenario))?;
     let mut cmds: Vec<Command> = Vec::new();
     let mut samples = Vec::new();
     let mut hashes = Vec::new();
