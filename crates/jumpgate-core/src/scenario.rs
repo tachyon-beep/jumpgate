@@ -240,6 +240,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         ransom_cap_micros: 6_000_000,
         starve_lie_low_ticks: 4_000,
         hideout_body_index: 6, // outermost body (1.4 AU)
+        pirate_max_reach_au: 0.6, // EXPLICIT (WGB §6) — was silent ..default(); unchanged
         hauler_belief_scoring: true,
         hauler_buy_policy: BuyPolicy::EscortFirst,
         ..TrophicCfg::default()
@@ -470,6 +471,9 @@ mod tests {
         assert!(cfg.trophic.hauler_belief_scoring, "belief scoring ON");
         assert_eq!(cfg.trophic.hauler_buy_policy, BuyPolicy::EscortFirst);
         assert!(cfg.trophic.engage_radius_au > 0.0, "trophic machinery LIVE");
+        // Reach is EXPLICIT in the factory (WGB §6) — the 0.6 the band was
+        // judged at, no longer a silent ..TrophicCfg::default() inheritance.
+        assert_eq!(cfg.trophic.pirate_max_reach_au, 0.6);
         assert_eq!(
             cfg.refuel.lot_mass, 0.0,
             "the trophic-inertness gate: the refuel verb stays OFF on the band"

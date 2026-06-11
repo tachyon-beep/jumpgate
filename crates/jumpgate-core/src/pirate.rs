@@ -442,9 +442,10 @@ fn rel_bearing_millirad(hauler_pos: Vec3, hauler_vel: Vec3, pirate_pos: Vec3) ->
 
 /// Relocation target draw (spec §5): uniform among stations within
 /// `max_reach_au` of `anchor` (the PRIMARY locality lever — 1-2 neighbors,
-/// never the whole map); none in reach -> the NEAREST station (ties to the
-/// lowest dense row); `None` only when there are no stations at all (spec §8
-/// totality).
+/// never the whole map); none in reach -> a MAROONED breakout: ONE committal
+/// flight to a uniform draw over ALL huntable stations (the hideout-ghetto
+/// lesson — see the body comment below); `None` only when there are no
+/// stations at all (spec §8 totality).
 ///
 /// **DUMB BY CONSTRUCTION** (the interdiction-equalizer lesson): the signature
 /// admits GEOMETRY ONLY — no contracts, no stock, no traffic, no evidence — so
