@@ -451,6 +451,10 @@ mod tests {
         assert!(cfg.trophic.hauler_belief_scoring, "belief scoring ON");
         assert_eq!(cfg.trophic.hauler_buy_policy, BuyPolicy::EscortFirst);
         assert!(cfg.trophic.engage_radius_au > 0.0, "trophic machinery LIVE");
+        assert_eq!(
+            cfg.refuel.lot_mass, 0.0,
+            "the trophic-inertness gate: the refuel verb stays OFF on the band"
+        );
 
         // Hideout = the OUTERMOST body.
         let outermost = 1 + axes

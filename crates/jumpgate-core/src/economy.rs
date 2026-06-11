@@ -2229,6 +2229,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn refuel_default_is_inert_and_consumes_stray_intents() {
+        use crate::world::World;
+        let (mut world, _h) = World::reset(vendor_world_fixture(false)).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 1_000_000;
+        world.ships.pending_refuel[0] = Some(());
+        world.step(&mut Vec::new());
+        assert_eq!(world.ships.pending_refuel[0], None, "stray intent consumed on lot-0 world");
+        assert_eq!(world.ships.fuel_mass[0], 1e-9, "tank untouched");
+        assert_eq!(world.ships.credits_micros[0], 1_000_000, "wallet untouched");
+        assert_eq!(world.corporations.treasury_micros[0], 0, "no treasury movement");
+        assert!(
+            !world
+                .events_mut()
+                .since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::Refueled { .. })),
+            "no Refueled event on a lot-0 world"
+        );
+        let _ = crate::hash::state_hash(&world);
+    }
+
     /// Capacity-gate fixture: two bodies (origin star hosts station A, a 0.3 AU
     /// body hosts station B), one craft docked at A, one funded corp, ONE seeded
     /// qty-10 Fuel contract A->B. `stagger_period == 0` keeps scripted ASSIGN off
