@@ -60,6 +60,25 @@ pub const HOT_PERSISTENCE_SLACK_CHANGES: u32 = 3;
 /// magnitude) for "outcomes disperse".
 pub const OUTCOME_DISPERSION_MIN_MILLI: u64 = 200;
 
+/// FLOOR-rounded fixed-point read `floor(num / den * 1000)`, clamped to `u32`.
+/// This is the one f64-to-integer seam for fuel instruments and META radii in
+/// world-gets-big phase 0b. Non-finite inputs, non-positive denominators, and
+/// negative results read the 0 sentinel. Diagnostics-only: never behavior input,
+/// never hashed.
+pub fn permille_floor(num: f64, den: f64) -> u32 {
+    if den <= 0.0 || !num.is_finite() {
+        return 0;
+    }
+    let v = (num / den * 1000.0).floor();
+    if v <= 0.0 {
+        0
+    } else if v >= u32::MAX as f64 {
+        u32::MAX
+    } else {
+        v as u32
+    }
+}
+
 /// One per-window integer reading of the trophic field (spec §9). All fields
 /// are integers: samples are hash-adjacent evidence, never float analytics.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -891,6 +910,21 @@ mod tests {
         assert!(s.heard_lag_ticks.is_empty());
         assert!(s.heard_hops.is_empty());
         assert_eq!(s.alerts_evicted_cum, 0);
+    }
+
+    /// Phase-0b FLOOR pin (world-gets-big spec §7/§8): no f64-to-fixed-point
+    /// precedent existed in-tree. This test pins the form for every fuel
+    /// instrument and the phase-1 `tank_before_permille`. FLOOR, never round.
+    #[test]
+    fn permille_floor_is_floor_never_round() {
+        assert_eq!(permille_floor(0.35, 1.0), 350, "milli-AU radius read");
+        assert_eq!(permille_floor(1.999, 1000.0), 1, "FLOOR, never round-half-up");
+        assert_eq!(permille_floor(0.9999999, 1.0), 999, "sub-unit stays below 1000");
+        assert_eq!(permille_floor(1.0, 1.0), 1000, "exact full tank reads 1000");
+        assert_eq!(permille_floor(1.0, 0.0), 0, "zero denominator reads the 0 sentinel");
+        assert_eq!(permille_floor(1.0, -1.0), 0, "negative denominator reads 0");
+        assert_eq!(permille_floor(-1.0, 1.0), 0, "negative numerator clamps to 0");
+        assert_eq!(permille_floor(f64::NAN, 1.0), 0, "non-finite reads the 0 sentinel");
     }
 
     // ---- media lab bench (Task 8): labeled synthetics, one per
