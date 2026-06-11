@@ -505,6 +505,10 @@ fn seek_body(ships: &mut CraftStore, row: usize, body: BodyId) {
 /// * **Loiter**: re-issue the lurk seek when drift > `engage_radius / 2` —
 ///   strictly inside the engagement envelope, so a settled lurker is
 ///   geometrically guaranteed to cover a body-docked hauler.
+/// * **LurkMoved** (spec §7, W6): emitted wherever the lurk's station row
+///   changes — the fresh post-refuge draw and the hungry relocation — never
+///   on a drift re-seek to the same station. Hash-neutral (events are not
+///   folded; no extra RNG draws on any path).
 ///
 /// Deliberately NO value-seeking target scoring: dumbness + locality +
 /// persistence is the antidote, not a placeholder (spec §5). Scripted stage:
@@ -520,6 +524,7 @@ pub fn run_pirate_brains(
     trophic: &TrophicCfg,
     rng: &mut RngStreams,
     tick: Tick,
+    events: &mut EventStream,
 ) {
     if trophic.engage_radius_au <= 0.0 || stations.ids.is_empty() {
         return;
@@ -604,7 +609,22 @@ pub fn run_pirate_brains(
                     haven_station,
                     u,
                 ) {
-                    Some(s) => s,
+                    Some(s) => {
+                        // Post-refuge re-entry IS a move (there was no lurk).
+                        // Breakout judged against this draw's anchor: the
+                        // pirate's own position.
+                        let breakout =
+                            station_pos[s].sub(ships.pos[row]).length() > trophic.pirate_max_reach_au;
+                        events.emit(Event {
+                            tick,
+                            kind: EventKind::LurkMoved {
+                                pirate: ships.ids_at(row),
+                                to_station: s as u32,
+                                breakout,
+                            },
+                        });
+                        s
+                    }
                     None => continue,
                 }
             }
@@ -633,7 +653,19 @@ pub fn run_pirate_brains(
                     trophic.pirate_max_reach_au,
                     haven_station,
                     u,
-                ) {
+                ) && s != lurk {
+                    // Breakout judged against this draw's anchor: the old
+                    // lurk station (matching-anchor rule, spec §7).
+                    let breakout =
+                        station_pos[s].sub(station_pos[lurk]).length() > trophic.pirate_max_reach_au;
+                    events.emit(Event {
+                        tick,
+                        kind: EventKind::LurkMoved {
+                            pirate: ships.ids_at(row),
+                            to_station: s as u32,
+                            breakout,
+                        },
+                    });
                     lurk = s;
                 }
             }
@@ -721,7 +753,7 @@ mod tests {
         BaseSpec, BodyInit, ContractInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
         OrbitalElements, PriceCfg, ProducerInit, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
     };
-    use crate::contract::{Command, StateView};
+    use crate::contract::{Command, EventKind, StateView};
     use crate::economy::{Recipe, Resource};
     use crate::ids::{BodyId, ContractId};
     use crate::stores::{NavState, PirateState};
@@ -1802,6 +1834,71 @@ mod tests {
             }
         }
         assert!(moved, "a hungry pirate roams (relocation re-enabled by hunger)");
+    }
+
+    #[test]
+    fn lurk_moves_emit_lurk_moved_with_breakout_flag() {
+        // World-gets-big spec §7 / W6: LurkMoved emits ONLY when the lurk's
+        // station row actually changes (a drift re-seek to the SAME station
+        // is not a move); breakout is judged against the draw's own anchor.
+        fn lurk_moved_events(world: &World) -> Vec<(u32, bool)> {
+            world
+                .recent_events(Tick(0))
+                .iter()
+                .filter_map(|e| match e.kind {
+                    EventKind::LurkMoved { to_station, breakout, .. } => {
+                        Some((to_station, breakout))
+                    }
+                    _ => None,
+                })
+                .collect()
+        }
+        fn cfg() -> RunConfig {
+            let mut cfg = pirate_world_cfg();
+            cfg.contracts = vec![];
+            cfg.craft = vec![pirate_init(Vec3::ZERO)];
+            cfg.trophic.relocate_period = 1;
+            cfg.trophic.stay_milli = 0;
+            cfg.trophic.upkeep_per_tick = 0;
+            cfg.trophic.pirate_max_reach_au = 10.0;
+            // Out-of-range hideout: no haven exclusion (spec §8 totality).
+            cfg.trophic.hideout_body_index = 99;
+            cfg
+        }
+        // FED pirate: camps — zero LurkMoved over the probe window.
+        let c = cfg();
+        let grubstake = c.trophic.grubstake_micros;
+        let (mut world, _) = World::reset(c).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().food_micros = grubstake;
+        for _ in 0..64 {
+            world.step(&mut Vec::new());
+        }
+        assert!(lurk_moved_events(&world).is_empty(), "a fed pirate's camp is not a move");
+        // HUNGRY pirate, both stations in reach: relocations emit, and every
+        // landing is in reach of the OLD lurk (0.3 AU < 10) — breakout=false.
+        let (mut world, _) = World::reset(cfg()).expect("resolvable cfg");
+        world.ships.pirate[0].as_mut().unwrap().food_micros = 1;
+        for _ in 0..64 {
+            world.step(&mut Vec::new());
+        }
+        let moves = lurk_moved_events(&world);
+        assert!(!moves.is_empty(), "a hungry pirate's redraws emit LurkMoved");
+        assert!(moves.iter().all(|&(_, b)| !b), "in-reach hops are not breakouts");
+        // POST-REFUGE fresh draw with NOTHING in reach: one marooned breakout
+        // (anchor = the pirate's own position, ~5 AU from both stations).
+        let mut c = cfg();
+        c.trophic.pirate_max_reach_au = 1.0e-6;
+        c.craft = vec![pirate_init(Vec3::new(5.0, 0.0, 0.0))];
+        let grubstake = c.trophic.grubstake_micros;
+        let (mut world, _) = World::reset(c).expect("resolvable cfg");
+        // Fed: suppresses the hungry-relocation arm, isolating the fresh draw.
+        world.ships.pirate[0].as_mut().unwrap().food_micros = grubstake;
+        // Post-refuge shape: nav holds no station body.
+        world.ships.nav[0] = NavState::Idle;
+        world.step(&mut Vec::new());
+        let moves = lurk_moved_events(&world);
+        assert_eq!(moves.len(), 1, "one fresh post-refuge draw -> one LurkMoved");
+        assert!(moves[0].1, "nothing in reach -> the landing is a breakout");
     }
 
     #[test]

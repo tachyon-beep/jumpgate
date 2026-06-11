@@ -787,6 +787,7 @@ impl World {
                 &self.config.trophic,
                 &mut self.rng,
                 next,
+                &mut self.events,
             );
         }
 

@@ -391,7 +391,8 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::HaulerKilled { pirate, .. }
         | EventKind::PirateLieLow { pirate, .. }
         | EventKind::PirateLeft { pirate }
-        | EventKind::PirateSpawned { pirate } => Some(pirate),
+        | EventKind::PirateSpawned { pirate }
+        | EventKind::LurkMoved { pirate, .. } => Some(pirate),
         // Craft hearings thread into the carrier's life arc; station hearings
         // feed the gossip log/panels (a station-thread chronicle is a named
         // deferral, media rung spec §8). AlertBorn shadows Robbed: no arm.

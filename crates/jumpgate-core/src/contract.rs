@@ -190,6 +190,14 @@ pub enum EventKind {
         escrow_refunded_micros: i64,
         cargo_lost: u32,
     },
+    /// A pirate's lurk moved to a new station (world-gets-big spec §7; backs
+    /// W6 breakout share + landing distribution). Emitted in stage 1c2 at the
+    /// two lurk-write sites ONLY when the station row changes (a drift
+    /// re-seek to the SAME station is not a move). `to_station` is the dense
+    /// station row. `breakout` = the landing lies beyond `pirate_max_reach_au`
+    /// of the draw's own anchor (fresh post-refuge draw anchors at the
+    /// pirate's position; hungry relocation anchors at the old lurk station).
+    LurkMoved { pirate: CraftId, to_station: u32, breakout: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
