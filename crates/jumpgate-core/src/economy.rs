@@ -1103,9 +1103,11 @@ pub fn resolve_deliveries(
 /// Contract-failure stage on propellant exhaustion (deterministic, sorted-`ContractId`
 /// order). Runs in `World::step` AFTER the delivery stage (3b): `failed_craft` is the
 /// list of craft-ids lifted from this tick's just-detected `FuelEmpty` events. For
-/// each `InTransit` contract whose bound `hauler` ran out of propellant this tick:
+/// each escrow-holding non-terminal contract (`Accepted` — the deadhead leg,
+/// `CargoLoaded` — the one-tick load window, `InTransit`; jumpgate-2c0c2d92bb) whose
+/// bound `hauler` ran out of propellant this tick:
 ///
-///   * status `InTransit -> Failed`,
+///   * status `-> Failed`,
 ///   * refund `escrow_micros` -> the owning corp's `treasury_micros`, zero the escrow
 ///     (a credit TRANSFER: Σtreasury+Σcredits+Σescrow is invariant — the money the corp
 ///     escrowed at accept returns to the corp; the hauler is NOT paid),
@@ -1127,7 +1129,14 @@ pub fn resolve_failures(
     failed_craft: &[CraftId],
 ) {
     for kidx in 0..contracts.ids.len() {
-        if contracts.status[kidx] != ContractStatus::InTransit {
+        // jumpgate-2c0c2d92bb: ALL THREE escrow-holding non-terminal statuses fail
+        // on FuelEmpty — `Accepted` (the deadhead leg to the pickup), `CargoLoaded`
+        // (the one-tick load window), and `InTransit`. Filtering to `InTransit`
+        // alone locked a deadhead-stranded hauler's escrow forever.
+        if !matches!(
+            contracts.status[kidx],
+            ContractStatus::Accepted | ContractStatus::CargoLoaded | ContractStatus::InTransit
+        ) {
             continue;
         }
         let Some(hauler) = contracts.hauler[kidx] else {
@@ -1156,7 +1165,9 @@ pub fn resolve_failures(
 /// cause-INDEPENDENT — the cause names the caller's stage and pins which
 /// source statuses are legal there.
 pub enum FailureCause {
-    /// Propellant exhaustion (stage 3c): only an `InTransit` contract can fail.
+    /// Propellant exhaustion (stage 3c): every escrow-holding non-terminal status
+    /// can fail — `Accepted` (the deadhead leg), `CargoLoaded` (the one-tick load
+    /// window), and `InTransit` (jumpgate-2c0c2d92bb).
     FuelEmpty,
     /// Robbery (stage 3b2, spec §3): both escrow-holding laden statuses
     /// (`CargoLoaded` — the one-tick load window — and `InTransit`) are robbable.
@@ -1188,7 +1199,16 @@ pub(crate) fn settle_contract_failure(
 ) {
     debug_assert!(
         match cause {
-            FailureCause::FuelEmpty => contracts.status[kidx] == ContractStatus::InTransit,
+            // jumpgate-2c0c2d92bb: FuelEmpty can fire on the deadhead leg
+            // (`Accepted`), in the one-tick load window (`CargoLoaded`), or
+            // mid-haul (`InTransit`) — all three escrow-holding non-terminal
+            // statuses are legal sources here.
+            FailureCause::FuelEmpty => matches!(
+                contracts.status[kidx],
+                ContractStatus::Accepted
+                    | ContractStatus::CargoLoaded
+                    | ContractStatus::InTransit
+            ),
             FailureCause::Robbed => matches!(
                 contracts.status[kidx],
                 ContractStatus::CargoLoaded | ContractStatus::InTransit
@@ -2159,5 +2179,238 @@ mod tests {
         // ASSIGN is OFF: the Idle craft is untouched (no scripted claim).
         assert_eq!(ships.role[0], CraftRole::Idle, "craft stays Idle");
         assert_eq!(ships.contract[0], None, "no contract bound to the craft");
+    }
+
+    // ---- jumpgate-2c0c2d92bb: FuelEmpty on the escrow-holding pre-transit statuses ----
+
+    /// Two-body starved-hauler shape (the world.rs `two_body_starved_contract_fixture`
+    /// pattern, rebuilt here for the stage-3c tests): a near-massless central body 0
+    /// and a negligible-mass marker body 1 on a 0.3 AU orbit, one station on each
+    /// (BOTH stocked, so distance is the only load blocker), one corp, one Fuel(5)
+    /// contract `from_station_index -> to_station_index`, and one manual (unscripted)
+    /// hauler co-located with body 0 whose propellant starts just above
+    /// `FUEL_EMPTY_EPS` (1e-9) — enough to survive step 1, but drained across the eps
+    /// threshold a couple of ticks into any burn, long before it can cover 0.3 AU.
+    fn starved_two_body_contract_fixture(
+        from_station_index: usize,
+        to_station_index: usize,
+    ) -> crate::config::RunConfig {
+        use crate::config::{
+            BaseSpec, BodyInit, ContractInit, CorporationInit, CraftInit, GuidanceParams,
+            OrbitalElements, RunConfig, StationInit, SubstepCfg,
+        };
+        use crate::math::Vec3;
+        use crate::time::Dt;
+        RunConfig {
+            master_seed: 42,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 4096,
+            bodies: vec![
+                BodyInit {
+                    // Near-massless: the co-located craft is not gravity-trapped.
+                    mass: 1e-9,
+                    elements: OrbitalElements {
+                        a: 0.0,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                },
+                BodyInit {
+                    // Negligible-mass marker body; only its position matters.
+                    mass: 1e-12,
+                    elements: OrbitalElements {
+                        a: 0.3,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                },
+            ],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
+                },
+                pos: Vec3::ZERO, // co-located with body 0 (station 0's host)
+                vel: Vec3::ZERO,
+                // Just above FUEL_EMPTY_EPS: survives step 1, runs dry shortly after.
+                fuel_mass: 1.06e-9,
+                role: CraftRole::Idle,
+                scripted: false, // manual-accept only: scripted ASSIGN stays out
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![
+                StationInit {
+                    body_index: 0,
+                    initial_stock: [0, 10],
+                    initial_price_micros: [0, 0],
+                    sells_upgrades: false,
+                },
+                StationInit {
+                    body_index: 1,
+                    initial_stock: [0, 10],
+                    initial_price_micros: [0, 0],
+                    sells_upgrades: false,
+                },
+            ],
+            producers: vec![],
+            corporations: vec![CorporationInit {
+                treasury_micros: 5_000_000,
+                home_station_index: 0,
+            }],
+            contracts: vec![ContractInit {
+                corp_index: 0,
+                resource: Resource::Fuel,
+                qty: 5,
+                from_station_index,
+                to_station_index,
+                reward_micros: 1_000_000,
+            }],
+            price_cfg: crate::config::PriceCfg::default(),
+            dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
+        }
+    }
+
+    /// The sum the Σtreasury+Σcredits+Σescrow identity asserts over.
+    fn total_credit(world: &crate::world::World) -> i64 {
+        world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>()
+    }
+
+    #[test]
+    fn fuel_empty_mid_deadhead_refunds_escrow() {
+        // jumpgate-2c0c2d92bb: `resolve_failures` only failed `InTransit` contracts
+        // on FuelEmpty, so a hauler that ran dry on the DEADHEAD leg (`Accepted`,
+        // escrow already debited) or in the one-tick `CargoLoaded` window locked its
+        // escrow forever. Fix = option (a): fail+refund all three escrow-holding
+        // non-terminal statuses.
+        use crate::contract::Command;
+        use crate::types::{CommandKind, EntityRef, Target};
+        use crate::world::World;
+        let fuel = Resource::Fuel.index();
+
+        // ---- Arm 1: status `Accepted` (the deadhead leg), end-to-end through
+        // `World::step`. Origin = the FAR station (body 1), so the step-1 accept
+        // escrows OFF-STATION, `try_load` dispatches the deadhead, and the load
+        // never happens. The hauler runs dry mid-deadhead while still `Accepted`.
+        let (mut world, _h) =
+            World::reset(starved_two_body_contract_fixture(1, 0)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let initial_treasury = world.corporations.treasury_micros[0];
+        let initial_credit = total_credit(&world);
+        let consumed_before = world.econ.consumed[fuel];
+
+        let contract = contract_id(&world.contracts, 0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::Accepted,
+            "escrowed off-station on step 1; the load never fires (origin 0.3 AU away)"
+        );
+        assert_eq!(world.contracts.escrow_micros[0], 1_000_000, "escrow == reward");
+
+        // Step until FuelEmpty fires mid-deadhead and stage 3c settles the failure.
+        let mut empty: Vec<Command> = Vec::new();
+        let mut failed = false;
+        for _ in 0..6000 {
+            world.step(&mut empty);
+            if world.contracts.status[0] == ContractStatus::Failed {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "Accepted contract reached Failed within the step bound");
+        assert_eq!(world.contracts.escrow_micros[0], 0, "escrow zeroed on fail");
+        assert_eq!(
+            world.corporations.treasury_micros[0], initial_treasury,
+            "escrow refunded exactly the reward to the corp treasury"
+        );
+        let crow = world.ships.index_of(craft).unwrap();
+        assert_eq!(world.ships.cargo[crow], None, "no cargo was ever loaded");
+        assert_eq!(world.ships.contract[crow], None, "hauler released: handle cleared");
+        assert_eq!(world.ships.role[crow], CraftRole::Idle, "hauler released: role Idle");
+        // NO cargo sink leg: there was no cargo on the deadhead.
+        assert_eq!(
+            world.econ.consumed[fuel], consumed_before,
+            "consumed[Fuel] unchanged (deadhead carried no cargo)"
+        );
+        assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+
+        // ---- Arm 2: status `CargoLoaded` (the one-tick load window). Standard
+        // direction (origin = the co-located station 0): the step-1 accept loads
+        // and dispatches. Drain the propellant PRE-DISPATCH via a direct field
+        // write, then run stage 3c directly with this craft in the FuelEmpty list.
+        // (Through `World::step` the NEXT tick's stage 1c promotes
+        // CargoLoaded -> InTransit before stage-3 detection, so the in-window
+        // failure is only reachable when FuelEmpty fires in the load tick itself;
+        // the direct stage call reproduces exactly that stage-3c input.)
+        let (mut world, _h) =
+            World::reset(starved_two_body_contract_fixture(0, 1)).expect("resolvable cfg");
+        let craft = world.ships.ids_at(0);
+        let initial_treasury = world.corporations.treasury_micros[0];
+        let initial_credit = total_credit(&world);
+        let consumed_before = world.econ.consumed[fuel];
+
+        let contract = contract_id(&world.contracts, 0);
+        let mut cmds = vec![Command {
+            target: Target::Entity(EntityRef::Craft(craft)),
+            kind: CommandKind::AcceptContract { contract },
+        }];
+        world.step(&mut cmds);
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::CargoLoaded,
+            "loaded at the co-located origin on step 1"
+        );
+        let crow = world.ships.index_of(craft).unwrap();
+        let (lost_res, lost_qty) = world.ships.cargo[crow].expect("cargo loaded on step 1");
+        assert_eq!((lost_res, lost_qty), (Resource::Fuel, 5));
+
+        world.ships.fuel_mass[crow] = 0.0; // drained dry pre-dispatch
+        resolve_failures(
+            &mut world.contracts,
+            &mut world.corporations,
+            &mut world.ships,
+            &mut world.econ,
+            &[craft],
+        );
+
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::Failed,
+            "CargoLoaded contract failed in the one-tick load window"
+        );
+        assert_eq!(world.contracts.escrow_micros[0], 0, "escrow zeroed on fail");
+        assert_eq!(
+            world.corporations.treasury_micros[0], initial_treasury,
+            "escrow refunded exactly the reward to the corp treasury"
+        );
+        assert_eq!(world.ships.cargo[crow], None, "cargo cleared (lost) on fail");
+        assert_eq!(world.ships.contract[crow], None, "hauler released: handle cleared");
+        assert_eq!(world.ships.role[crow], CraftRole::Idle, "hauler released: role Idle");
+        // Cargo sink leg: the loaded cargo is LOST and accounted.
+        assert_eq!(
+            world.econ.consumed[fuel],
+            consumed_before + lost_qty as i64,
+            "lost cargo accounted into consumed[Fuel]"
+        );
+        assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
     }
 }
