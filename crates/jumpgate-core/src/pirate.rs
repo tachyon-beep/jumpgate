@@ -30,8 +30,9 @@
 //! totality discipline).
 
 use crate::autopilot::ARRIVAL_RADIUS;
-use crate::config::{CraftInit, TrophicCfg};
+use crate::config::{CraftInit, MediaCfg, TrophicCfg};
 use crate::contract::{Event, EventKind};
+use crate::media::{GossipAlert, GossipBuffer, GossipNode, MediaDiag, insert_alert};
 use crate::economy::{
     ContractStatus, ContractStore, CorporationStore, EconCounters, FailureCause, StationStore,
     settle_contract_failure,
@@ -95,6 +96,14 @@ pub fn strength(role: CraftRole, upgrades: UpgradeLevels, trophic: &TrophicCfg) 
 /// bumps the contract's directed-route ring with the rob tick (the WRITE half
 /// of the media seam; the dock-gated READ is `World::route_evidence`).
 ///
+/// Media mint (media rung cut 1, spec §4): a Robbed settlement additionally
+/// seeds a `GossipAlert` in the VICTIM's comms-log (hops 0, claimed = contract
+/// reward + ransom — the seed-honesty law) and, when the victim is on a pier,
+/// deposits a firsthand copy (hops 1) in that station's reservoir. ALL of it
+/// gated on `media.caps_live()` (the trophic lever already holds here);
+/// media-off worlds are bit-identical. `station_gossip` / `next_alert_seq` /
+/// `media_diag` are the world's media state (hashed, hashed, unhashed).
+///
 /// Inert lever (spec §8): `engage_radius_au <= 0.0` (the default) returns
 /// immediately — no scan, no Piracy draw, existing scenarios bit-identical.
 #[allow(clippy::too_many_arguments)]
@@ -106,11 +115,15 @@ pub fn resolve_encounters(
     stations: &StationStore,
     station_pos: &[Vec3],
     route_evidence: &mut RouteEvidence,
+    station_gossip: &mut [GossipBuffer],
+    next_alert_seq: &mut u32,
     trophic: &TrophicCfg,
+    media: &MediaCfg,
     rng: &mut RngStreams,
     tick: Tick,
     events: &mut EventStream,
     diag: &mut Vec<EngagementSnapshot>,
+    media_diag: &mut MediaDiag,
 ) {
     if trophic.engage_radius_au <= 0.0 {
         return;
@@ -189,24 +202,35 @@ pub fn resolve_encounters(
             // record the rob tick on the contract's directed-route ring
             // (dense row-major `from_row * n_stations + to_row`). Bounded +
             // saturating — an unresolvable station row degrades to a no-write
-            // (spec §8 totality), never a panic.
+            // (spec §8 totality), never a panic. The resolved route is reused
+            // by the gossip mint below (spec §8 degrade: unresolvable rows
+            // skip the mint too).
             let n_stations = stations.ids.len();
             let from = contracts.from_station[kidx];
             let to = contracts.to_station[kidx];
-            if let (Some(f), Some(t)) = (
+            let route: Option<usize> = match (
                 stations.ids.dense_index(from.slot, from.generation),
                 stations.ids.dense_index(to.slot, to.generation),
             ) {
-                let route = f.saturating_mul(n_stations).saturating_add(t);
-                if let (Some(ring), Some(cur)) = (
+                (Some(f), Some(t)) => Some(f.saturating_mul(n_stations).saturating_add(t)),
+                _ => None,
+            };
+            if let Some(route) = route
+                && let (Some(ring), Some(cur)) = (
                     route_evidence.robs.get_mut(route),
                     route_evidence.cursor.get_mut(route),
-                ) {
-                    let slot = (*cur as usize) % ring.len();
-                    ring[slot] = tick;
-                    *cur = ((slot + 1) % ring.len()) as u8;
-                }
+                )
+            {
+                let slot = (*cur as usize) % ring.len();
+                ring[slot] = tick;
+                *cur = ((slot + 1) % ring.len()) as u8;
             }
+            // Seed-honesty law (spec §3): the robbed contract's reward is read
+            // BEFORE settle_contract_failure tears the contract down — the
+            // settlement precedes the ransom computation, and Robbed's
+            // value_micros (the wallet-clamped ransom) must NOT seed
+            // significance.
+            let reward = contracts.reward_micros[kidx];
             // Contract teardown: the generalized resolve_failures settle body
             // (escrow refund TRANSFER, cargo→consumed SINK, hauler released).
             settle_contract_failure(
@@ -240,6 +264,89 @@ pub fn resolve_encounters(
                     value_micros: ransom,
                 },
             });
+            // Media mint (spec §4): the victim is the index case. ALL gated on
+            // `caps_live()` (the trophic lever already holds here); an
+            // unresolvable route or a buffer-less victim skips the mint
+            // entirely (spec §8 degrade). No draws anywhere on this path.
+            if media.caps_live()
+                && let Some(route) = route
+                && ships.gossip[hrow].is_some()
+            {
+                let seq = *next_alert_seq;
+                *next_alert_seq = next_alert_seq.wrapping_add(1);
+                // Seed honesty (spec §3): claimed = the victim's true loss in
+                // hand — robbed contract reward + ransom actually paid.
+                let claimed = reward.saturating_add(ransom);
+                let seed = GossipAlert {
+                    alert_seq: seq,
+                    route: route as u32,
+                    pirate_slot: pirate_id.slot,
+                    rob_tick: tick,
+                    claimed_value_micros: claimed,
+                    first_heard: tick,
+                    hops: 0,
+                };
+                // Victim's own copy: cover == truth at hop 0. The pirate gets
+                // no copy; NO GossipHeard for the seed (Robbed tells it).
+                if let Some(buf) = ships.gossip[hrow].as_mut() {
+                    insert_alert(
+                        buf,
+                        seed,
+                        tick,
+                        trophic.evidence_window,
+                        media,
+                        &mut media_diag.evictions,
+                    );
+                }
+                // Origin-pier deposit (spec §4.3): a victim robbed on a pier
+                // (rob-on-load, the dominant robbery class) deposits a
+                // firsthand copy — hops 1, NO inflation — into that station's
+                // reservoir the same tick. Lowest station row in radius wins.
+                if let Some(srow) = (0..station_pos.len())
+                    .find(|&s| ships.pos[hrow].sub(station_pos[s]).length() <= ARRIVAL_RADIUS)
+                    && let Some(sbuf) = station_gossip.get_mut(srow)
+                {
+                    let copy = GossipAlert { hops: 1, ..seed };
+                    if insert_alert(
+                        sbuf,
+                        copy,
+                        tick,
+                        trophic.evidence_window,
+                        media,
+                        &mut media_diag.evictions,
+                    ) && let Some((slot, generation)) = stations.ids.id_at(srow)
+                    {
+                        events.emit(Event {
+                            tick,
+                            kind: EventKind::GossipHeard {
+                                carrier: GossipNode::Station(crate::ids::StationId {
+                                    slot,
+                                    generation,
+                                }),
+                                alert_seq: copy.alert_seq,
+                                route: copy.route,
+                                pirate_slot: copy.pirate_slot,
+                                claimed_value_micros: copy.claimed_value_micros,
+                                hops: copy.hops,
+                                rob_tick: copy.rob_tick,
+                            },
+                        });
+                    }
+                }
+                // The truth join (spec §8): captured at the only moment
+                // event↔route↔subjects are simultaneously resolvable.
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::AlertBorn {
+                        alert_seq: seq,
+                        route: route as u32,
+                        pirate: pirate_id,
+                        hauler: hauler_id,
+                        truth_value_micros: claimed,
+                        claimed_value_micros: claimed,
+                    },
+                });
+            }
         } else {
             // The hauler slips away / the bluff fails: no settlement, no
             // transfer, no heat — just the cooldown below.
@@ -646,6 +753,10 @@ mod tests {
         stations: StationStore,
         station_pos: Vec<Vec3>,
         route_evidence: RouteEvidence,
+        station_gossip: Vec<GossipBuffer>,
+        next_alert_seq: u32,
+        media: crate::config::MediaCfg,
+        media_diag: MediaDiag,
         events: EventStream,
         diag: Vec<EngagementSnapshot>,
         rng: RngStreams,
@@ -685,6 +796,12 @@ mod tests {
             stations,
             station_pos,
             route_evidence: RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] },
+            // Media defaults OFF (caps 0/0): existing tests are media-blind.
+            // Media tests flip `f.media` to live caps and mint the buffers.
+            station_gossip: vec![GossipBuffer::empty(16), GossipBuffer::empty(16)],
+            next_alert_seq: 0,
+            media: crate::config::MediaCfg::default(),
+            media_diag: MediaDiag::default(),
             events: EventStream::new(),
             diag: Vec::new(),
             rng: RngStreams::from_master(42),
@@ -701,12 +818,101 @@ mod tests {
             &f.stations,
             &f.station_pos,
             &mut f.route_evidence,
+            &mut f.station_gossip,
+            &mut f.next_alert_seq,
             cfg,
+            &f.media,
             &mut f.rng,
             tick,
             &mut f.events,
             &mut f.diag,
+            &mut f.media_diag,
         );
+    }
+
+    /// A LIVE media config for unit tests (both caps > 0 opens the config half
+    /// of the dual gate; the trophic lever is live via `live_trophic`).
+    fn live_media() -> crate::config::MediaCfg {
+        crate::config::MediaCfg {
+            station_gossip_slots: 16,
+            craft_gossip_slots: 8,
+            ..crate::config::MediaCfg::default()
+        }
+    }
+
+    #[test]
+    fn witness_seed_is_truth_at_hops_zero() {
+        // The mint (spec §4): a Robbed settlement seeds the VICTIM's comms-log
+        // with ONE alert — claimed == contract reward + ransom actually paid
+        // (the seed-honesty law: NOT Robbed.value_micros, which is the
+        // wallet-clamped ransom), hops 0, first_heard == rob tick. The seed
+        // emits NO GossipHeard (Robbed tells that story); AlertBorn carries the
+        // truth join. Mid-route (off any pier) so no origin-pier deposit fires.
+        let cfg = live_trophic(); // p_rob 1000 -> deterministic Robbed
+        let mut f = fix();
+        f.media = live_media();
+        f.ships.gossip[1] = Some(GossipBuffer::empty(8));
+        f.ships.pos[0] = Vec3::new(0.15, 0.0, 0.0); // mid-route, off both piers
+        f.ships.pos[1] = Vec3::new(0.15, 0.0, 0.0);
+        f.contracts.status[0] = ContractStatus::InTransit;
+        f.ships.credits_micros[1] = 5_000_000; // ransom cap 2M binds
+        run(&mut f, &cfg, Tick(10));
+        assert_eq!(robbed_count(&f), 1, "the engagement robbed");
+        // Victim buffer: exactly one alert, truth at hops 0.
+        let buf = f.ships.gossip[1].as_ref().expect("victim comms-log");
+        assert_eq!(buf.occupied(), 1, "exactly one seed alert");
+        let seed = buf.slots[0].expect("seed in slot 0");
+        assert_eq!(
+            seed.claimed_value_micros, 3_000_000,
+            "claimed == reward 1M + ransom 2M (NOT the ransom alone)"
+        );
+        assert_eq!(seed.hops, 0, "the victim's own copy");
+        assert_eq!(seed.first_heard, Tick(10), "acquired at the rob tick");
+        assert_eq!(seed.rob_tick, Tick(10));
+        assert_eq!(seed.pirate_slot, f.ships.ids_at(0).slot, "true perpetrator");
+        assert_eq!(seed.route, 1, "route 0->1 over 2 stations = 0*2+1");
+        // The pirate gets no copy (its gossip row is None in world resets; the
+        // fixture's push default is None too).
+        assert!(f.ships.gossip[0].is_none(), "pirate stays information-blind");
+        // Events: NO GossipHeard for the hops-0 seed; AlertBorn with the join.
+        assert!(
+            !f.events.events.iter().any(|e| matches!(e.kind, EventKind::GossipHeard { .. })),
+            "the seed does not emit GossipHeard"
+        );
+        assert!(
+            f.events.events.iter().any(|e| matches!(
+                e.kind,
+                EventKind::AlertBorn {
+                    alert_seq: 0,
+                    route: 1,
+                    truth_value_micros: 3_000_000,
+                    claimed_value_micros: 3_000_000,
+                    ..
+                }
+            )),
+            "AlertBorn carries the truth join"
+        );
+        assert_eq!(f.next_alert_seq, 1, "mint counter advanced once");
+        // Station reservoirs untouched (no pier in radius).
+        assert!(f.station_gossip.iter().all(|b| b.occupied() == 0), "no pier deposit mid-route");
+    }
+
+    #[test]
+    fn media_off_mints_nothing() {
+        // Caps 0/0 (the default fixture): the same robbery leaves ALL media
+        // state untouched — the mint is behind `caps_live()`.
+        let cfg = live_trophic();
+        let mut f = fix();
+        f.ships.gossip[1] = Some(GossipBuffer::empty(8));
+        run(&mut f, &cfg, Tick(10));
+        assert_eq!(robbed_count(&f), 1);
+        assert_eq!(f.next_alert_seq, 0, "no mint when media is off");
+        assert_eq!(f.ships.gossip[1].as_ref().unwrap().occupied(), 0);
+        assert!(f.station_gossip.iter().all(|b| b.occupied() == 0));
+        assert!(!f.events.events.iter().any(|e| matches!(
+            e.kind,
+            EventKind::AlertBorn { .. } | EventKind::GossipHeard { .. }
+        )));
     }
 
     fn engagement_count(f: &Fix) -> usize {
@@ -1023,6 +1229,113 @@ mod tests {
             shipyard: ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
         }
+    }
+
+    /// `pirate_world_cfg` with the media caps live (the spec-§11 dual gate:
+    /// caps > 0 AND the trophic lever, which `pirate_world_cfg` already opens).
+    fn media_live_cfg() -> RunConfig {
+        let mut cfg = pirate_world_cfg();
+        cfg.media.station_gossip_slots = 16;
+        cfg.media.craft_gossip_slots = 8;
+        cfg
+    }
+
+    #[test]
+    fn origin_pier_deposit_lands_same_tick() {
+        // The rob-on-load world test with media live (spec §4.3): the victim is
+        // robbed ON the origin pier, so the station's reservoir hears the
+        // firsthand report (hops 1, NO inflation) the SAME tick — without this
+        // the edge trigger never re-fires for the dominant robbery class.
+        let (mut world, _h) = World::reset(media_live_cfg()).expect("resolvable cfg");
+        assert!(world.media_live());
+        let hauler = world.ships.ids_at(0);
+        let contract = contract_id_row0(&world);
+        world.step(&mut vec![Command {
+            target: Target::Entity(EntityRef::Craft(hauler)),
+            kind: CommandKind::AcceptContract { contract },
+        }]);
+        assert!(
+            world
+                .recent_events(Tick(1))
+                .iter()
+                .any(|e| e.tick == Tick(1) && matches!(e.kind, EventKind::Robbed { .. })),
+            "the rob-on-load robbery fired"
+        );
+        // Origin station (row 0) reservoir holds the firsthand copy at hops 1.
+        let deposit = world.station_gossip[0]
+            .slots
+            .iter()
+            .flatten()
+            .next()
+            .expect("origin pier heard the robbery the same tick");
+        assert_eq!(deposit.alert_seq, 0);
+        assert_eq!(deposit.hops, 1, "a firsthand report");
+        assert_eq!(deposit.rob_tick, Tick(1));
+        assert_eq!(deposit.first_heard, Tick(1), "landed the SAME tick");
+        // reward 1M + ransom min(grubstake 1M wallet, cap 2M) = 2M: no
+        // inflation on the deposit (claimed == the victim's seed).
+        let victim_seed =
+            world.ships.gossip[0].as_ref().unwrap().slots[0].expect("victim seed");
+        assert_eq!(
+            deposit.claimed_value_micros, victim_seed.claimed_value_micros,
+            "NO inflation on the pier deposit"
+        );
+        // Exactly one GossipHeard, station carrier, at the rob tick.
+        let heard: Vec<_> = world
+            .recent_events(Tick(1))
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::GossipHeard { .. }))
+            .cloned()
+            .collect();
+        assert_eq!(heard.len(), 1, "one GossipHeard for the deposit");
+        assert_eq!(heard[0].tick, Tick(1));
+        assert!(
+            matches!(
+                heard[0].kind,
+                EventKind::GossipHeard {
+                    carrier: crate::media::GossipNode::Station(_),
+                    alert_seq: 0,
+                    hops: 1,
+                    ..
+                }
+            ),
+            "the pier is the carrier"
+        );
+    }
+
+    #[test]
+    fn pirates_are_information_blind() {
+        // OD-6: pirate rows carry NO comms-log (None after reset) and never
+        // appear as a GossipHeard Craft carrier, even parked on a pier with a
+        // stocked reservoir for a whole edge window. (The read-side fence is
+        // compile-level: `relocate_lurk_target`'s geometry-only signature.)
+        let (mut world, _h) = World::reset(media_live_cfg()).expect("resolvable cfg");
+        let pirate_id = world.ships.ids_at(1);
+        assert!(world.ships.gossip[1].is_none(), "pirate row mints None at reset");
+        let hauler = world.ships.ids_at(0);
+        let contract = contract_id_row0(&world);
+        // The rob-on-load robbery stocks the origin reservoir at tick 1; the
+        // pirate lurks docked at the origin through the window that follows.
+        world.step(&mut vec![Command {
+            target: Target::Entity(EntityRef::Craft(hauler)),
+            kind: CommandKind::AcceptContract { contract },
+        }]);
+        assert!(world.station_gossip[0].occupied() > 0, "reservoir stocked (non-vacuous)");
+        let mut cmds = Vec::new();
+        for _ in 0..30 {
+            world.step(&mut cmds);
+        }
+        assert!(world.ships.gossip[1].is_none(), "still no comms-log");
+        assert!(
+            !world.recent_events(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::GossipHeard {
+                    carrier: crate::media::GossipNode::Craft(c),
+                    ..
+                } if c == pirate_id
+            )),
+            "a pirate never hears gossip (neither uploads nor downloads)"
+        );
     }
 
     fn contract_id_row0(world: &World) -> ContractId {

@@ -73,9 +73,7 @@ pub struct World {
     pub(crate) next_alert_seq: u32,
     /// UNHASHED media diagnostics (the `engagement_diag` pattern — never a
     /// behavior input): eviction count + dock-edge contact records. Written by
-    /// the stage-3b2 media mechanics and read ONLY by instruments; the lib
-    /// readers land with the mechanics/instruments tasks — allow until then.
-    #[allow(dead_code)]
+    /// the stage-3b2 media mechanics and read ONLY by instruments.
     pub(crate) media_diag: crate::media::MediaDiag,
     /// Per-engagement kinematic snapshots, pushed by the stage-3b2 emission
     /// sites and read ONLY by the diagnostics sampler (`sample_window`).
@@ -898,16 +896,42 @@ impl World {
                         .unwrap_or(Vec3::ZERO)
                 })
                 .collect();
+            // (ii) One arrival-radius scan: the LOWEST station row within
+            // radius, per craft — the dock partner (media rung spec §5) AND
+            // the dock detector for the info refresh below.
+            let dock_station: Vec<Option<usize>> = (0..self.ships.ids.len())
+                .map(|crow| {
+                    (0..station_pos.len()).find(|&s| {
+                        self.ships.pos[crow].sub(station_pos[s]).length()
+                            <= crate::autopilot::ARRIVAL_RADIUS
+                    })
+                })
+                .collect();
+            // Edge-triggered gossip exchange (media rung spec §5): reads the
+            // PRE-refresh `info_tick` (the edge predicate), so it MUST run
+            // before the refresh loop. Behind the media dual gate — media-off
+            // worlds consume zero Media draws and are bit-identical.
+            if self.media_live() {
+                crate::media::run_gossip_exchange(
+                    &mut self.ships,
+                    &mut self.station_gossip,
+                    &self.stations,
+                    &dock_station,
+                    &self.config.media,
+                    self.config.trophic.evidence_window,
+                    &mut self.rng,
+                    next,
+                    &mut self.events,
+                    &mut self.media_diag,
+                );
+            }
             // Dock-gated info refresh (spec §7): a craft within ARRIVAL_RADIUS
             // of ANY station body refreshes `info_tick` to the current tick —
             // information is a POSITIONED resource; the population's beliefs
             // desynchronize by lived docking rhythms, not a global lag. Hashed
             // state, so it rides the same inert lever as the rest of the rung.
-            for crow in 0..self.ships.ids.len() {
-                let docked = station_pos.iter().any(|sp| {
-                    self.ships.pos[crow].sub(*sp).length() <= crate::autopilot::ARRIVAL_RADIUS
-                });
-                if docked {
+            for (crow, dock) in dock_station.iter().enumerate() {
+                if dock.is_some() {
                     self.ships.info_tick[crow] = next;
                 }
             }
@@ -919,11 +943,15 @@ impl World {
                 &self.stations,
                 &station_pos,
                 &mut self.route_evidence,
+                &mut self.station_gossip,
+                &mut self.next_alert_seq,
                 &self.config.trophic,
+                &self.config.media,
                 &mut self.rng,
                 next,
                 &mut self.events,
                 &mut self.engagement_diag,
+                &mut self.media_diag,
             );
             crate::pirate::update_pirate_population(
                 &mut self.ships,

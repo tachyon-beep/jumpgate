@@ -136,6 +136,36 @@ pub enum EventKind {
         level: u8,
         price_micros: i64,
     },
+    // --- Media events (media rung cut 1, spec §8; hash-neutral like all events) ---
+    /// Truth join at mint (spec §8): truth + claimed captured at the only moment
+    /// event↔route↔subjects are simultaneously resolvable. No chronicle arm
+    /// (shadows Robbed).
+    AlertBorn {
+        alert_seq: u32,
+        route: u32,
+        pirate: CraftId,
+        hauler: CraftId,
+        truth_value_micros: i64,
+        claimed_value_micros: i64,
+    },
+    /// Latched on insertion into a node that does not currently hold the alert;
+    /// the victim's own hops-0 seed does NOT emit (Robbed tells that story).
+    /// Self-contained payload — the chronicle prints without joins.
+    ///
+    /// Documented deviation from spec §8 "latched on FIRST insertion":
+    /// re-hearing after a genuine eviction re-emits — a node that evicted the
+    /// rumor genuinely no longer holds it, and tracking lifetime hearings would
+    /// be new state. Within retention, membership dedupe makes emission
+    /// once-only.
+    GossipHeard {
+        carrier: crate::media::GossipNode,
+        alert_seq: u32,
+        route: u32,
+        pirate_slot: u32,
+        claimed_value_micros: i64,
+        hops: u8,
+        rob_tick: Tick,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

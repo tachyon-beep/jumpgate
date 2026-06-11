@@ -28,8 +28,8 @@ use std::process::ExitCode;
 
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
-    Command, CraftId, EventKind, RunConfig, StateView, Tick, World, apply_knob, scenario_trophic,
-    state_hash,
+    Command, CraftId, EventKind, GossipNode, RunConfig, StateView, Tick, World, apply_knob,
+    scenario_trophic, state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -40,6 +40,9 @@ struct Args {
     ticks: u64,
     jsonl: Option<String>,
     chronicle: bool,
+    /// Printer-side filter (media rung spec §8): skip `GossipHeard` chronicle
+    /// lines whose `claimed_value_micros` is below this. 0 = print all.
+    chronicle_gossip_min_micros: i64,
     replay_check: bool,
     assert_no_fuel_empty: bool,
     sets: Vec<(String, String)>,
@@ -51,6 +54,7 @@ fn parse_args() -> Result<Args, String> {
         ticks: 50_000,
         jsonl: None,
         chronicle: false,
+        chronicle_gossip_min_micros: 0,
         replay_check: false,
         assert_no_fuel_empty: false,
         sets: Vec::new(),
@@ -68,6 +72,11 @@ fn parse_args() -> Result<Args, String> {
             }
             "--jsonl" => args.jsonl = Some(it.next().ok_or("--jsonl needs a path")?),
             "--chronicle" => args.chronicle = true,
+            "--chronicle-gossip-min-micros" => {
+                let v = it.next().ok_or("--chronicle-gossip-min-micros needs a value")?;
+                args.chronicle_gossip_min_micros =
+                    v.parse().map_err(|e| format!("--chronicle-gossip-min-micros: {e}"))?;
+            }
             "--replay-check" => args.replay_check = true,
             "--assert-no-fuel-empty" => args.assert_no_fuel_empty = true,
             "--set" => {
@@ -162,6 +171,11 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::PirateLieLow { pirate, .. }
         | EventKind::PirateLeft { pirate }
         | EventKind::PirateSpawned { pirate } => Some(pirate),
+        // Craft hearings thread into the carrier's life arc; station hearings
+        // feed the gossip log/panels (a station-thread chronicle is a named
+        // deferral, media rung spec §8). AlertBorn shadows Robbed: no arm.
+        EventKind::GossipHeard { carrier: GossipNode::Craft(c), .. } => Some(c),
+        EventKind::GossipHeard { .. } | EventKind::AlertBorn { .. } => None,
         _ => None,
     }
 }
@@ -171,7 +185,9 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
 /// repeats of the same event shape for the same craft (a lying-low pirate
 /// re-seeking its hideout emits an Arrival every ~10 ticks — watchability
 /// noise, seed-7 lesson) collapse into one line with a repeat count.
-fn print_chronicle(world: &World) {
+/// `gossip_min_micros` skips `GossipHeard` lines below the claimed-value
+/// threshold (printer-side only; 0 = print all — the owner tunes at console).
+fn print_chronicle(world: &World, gossip_min_micros: i64) {
     println!("--- chronicle ---");
     for id in world.craft_ids() {
         println!("craft {}/{}:", id.slot, id.generation);
@@ -188,6 +204,11 @@ fn print_chronicle(world: &World) {
         for e in world.recent_events(Tick(0)) {
             if chronicle_subject(&e.kind) != Some(id) {
                 continue;
+            }
+            if let EventKind::GossipHeard { claimed_value_micros, .. } = e.kind
+                && claimed_value_micros < gossip_min_micros
+            {
+                continue; // below the watchability threshold (printer-side only)
             }
             let line = format!("{:?}", e.kind);
             match &mut pending {
@@ -292,7 +313,7 @@ fn main() -> ExitCode {
     );
 
     if args.chronicle {
-        print_chronicle(&world);
+        print_chronicle(&world, args.chronicle_gossip_min_micros);
     }
 
     if args.assert_no_fuel_empty && fuel_empty > 0 {
