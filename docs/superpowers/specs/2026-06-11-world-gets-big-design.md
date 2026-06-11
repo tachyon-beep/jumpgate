@@ -1,6 +1,6 @@
 # The World Gets Big — map growth + the propellant loop (scenario_frontier design)
 
-**Status: DRAFT — pending owner decisions §13 (OD-1…OD-7). Build NOT authorized until resolved.**
+**Status: APPROVED — owner resolved OD-1…OD-7 to the recommended options (2026-06-11, "start planning the 'world gets big' sprint", no overrides). Build authorized; §13 records the resolutions.**
 
 Designed 2026-06-11 by a 15-agent panel (4 citation-grade grounding readers, 5
 design lenses, 5 adversarial critics, 1 synthesis) over the owner-approved
@@ -343,7 +343,15 @@ all pirates active; ships with a labeled synthetic per the seed-7 rule) ·
 breakout reachability clamp · scenario DSL · dt/thrust retune · per-craft
 taste scalars (never).
 
-## 13. Owner decision points — ALL PENDING
+## 13. Owner decision points — RESOLVED 2026-06-11
+
+> **Owner resolution (2026-06-11):** all seven decided as **recommended** —
+> OD-1(a), OD-2(a), OD-3(a), OD-4(a), OD-5(b), OD-6(a), OD-7(a). Conveyed as
+> "start planning the 'world gets big' sprint" against the presented
+> recommendations, with no overrides. The bundled consequences are accepted:
+> the haven-lurk-leak fix changes the judged band (console re-judgment
+> scheduled), the food band re-walk starts at 15k, and W11 is the named
+> pirate-fuel unification trigger.
 
 **OD-1 — Map shape and populations.** (a) **n=10, geometric 0.35→3.0 AU; 20
 haulers, 10 pirates** (gradient 54%→never-opens with exactly one
