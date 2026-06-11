@@ -1,0 +1,100 @@
+META seed=0 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=0 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=131 laden_trips=677 purchases=40
+MEDIA seed=0 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=0 hauler_duty_milli=673 hauler_burn_total_milli=5044 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=0 decisions=820 flips=0 flip_milli=0 counts=[1396, 1901, 2266, 1356, 453, 50, 485]
+META seed=10 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=10 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=129 laden_trips=633 purchases=38
+MEDIA seed=10 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=10 hauler_duty_milli=650 hauler_burn_total_milli=4873 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=10 decisions=774 flips=0 flip_milli=0 counts=[5271, 445, 253, 285, 810, 238, 236]
+META seed=11 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=11 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=139 laden_trips=705 purchases=40
+MEDIA seed=11 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=11 hauler_duty_milli=673 hauler_burn_total_milli=5049 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=574
+ASSIGN seed=11 decisions=856 flips=0 flip_milli=0 counts=[903, 2560, 2377, 1064, 517, 94, 281]
+META seed=12 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=12 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=164 laden_trips=650 purchases=36
+MEDIA seed=12 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=12 hauler_duty_milli=666 hauler_burn_total_milli=4992 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=571
+ASSIGN seed=12 decisions=826 flips=0 flip_milli=0 counts=[366, 1327, 1939, 1523, 1133, 760, 141]
+META seed=13 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=13 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=159 laden_trips=664 purchases=36
+MEDIA seed=13 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=13 hauler_duty_milli=674 hauler_burn_total_milli=5052 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=575
+ASSIGN seed=13 decisions=835 flips=0 flip_milli=0 counts=[332, 1500, 2275, 1538, 734, 601, 100]
+META seed=14 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=14 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=139 laden_trips=651 purchases=38
+MEDIA seed=14 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=14 hauler_duty_milli=655 hauler_burn_total_milli=4908 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=14 decisions=801 flips=0 flip_milli=0 counts=[570, 2396, 2045, 704, 551, 390, 133]
+META seed=15 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=15 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=156 laden_trips=654 purchases=39
+MEDIA seed=15 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=15 hauler_duty_milli=674 hauler_burn_total_milli=5052 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=575
+ASSIGN seed=15 decisions=822 flips=0 flip_milli=0 counts=[634, 2130, 2352, 1072, 899, 362, 83]
+META seed=16 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=16 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=130 laden_trips=661 purchases=43
+MEDIA seed=16 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=16 hauler_duty_milli=665 hauler_burn_total_milli=4984 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=577
+ASSIGN seed=16 decisions=802 flips=0 flip_milli=0 counts=[1035, 2870, 1896, 1056, 332, 167, 35]
+META seed=17 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=17 ticks=50000 verdict=Alive cycled=true risk_heterogeneous=true outcomes_disperse=true fuel_empty=0 robs=39 laden_trips=733 purchases=49
+MEDIA seed=17 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=17 hauler_duty_milli=671 hauler_burn_total_milli=5032 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=575
+ASSIGN seed=17 decisions=783 flips=0 flip_milli=0 counts=[7708, 756, 139, 33, 49, 19, 175]
+META seed=18 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=18 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=117 laden_trips=697 purchases=45
+MEDIA seed=18 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=18 hauler_duty_milli=669 hauler_burn_total_milli=5011 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=579
+ASSIGN seed=18 decisions=826 flips=0 flip_milli=0 counts=[813, 2940, 3245, 1208, 624, 34, 0]
+META seed=19 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=19 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=139 laden_trips=676 purchases=39
+MEDIA seed=19 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=19 hauler_duty_milli=672 hauler_burn_total_milli=5037 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=578
+ASSIGN seed=19 decisions=826 flips=0 flip_milli=0 counts=[2971, 1536, 1388, 657, 712, 301, 179]
+META seed=1 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=1 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=151 laden_trips=658 purchases=43
+MEDIA seed=1 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=1 hauler_duty_milli=662 hauler_burn_total_milli=4966 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=1 decisions=821 flips=0 flip_milli=0 counts=[817, 1459, 1413, 1667, 1542, 424, 85]
+META seed=2 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=2 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=86 laden_trips=735 purchases=50
+MEDIA seed=2 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=2 hauler_duty_milli=670 hauler_burn_total_milli=5025 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=2 decisions=833 flips=0 flip_milli=0 counts=[4033, 4194, 351, 313, 197, 52, 207]
+META seed=3 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=3 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=151 laden_trips=678 purchases=43
+MEDIA seed=3 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=3 hauler_duty_milli=659 hauler_burn_total_milli=4939 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=578
+ASSIGN seed=3 decisions=841 flips=0 flip_milli=0 counts=[804, 2359, 3000, 837, 360, 524, 207]
+META seed=4 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=4 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=145 laden_trips=671 purchases=41
+MEDIA seed=4 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=4 hauler_duty_milli=672 hauler_burn_total_milli=5042 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=578
+ASSIGN seed=4 decisions=828 flips=0 flip_milli=0 counts=[2022, 2312, 1149, 1190, 743, 253, 61]
+META seed=5 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=5 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=136 laden_trips=660 purchases=44
+MEDIA seed=5 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=5 hauler_duty_milli=670 hauler_burn_total_milli=5019 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=578
+ASSIGN seed=5 decisions=807 flips=0 flip_milli=0 counts=[2270, 1399, 1375, 1697, 974, 85, 59]
+META seed=6 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=6 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=129 laden_trips=713 purchases=42
+MEDIA seed=6 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=6 hauler_duty_milli=672 hauler_burn_total_milli=5034 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=575
+ASSIGN seed=6 decisions=854 flips=0 flip_milli=0 counts=[1241, 2064, 3447, 1556, 558, 124, 5]
+META seed=7 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=7 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=93 laden_trips=682 purchases=42
+MEDIA seed=7 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=7 hauler_duty_milli=670 hauler_burn_total_milli=5022 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=576
+ASSIGN seed=7 decisions=787 flips=0 flip_milli=0 counts=[1667, 4574, 1803, 417, 152, 0, 0]
+META seed=8 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=8 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=127 laden_trips=656 purchases=40
+MEDIA seed=8 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=8 hauler_duty_milli=658 hauler_burn_total_milli=4931 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=578
+ASSIGN seed=8 decisions=795 flips=0 flip_milli=0 counts=[680, 2210, 2275, 953, 364, 122, 172]
+META seed=9 scenario=trophic stations=6 haulers=12 pirates_initial=6 station_radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+RESULT seed=9 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=153 laden_trips=642 purchases=41
+MEDIA seed=9 born=0 escaped_milli=0 median_lag=0 p90_lag=0 reading=NoMedia
+FUEL seed=9 hauler_duty_milli=661 hauler_burn_total_milli=4959 hauler_median_leg_burn_permille=6 hauler_min_tank_permille=575
+ASSIGN seed=9 decisions=807 flips=0 flip_milli=0 counts=[612, 1313, 1406, 1257, 1202, 606, 385]

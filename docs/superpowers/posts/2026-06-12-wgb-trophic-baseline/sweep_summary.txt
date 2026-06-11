@@ -1,0 +1,134 @@
+sweep_trophic (PDR-0006: windows, not gates) — seeds=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] ticks=50000 sets=['baseline', 'control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000']
+  ran baseline seed=0: verdict=RiskEqualized robs=131 fuel_empty=0 media=NoMedia
+  ran baseline seed=1: verdict=RiskEqualized robs=151 fuel_empty=0 media=NoMedia
+  ran baseline seed=2: verdict=RiskEqualized robs=86 fuel_empty=0 media=NoMedia
+  ran baseline seed=3: verdict=RiskEqualized robs=151 fuel_empty=0 media=NoMedia
+  ran baseline seed=4: verdict=RiskEqualized robs=145 fuel_empty=0 media=NoMedia
+  ran baseline seed=5: verdict=RiskEqualized robs=136 fuel_empty=0 media=NoMedia
+  ran baseline seed=6: verdict=RiskEqualized robs=129 fuel_empty=0 media=NoMedia
+  ran baseline seed=7: verdict=RiskEqualized robs=93 fuel_empty=0 media=NoMedia
+  ran baseline seed=8: verdict=RiskEqualized robs=127 fuel_empty=0 media=NoMedia
+  ran baseline seed=9: verdict=RiskEqualized robs=153 fuel_empty=0 media=NoMedia
+  ran baseline seed=10: verdict=RiskEqualized robs=129 fuel_empty=0 media=NoMedia
+  ran baseline seed=11: verdict=RiskEqualized robs=139 fuel_empty=0 media=NoMedia
+  ran baseline seed=12: verdict=RiskEqualized robs=164 fuel_empty=0 media=NoMedia
+  ran baseline seed=13: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran baseline seed=14: verdict=RiskEqualized robs=139 fuel_empty=0 media=NoMedia
+  ran baseline seed=15: verdict=RiskEqualized robs=156 fuel_empty=0 media=NoMedia
+  ran baseline seed=16: verdict=RiskEqualized robs=130 fuel_empty=0 media=NoMedia
+  ran baseline seed=17: verdict=Alive robs=39 fuel_empty=0 media=NoMedia
+  ran baseline seed=18: verdict=RiskEqualized robs=117 fuel_empty=0 media=NoMedia
+  ran baseline seed=19: verdict=RiskEqualized robs=139 fuel_empty=0 media=NoMedia
+  ran control seed=0: verdict=RiskEqualized robs=162 fuel_empty=0 media=NoMedia
+  ran control seed=1: verdict=RiskEqualized robs=146 fuel_empty=0 media=NoMedia
+  ran control seed=2: verdict=RiskEqualized robs=165 fuel_empty=0 media=NoMedia
+  ran control seed=3: verdict=RiskEqualized robs=155 fuel_empty=0 media=NoMedia
+  ran control seed=4: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran control seed=5: verdict=RiskEqualized robs=162 fuel_empty=0 media=NoMedia
+  ran control seed=6: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran control seed=7: verdict=RiskEqualized robs=156 fuel_empty=0 media=NoMedia
+  ran control seed=8: verdict=RiskEqualized robs=158 fuel_empty=0 media=NoMedia
+  ran control seed=9: verdict=RiskEqualized robs=164 fuel_empty=0 media=NoMedia
+  ran control seed=10: verdict=RiskEqualized robs=162 fuel_empty=0 media=NoMedia
+  ran control seed=11: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran control seed=12: verdict=RiskEqualized robs=161 fuel_empty=0 media=NoMedia
+  ran control seed=13: verdict=RiskEqualized robs=151 fuel_empty=0 media=NoMedia
+  ran control seed=14: verdict=RiskEqualized robs=162 fuel_empty=0 media=NoMedia
+  ran control seed=15: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran control seed=16: verdict=RiskEqualized robs=157 fuel_empty=0 media=NoMedia
+  ran control seed=17: verdict=RiskEqualized robs=159 fuel_empty=0 media=NoMedia
+  ran control seed=18: verdict=RiskEqualized robs=161 fuel_empty=0 media=NoMedia
+  ran control seed=19: verdict=RiskEqualized robs=157 fuel_empty=0 media=NoMedia
+
+=== knob set: baseline (20 runs) ===
+map: scenario=trophic stations=6 haulers=12 pirates_initial=6 radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            19
+  Alive                    1
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[673, 662, 670, 659, 672, 670, 672, 670, 658, 661, 650, 673, 666, 674, 655, 674, 665, 671, 669, 672] burn_total_milli=[5044, 4966, 5025, 4939, 5042, 5019, 5034, 5022, 4931, 4959, 4873, 5049, 4992, 5052, 4908, 5052, 4984, 5032, 5011, 5037] median_leg_burn_permille=[6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6] min_tank_permille=[576, 576, 576, 578, 578, 578, 575, 576, 578, 575, 576, 574, 571, 575, 576, 575, 577, 575, 579, 578]
+endpoint-ambush: 3602 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1873 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     1 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]  1728 #####################################
+  endpoint share (first+last bin): 3601/3602
+purchase-desync: escort-purchase window spread per run = [22, 22, 23, 21, 23, 23, 20, 20, 22, 23, 21, 22, 22, 22, 22, 22, 23, 14, 21, 18]
+yard treasury (seed 0): first=0 max=359000000 final=359000000 monotone=True
+seed 0: verdict=RiskEqualized active-alternations=10 robs=131 trips=677 purchases=40 per-window-HHI(milli)=385 RUN-AGGREGATE-HHI(milli)=163 routes-robbed=8
+seed 1: verdict=RiskEqualized active-alternations=8 robs=151 trips=658 purchases=43 per-window-HHI(milli)=351 RUN-AGGREGATE-HHI(milli)=156 routes-robbed=10
+seed 2: verdict=RiskEqualized active-alternations=13 robs=86 trips=735 purchases=50 per-window-HHI(milli)=469 RUN-AGGREGATE-HHI(milli)=137 routes-robbed=11
+seed 3: verdict=RiskEqualized active-alternations=12 robs=151 trips=678 purchases=43 per-window-HHI(milli)=347 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 4: verdict=RiskEqualized active-alternations=14 robs=145 trips=671 purchases=41 per-window-HHI(milli)=337 RUN-AGGREGATE-HHI(milli)=130 routes-robbed=8
+seed 5: verdict=RiskEqualized active-alternations=8 robs=136 trips=660 purchases=44 per-window-HHI(milli)=381 RUN-AGGREGATE-HHI(milli)=128 routes-robbed=9
+seed 6: verdict=RiskEqualized active-alternations=10 robs=129 trips=713 purchases=42 per-window-HHI(milli)=341 RUN-AGGREGATE-HHI(milli)=134 routes-robbed=10
+seed 7: verdict=RiskEqualized active-alternations=11 robs=93 trips=682 purchases=42 per-window-HHI(milli)=397 RUN-AGGREGATE-HHI(milli)=135 routes-robbed=10
+seed 8: verdict=RiskEqualized active-alternations=9 robs=127 trips=656 purchases=40 per-window-HHI(milli)=364 RUN-AGGREGATE-HHI(milli)=141 routes-robbed=8
+seed 9: verdict=RiskEqualized active-alternations=13 robs=153 trips=642 purchases=41 per-window-HHI(milli)=379 RUN-AGGREGATE-HHI(milli)=162 routes-robbed=8
+seed 10: verdict=RiskEqualized active-alternations=5 robs=129 trips=633 purchases=38 per-window-HHI(milli)=381 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=8
+seed 11: verdict=RiskEqualized active-alternations=15 robs=139 trips=705 purchases=40 per-window-HHI(milli)=322 RUN-AGGREGATE-HHI(milli)=145 routes-robbed=8
+seed 12: verdict=RiskEqualized active-alternations=13 robs=164 trips=650 purchases=36 per-window-HHI(milli)=305 RUN-AGGREGATE-HHI(milli)=158 routes-robbed=8
+seed 13: verdict=RiskEqualized active-alternations=11 robs=159 trips=664 purchases=36 per-window-HHI(milli)=272 RUN-AGGREGATE-HHI(milli)=148 routes-robbed=8
+seed 14: verdict=RiskEqualized active-alternations=11 robs=139 trips=651 purchases=38 per-window-HHI(milli)=325 RUN-AGGREGATE-HHI(milli)=147 routes-robbed=8
+seed 15: verdict=RiskEqualized active-alternations=16 robs=156 trips=654 purchases=39 per-window-HHI(milli)=343 RUN-AGGREGATE-HHI(milli)=133 routes-robbed=8
+seed 16: verdict=RiskEqualized active-alternations=16 robs=130 trips=661 purchases=43 per-window-HHI(milli)=379 RUN-AGGREGATE-HHI(milli)=135 routes-robbed=8
+seed 17: verdict=Alive active-alternations=9 robs=39 trips=733 purchases=49 per-window-HHI(milli)=838 RUN-AGGREGATE-HHI(milli)=136 routes-robbed=10
+seed 18: verdict=RiskEqualized active-alternations=10 robs=117 trips=697 purchases=45 per-window-HHI(milli)=358 RUN-AGGREGATE-HHI(milli)=150 routes-robbed=11
+seed 19: verdict=RiskEqualized active-alternations=11 robs=139 trips=676 purchases=39 per-window-HHI(milli)=381 RUN-AGGREGATE-HHI(milli)=137 routes-robbed=8
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+=== knob set: control (20 runs) ===
+map: scenario=trophic stations=6 haulers=12 pirates_initial=6 radii_milli_au=[350, 560, 770, 980, 1190, 1400]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            20
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[663, 672, 670, 672, 673, 672, 672, 669, 672, 660, 673, 674, 672, 663, 673, 673, 669, 661, 667, 674] burn_total_milli=[4971, 5041, 5020, 5040, 5045, 5041, 5035, 5017, 5040, 4951, 5047, 5051, 5038, 4967, 5043, 5049, 5012, 4954, 5002, 5049] median_leg_burn_permille=[6, 6, 5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6] min_tank_permille=[575, 577, 578, 578, 573, 566, 577, 575, 575, 575, 574, 574, 577, 578, 573, 575, 572, 578, 578, 575]
+endpoint-ambush: 4467 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  2494 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     1 
+  [ 800- 899]     1 
+  [ 900- 999]  1971 ################################
+  endpoint share (first+last bin): 4465/4467
+purchase-desync: escort-purchase window spread per run = [22, 22, 21, 22, 22, 22, 18, 23, 22, 23, 22, 21, 23, 20, 21, 20, 22, 22, 21, 22]
+yard treasury (seed 0): first=0 max=258000000 final=258000000 monotone=True
+seed 0: verdict=RiskEqualized active-alternations=13 robs=162 trips=676 purchases=35 per-window-HHI(milli)=312 RUN-AGGREGATE-HHI(milli)=140 routes-robbed=8
+seed 1: verdict=RiskEqualized active-alternations=18 robs=146 trips=675 purchases=36 per-window-HHI(milli)=313 RUN-AGGREGATE-HHI(milli)=149 routes-robbed=8
+seed 2: verdict=RiskEqualized active-alternations=16 robs=165 trips=717 purchases=39 per-window-HHI(milli)=296 RUN-AGGREGATE-HHI(milli)=138 routes-robbed=11
+seed 3: verdict=RiskEqualized active-alternations=17 robs=155 trips=710 purchases=43 per-window-HHI(milli)=325 RUN-AGGREGATE-HHI(milli)=132 routes-robbed=8
+seed 4: verdict=RiskEqualized active-alternations=16 robs=159 trips=672 purchases=33 per-window-HHI(milli)=309 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=8
+seed 5: verdict=RiskEqualized active-alternations=14 robs=162 trips=658 purchases=34 per-window-HHI(milli)=275 RUN-AGGREGATE-HHI(milli)=142 routes-robbed=8
+seed 6: verdict=RiskEqualized active-alternations=14 robs=159 trips=714 purchases=42 per-window-HHI(milli)=312 RUN-AGGREGATE-HHI(milli)=127 routes-robbed=11
+seed 7: verdict=RiskEqualized active-alternations=14 robs=156 trips=659 purchases=40 per-window-HHI(milli)=305 RUN-AGGREGATE-HHI(milli)=129 routes-robbed=8
+seed 8: verdict=RiskEqualized active-alternations=17 robs=158 trips=665 purchases=38 per-window-HHI(milli)=332 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=8
+seed 9: verdict=RiskEqualized active-alternations=14 robs=164 trips=652 purchases=36 per-window-HHI(milli)=306 RUN-AGGREGATE-HHI(milli)=154 routes-robbed=8
+seed 10: verdict=RiskEqualized active-alternations=12 robs=162 trips=674 purchases=37 per-window-HHI(milli)=358 RUN-AGGREGATE-HHI(milli)=147 routes-robbed=8
+seed 11: verdict=RiskEqualized active-alternations=13 robs=159 trips=677 purchases=39 per-window-HHI(milli)=316 RUN-AGGREGATE-HHI(milli)=125 routes-robbed=10
+seed 12: verdict=RiskEqualized active-alternations=16 robs=161 trips=656 purchases=39 per-window-HHI(milli)=280 RUN-AGGREGATE-HHI(milli)=141 routes-robbed=8
+seed 13: verdict=RiskEqualized active-alternations=14 robs=151 trips=650 purchases=33 per-window-HHI(milli)=295 RUN-AGGREGATE-HHI(milli)=143 routes-robbed=8
+seed 14: verdict=RiskEqualized active-alternations=14 robs=162 trips=655 purchases=33 per-window-HHI(milli)=314 RUN-AGGREGATE-HHI(milli)=140 routes-robbed=8
+seed 15: verdict=RiskEqualized active-alternations=14 robs=159 trips=684 purchases=39 per-window-HHI(milli)=292 RUN-AGGREGATE-HHI(milli)=148 routes-robbed=8
+seed 16: verdict=RiskEqualized active-alternations=14 robs=157 trips=666 purchases=40 per-window-HHI(milli)=325 RUN-AGGREGATE-HHI(milli)=138 routes-robbed=8
+seed 17: verdict=RiskEqualized active-alternations=14 robs=159 trips=671 purchases=32 per-window-HHI(milli)=282 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=8
+seed 18: verdict=RiskEqualized active-alternations=10 robs=161 trips=697 purchases=39 per-window-HHI(milli)=299 RUN-AGGREGATE-HHI(milli)=150 routes-robbed=11
+seed 19: verdict=RiskEqualized active-alternations=13 robs=157 trips=670 purchases=34 per-window-HHI(milli)=330 RUN-AGGREGATE-HHI(milli)=153 routes-robbed=8
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+positive control (hungry roamers, reach=inf): 20/20 runs read RiskEqualized (expected ALL — anything else means the instrument is broken)
