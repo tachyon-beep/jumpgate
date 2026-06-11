@@ -15,13 +15,16 @@ use rand_core::SeedableRng;
 
 /// The named sub-streams. `Intervention` carries lever/perturbation randomness;
 /// `Scenario` carries initial-condition / loadout randomness; `Piracy` (appended)
-/// carries pirate encounter-resolution randomness. APPEND-ONLY: never reorder the
-/// existing variants or change their salts — that changes replay identity.
+/// carries pirate encounter-resolution randomness; `Media` (appended) carries
+/// gossip-item randomness (one draw per candidate item after dedupe). APPEND-ONLY:
+/// never reorder the existing variants or change their salts — that changes
+/// replay identity.
 #[derive(Clone, Copy)]
 pub enum RngStream {
     Intervention,
     Scenario,
     Piracy,
+    Media,
 }
 
 /// Per-stream salt constants. Fixed forever (changing one changes replay identity
@@ -32,6 +35,10 @@ const SALT_SCENARIO: u64 = 0xC2B2_AE3D_27D4_EB4F;
 /// Appended for `RngStream::Piracy` (pirate encounter rolls). A new fixed constant
 /// — the existing salts are untouched, so existing streams keep their identity.
 const SALT_PIRACY: u64 = 0x6A09_E667_F3BC_C908;
+/// Appended for `RngStream::Media` (gossip-item rolls). Fractional bits of √3 —
+/// continues SALT_PIRACY's fractional-√2 convention; a new fixed constant, the
+/// existing salts are untouched, so existing streams keep their identity.
+const SALT_MEDIA: u64 = 0xBB67_AE85_84CA_A73B;
 
 impl RngStream {
     /// Fixed salt for this stream. `const fn` so the derivation is unambiguous and
@@ -41,6 +48,7 @@ impl RngStream {
             RngStream::Intervention => SALT_INTERVENTION,
             RngStream::Scenario => SALT_SCENARIO,
             RngStream::Piracy => SALT_PIRACY,
+            RngStream::Media => SALT_MEDIA,
         }
     }
 }
@@ -52,6 +60,7 @@ pub struct RngStreams {
     intervention: ChaCha8Rng,
     scenario: ChaCha8Rng,
     piracy: ChaCha8Rng,
+    media: ChaCha8Rng,
 }
 
 impl RngStreams {
@@ -63,6 +72,7 @@ impl RngStreams {
             intervention: ChaCha8Rng::seed_from_u64(master ^ RngStream::Intervention.salt()),
             scenario: ChaCha8Rng::seed_from_u64(master ^ RngStream::Scenario.salt()),
             piracy: ChaCha8Rng::seed_from_u64(master ^ RngStream::Piracy.salt()),
+            media: ChaCha8Rng::seed_from_u64(master ^ RngStream::Media.salt()),
         }
     }
 
@@ -72,6 +82,7 @@ impl RngStreams {
             RngStream::Intervention => &mut self.intervention,
             RngStream::Scenario => &mut self.scenario,
             RngStream::Piracy => &mut self.piracy,
+            RngStream::Media => &mut self.media,
         }
     }
 }
@@ -108,12 +119,42 @@ mod tests {
         let iv = draw_n(s.stream(RngStream::Intervention), 8);
         let sc = draw_n(s.stream(RngStream::Scenario), 8);
         let pi = draw_n(s.stream(RngStream::Piracy), 8);
+        let me = draw_n(s.stream(RngStream::Media), 8);
         assert_ne!(
             iv, sc,
             "Intervention and Scenario must not produce the same sequence"
         );
         assert_ne!(iv, pi, "Intervention and Piracy must differ");
         assert_ne!(sc, pi, "Scenario and Piracy must differ");
+        assert_ne!(iv, me, "Intervention and Media must differ");
+        assert_ne!(sc, me, "Scenario and Media must differ");
+        assert_ne!(pi, me, "Piracy and Media must differ");
+    }
+
+    #[test]
+    fn media_stream_reproduces_and_is_draw_order_independent() {
+        // The appended Media stream reproduces for the same master and is a pure
+        // function of (master, stream) — draining other streams cannot perturb it.
+        let mut a = RngStreams::from_master(42);
+        let mut b = RngStreams::from_master(42);
+        assert_eq!(
+            draw_n(a.stream(RngStream::Media), 8),
+            draw_n(b.stream(RngStream::Media), 8),
+            "Media sequence must reproduce for the same master"
+        );
+
+        let mut drained = RngStreams::from_master(7);
+        for _ in 0..1000 {
+            drained.stream(RngStream::Scenario).next_u64();
+            drained.stream(RngStream::Piracy).next_u64();
+        }
+        let me_after_drain = draw_n(drained.stream(RngStream::Media), 8);
+        let mut fresh = RngStreams::from_master(7);
+        let me_fresh = draw_n(fresh.stream(RngStream::Media), 8);
+        assert_eq!(
+            me_after_drain, me_fresh,
+            "Media must be unaffected by draws from other streams"
+        );
     }
 
     #[test]
@@ -201,6 +242,11 @@ mod tests {
         assert_eq!(
             sc0, 0x4f53_8dce_87ab_d2df,
             "Scenario[master=0] first draw drifted"
+        );
+        let me0 = s.stream(RngStream::Media).next_u64();
+        assert_eq!(
+            me0, 0x487a_df14_52b9_ba97,
+            "Media[master=0] first draw drifted"
         );
     }
 }
