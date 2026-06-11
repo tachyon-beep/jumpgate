@@ -1,0 +1,31 @@
+trophic_run: seed=5 ticks=50000 windows=25 (W=2000) sets=[("station_gossip_slots", "16"), ("craft_gossip_slots", "8"), ("sig_divisor_micros", "3000"), ("hop_loss_milli", "50"), ("evidence_window", "2000")]
+  window@  2000: active=5 low=1 trips= 15 robs= 10 drivenoffs=  3 buys(h/e)=0/0 yard=0 laden=7
+  window@  4000: active=2 low=4 trips= 21 robs= 11 drivenoffs=  4 buys(h/e)=0/0 yard=0 laden=8
+  window@  6000: active=6 low=0 trips= 31 robs=  1 drivenoffs=  0 buys(h/e)=0/1 yard=5000000 laden=6
+  window@  8000: active=6 low=0 trips= 37 robs=  0 drivenoffs=  0 buys(h/e)=0/4 yard=25000000 laden=6
+  window@ 10000: active=6 low=0 trips= 37 robs=  0 drivenoffs=  0 buys(h/e)=0/8 yard=65000000 laden=6
+  window@ 12000: active=6 low=0 trips= 37 robs=  0 drivenoffs=  0 buys(h/e)=0/0 yard=65000000 laden=6
+  window@ 14000: active=6 low=0 trips= 32 robs=  0 drivenoffs=  0 buys(h/e)=4/0 yard=97000000 laden=5
+  window@ 16000: active=6 low=0 trips= 32 robs=  0 drivenoffs=  0 buys(h/e)=6/0 yard=145000000 laden=6
+  window@ 18000: active=6 low=0 trips= 26 robs=  0 drivenoffs=  0 buys(h/e)=2/0 yard=161000000 laden=9
+  window@ 20000: active=6 low=0 trips= 32 robs=  0 drivenoffs=  0 buys(h/e)=0/2 yard=185000000 laden=5
+  window@ 22000: active=6 low=0 trips= 28 robs=  2 drivenoffs=  0 buys(h/e)=0/2 yard=209000000 laden=6
+  window@ 24000: active=3 low=3 trips= 26 robs=  2 drivenoffs=  0 buys(h/e)=0/1 yard=221000000 laden=7
+  window@ 26000: active=4 low=2 trips= 29 robs=  0 drivenoffs=  0 buys(h/e)=0/1 yard=233000000 laden=4
+  window@ 28000: active=3 low=3 trips= 27 robs=  0 drivenoffs=  1 buys(h/e)=1/2 yard=277000000 laden=4
+  window@ 30000: active=3 low=3 trips= 24 robs=  1 drivenoffs=  0 buys(h/e)=0/1 yard=289000000 laden=5
+  window@ 32000: active=5 low=1 trips= 24 robs=  2 drivenoffs=  0 buys(h/e)=1/1 yard=321000000 laden=6
+  window@ 34000: active=6 low=0 trips= 23 robs=  1 drivenoffs=  0 buys(h/e)=1/1 yard=353000000 laden=6
+  window@ 36000: active=3 low=3 trips= 23 robs=  1 drivenoffs=  0 buys(h/e)=1/0 yard=373000000 laden=6
+  window@ 38000: active=4 low=2 trips= 27 robs=  1 drivenoffs=  0 buys(h/e)=2/0 yard=413000000 laden=6
+  window@ 40000: active=2 low=4 trips= 28 robs=  2 drivenoffs=  0 buys(h/e)=0/0 yard=413000000 laden=6
+  window@ 42000: active=3 low=3 trips= 33 robs=  0 drivenoffs=  1 buys(h/e)=1/1 yard=445000000 laden=7
+  window@ 44000: active=5 low=1 trips= 32 robs=  2 drivenoffs=  0 buys(h/e)=2/0 yard=485000000 laden=7
+  window@ 46000: active=5 low=1 trips= 32 robs=  1 drivenoffs=  1 buys(h/e)=1/0 yard=505000000 laden=6
+  window@ 48000: active=3 low=3 trips= 28 robs=  1 drivenoffs=  0 buys(h/e)=0/0 yard=505000000 laden=7
+  window@ 50000: active=3 low=3 trips= 28 robs=  2 drivenoffs=  0 buys(h/e)=1/0 yard=525000000 laden=6
+laden_trips_per_window: mean=28.480 over 25 windows (THE spec-§4 CALIBRATION INPUT)
+diagnosis (a window, not a gate — PDR-0006): Diagnosis { cycled: true, risk_heterogeneous: false, outcomes_disperse: true, verdict: RiskEqualized }
+RESULT seed=5 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=40 laden_trips=712 purchases=48
+MEDIA seed=5 born=40 escaped_milli=925 median_lag=12782 p90_lag=29389 reading=Localized
+ASSIGN seed=5 decisions=764 flips=346 flip_milli=452 counts=[4121, 1983, 1977, 637, 346, 27, 0]
