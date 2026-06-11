@@ -22,3 +22,17 @@ def test_runner_cmd_trophic_is_still_explicit():
     cmd = sweep_trophic.runner_cmd("trophic", 11, 1_000, "/tmp/y.jsonl", [])
     assert cmd[cmd.index("--scenario") + 1] == "trophic"
     assert "--set" not in cmd
+
+
+def test_default_control_recipe_includes_frontier_geometry_equalizer():
+    specs = sweep_trophic.default_knobsets()
+    assert specs[0] == "baseline"
+    name, knobs = sweep_trophic.parse_knobset(specs[1])
+    assert name == "control"
+    assert dict(knobs) == {
+        "pirate_max_reach_au": "999",
+        "stay_milli": "0",
+        "upkeep_per_tick": "200",
+        "grubstake_micros": "2000000000",
+        "engage_radius_au": "0.05",
+    }

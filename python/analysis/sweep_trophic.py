@@ -22,7 +22,7 @@ run's RESULT line, aggregates the per-window JSONL, and prints:
 Usage:
     python3 python/analysis/sweep_trophic.py --seeds 7 11 13 --ticks 50000 \
         --knobset baseline \
-        --knobset "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000"
+        --knobset "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000,engage_radius_au=0.05"
 
 A knob set is "name" (no overrides) or "name:k=v,k=v,..." (each k=v becomes
 a `--set`). Unknown knobs make the runner exit nonzero and the sweep stops:
@@ -36,8 +36,10 @@ Alive and the "control" no longer injected the disease it was built to
 inject. The control must make pirates PERPETUALLY HUNGRY ROAMERS:
 `pirate_max_reach_au=999` (no locality) + `stay_milli=0` (no stickiness)
 + `upkeep_per_tick=200` with `grubstake_micros=2000000000` (hunger that
-never lets them settle). That equalizes risk over routes by construction
-and MUST read RiskEqualized; anything else means the instrument is broken.
+never lets them settle) + `engage_radius_au=0.05` (frontier geometry
+equalizer: suppresses radius inflation as a false clump witness). That
+equalizes risk over routes by construction and MUST read RiskEqualized;
+anything else means the instrument is broken.
 """
 
 import argparse
@@ -110,6 +112,15 @@ def parse_knobset(spec: str):
             raise SystemExit(f"--knobset {spec!r}: bad override {kv!r}")
         pairs.append((k, v))
     return name, pairs
+
+
+def default_knobsets():
+    """Default labeled-run pair: baseline vs hungry-roamer positive control."""
+    return [
+        "baseline",
+        "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,"
+        "grubstake_micros=2000000000,engage_radius_au=0.05",
+    ]
 
 
 def runner_cmd(scenario, seed, ticks, jsonl, knobs):
@@ -401,7 +412,7 @@ def main():
         default=None,
         help="'name' or 'name:k=v,k=v' (repeatable). Default: baseline + the "
         "hungry-roamer positive control (reach=inf, no stickiness, upkeep "
-        "that never lets pirates settle; must read RiskEqualized — "
+        "that never lets pirates settle, frontier geometry equalizer; must read RiskEqualized — "
         "instrument-kill). The old reach+stay-only recipe is retired: the "
         "hunger gate made fed pirates camp (genuinely clumped, correctly "
         "Alive), so it stopped injecting the disease.",
@@ -409,10 +420,7 @@ def main():
     ap.add_argument("--out", default="/tmp/sweep_trophic")
     args = ap.parse_args()
 
-    specs = args.knobset or [
-        "baseline",
-        "control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000",
-    ]
+    specs = args.knobset or default_knobsets()
     out_dir = pathlib.Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
