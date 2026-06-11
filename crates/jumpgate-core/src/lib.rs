@@ -27,6 +27,7 @@ pub mod ids;
 pub mod ingest;
 pub mod integrator;
 pub mod math;
+pub mod media;
 pub mod pirate;
 pub mod provenance;
 pub mod replay;
@@ -59,6 +60,7 @@ pub use ids::{BodyId, ContractId, CraftId, SlotMap, StationId};
 pub use ingest::{ActionLog, ingest_into};
 pub use integrator::{Rk4, VelocityVerlet, gravity_accel, substep_count};
 pub use math::{G_CANONICAL, Vec3, tsiolkovsky_dv};
+pub use media::{GossipAlert, GossipBuffer, GossipNode, MediaDiag};
 pub use pirate::{
     EngagementSnapshot, relocate_lurk_target, resolve_encounters, run_pirate_brains, strength,
     update_pirate_population,

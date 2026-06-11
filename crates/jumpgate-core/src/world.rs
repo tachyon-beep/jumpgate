@@ -64,6 +64,19 @@ pub struct World {
     /// World-level robbery-evidence rings (pub(crate) so the per-tick state
     /// hash folds them directly, like the stores above).
     pub(crate) route_evidence: RouteEvidence,
+    /// Per-station gossip reservoirs (media rung cut 1, spec §2): length
+    /// `n_stations` when media-live, empty otherwise. Sized ONCE at reset (the
+    /// RouteEvidence sizing law). HASHED (HASH_FIELD_ORDER word 31).
+    pub(crate) station_gossip: Vec<crate::media::GossipBuffer>,
+    /// World mint counter for `GossipAlert.alert_seq` — identity/dedup/
+    /// eviction tie-break/lab join key. HASHED (HASH_FIELD_ORDER word 32).
+    pub(crate) next_alert_seq: u32,
+    /// UNHASHED media diagnostics (the `engagement_diag` pattern — never a
+    /// behavior input): eviction count + dock-edge contact records. Written by
+    /// the stage-3b2 media mechanics and read ONLY by instruments; the lib
+    /// readers land with the mechanics/instruments tasks — allow until then.
+    #[allow(dead_code)]
+    pub(crate) media_diag: crate::media::MediaDiag,
     /// Per-engagement kinematic snapshots, pushed by the stage-3b2 emission
     /// sites and read ONLY by the diagnostics sampler (`sample_window`).
     /// UNHASHED diagnostics-only state — never an input to any behavior stage
@@ -134,6 +147,10 @@ pub enum ResetError {
     /// Validated before tick 0 so a malformed economy config never mints a
     /// half-populated, SoA-misaligned world.
     BadEconomyRef { what: &'static str, index: usize },
+    /// A half-on `MediaCfg`: exactly one of the two gossip slot caps is > 0.
+    /// The media-live predicate requires BOTH caps live (dual gate, spec §11);
+    /// a half-on config is a misconfiguration, rejected before tick 0.
+    BadMediaCfg { reason: &'static str },
 }
 
 impl std::fmt::Display for ResetError {
@@ -149,6 +166,9 @@ impl std::fmt::Display for ResetError {
                 f,
                 "economy config {what} references out-of-range index {index}"
             ),
+            ResetError::BadMediaCfg { reason } => {
+                write!(f, "bad media config: {reason}")
+            }
         }
     }
 }
@@ -180,6 +200,17 @@ impl World {
                 return Err(ResetError::Unbrakable { craft_index: i, a_max_empty, dt, limit });
             }
         }
+        // Media half-on validation (BEFORE minting, like BadEconomyRef): the
+        // media-live predicate requires BOTH gossip slot caps live together
+        // (dual gate, spec §11) — exactly one cap > 0 is a misconfiguration.
+        if (cfg.media.station_gossip_slots > 0) != (cfg.media.craft_gossip_slots > 0) {
+            return Err(ResetError::BadMediaCfg {
+                reason: "half-on media: both gossip slot caps must be > 0 together",
+            });
+        }
+        // The media-live dual gate (config caps AND the trophic inert lever):
+        // decides whether reset mints gossip buffers at all.
+        let media_live = cfg.media.caps_live() && cfg.trophic.engage_radius_au > 0.0;
         // Ephemeris::precompute (Task 9) must yield a FINITE position for an a==0.0
         // conic: a central star sits at the origin for all ticks (no NaN from a 0/0
         // mean-anomaly solve). The Task 7 gravity_accel softening (r^2 + eps^2)^1.5
@@ -218,6 +249,7 @@ impl World {
             upgrades: Vec::new(),
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
+            gossip: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -259,6 +291,14 @@ impl World {
             ships.upgrades.push(crate::stores::UpgradeLevels::default());
             ships.info_tick.push(Tick(0));
             ships.pending_upgrade.push(None);
+            // Media column (v5): a comms-log for non-pirate craft on a
+            // media-live world; pirates are information-blind by construction
+            // (spec §16 OD-6) — `None`, like every row when media is off.
+            ships.gossip.push(if media_live && c.role != crate::stores::CraftRole::Pirate {
+                Some(crate::media::GossipBuffer::empty(cfg.media.craft_gossip_slots))
+            } else {
+                None
+            });
         }
 
         // Mint economy stores from the RunConfig init vecs. Dependency order:
@@ -330,6 +370,18 @@ impl World {
             cursor: vec![0u8; n_routes],
         };
 
+        // Station gossip reservoirs: one per station when media-live, sized
+        // ONCE here (the RouteEvidence sizing law — no mid-run station spawn
+        // in v1); empty Vec when media is off.
+        let station_gossip = if media_live {
+            vec![
+                crate::media::GossipBuffer::empty(cfg.media.station_gossip_slots);
+                stations.ids.len()
+            ]
+        } else {
+            Vec::new()
+        };
+
         let mut rng = RngStreams::from_master(cfg.master_seed);
         // Initial lurk assignment (spec §5): drawn from the Piracy stream AT
         // RESET — never config-fixed (a fixed pirate→station map would let a
@@ -387,6 +439,9 @@ impl World {
             contracts,
             econ: crate::economy::EconCounters::zero(),
             route_evidence,
+            station_gossip,
+            next_alert_seq: 0,
+            media_diag: Default::default(),
             engagement_diag: Vec::new(),
             eph,
             rng,
@@ -517,6 +572,13 @@ impl World {
     /// panel). Plain read over already-hashed config — never a behavior input.
     pub(crate) fn shipyard_cfg(&self) -> &crate::config::ShipyardCfg {
         &self.config.shipyard
+    }
+
+    /// The media-live dual gate (spec §11): BOTH gossip slot caps > 0 AND the
+    /// trophic inert lever open (`engage_radius_au > 0`). Pure read over
+    /// already-hashed config — pub so tests (and instruments) can read it.
+    pub fn media_live(&self) -> bool {
+        self.config.media.caps_live() && self.config.trophic.engage_radius_au > 0.0
     }
 
     /// Idle == available for a strategic decision: role `Idle` AND no bound (or
@@ -1573,6 +1635,68 @@ mod tests {
         assert_eq!(Some(wa.producers.station[0]), st0, "producer bound to minted station 0");
         // Flow counters start zero (no firing at reset).
         assert_eq!(wa.econ, crate::economy::EconCounters::zero());
+    }
+
+    #[test]
+    fn half_on_media_config_is_rejected() {
+        // Exactly one gossip slot cap > 0 is a misconfiguration (the dual
+        // gate's config half must be all-or-nothing): reset rejects BEFORE
+        // tick 0 with BadMediaCfg, like BadEconomyRef.
+        let mut cfg = one_body_two_stations_one_miner();
+        cfg.media.station_gossip_slots = 16;
+        cfg.media.craft_gossip_slots = 0;
+        assert!(matches!(
+            World::reset(cfg).map(|_| ()),
+            Err(ResetError::BadMediaCfg { .. })
+        ));
+    }
+
+    #[test]
+    fn media_live_reset_mints_buffers() {
+        use crate::stores::CraftRole;
+        // 2-station fixture + a hauler and a pirate craft. Caps 16/8 with the
+        // trophic lever open (engage > 0) => media-live: station buffers len 2
+        // cap 16; non-pirate craft rows Some cap 8; pirate rows None
+        // (information-blind by construction, spec §16 OD-6).
+        let mut cfg = one_body_two_stations_one_miner();
+        let mut hauler = cfg.craft[0].clone();
+        hauler.role = CraftRole::Hauler;
+        let mut pirate = cfg.craft[0].clone();
+        pirate.role = CraftRole::Pirate;
+        cfg.craft.push(hauler);
+        cfg.craft.push(pirate);
+        cfg.media.station_gossip_slots = 16;
+        cfg.media.craft_gossip_slots = 8;
+        cfg.trophic.engage_radius_au = 0.05;
+        let (w, _) = World::reset(cfg.clone()).expect("resolvable media-live config");
+        assert!(w.media_live(), "caps 16/8 + engage>0 must be media-live");
+        assert_eq!(w.station_gossip.len(), 2, "one reservoir per station");
+        for buf in &w.station_gossip {
+            assert_eq!(buf.slots.len(), 16, "station reservoir cap from config");
+            assert_eq!(buf.occupied(), 0, "reservoirs mint empty");
+        }
+        // Row 0 is the fixture's Idle craft — non-pirate, so it gets a
+        // comms-log too (the mint rule is `role != Pirate`, not Hauler-only).
+        for row in [0usize, 1] {
+            let buf = w.ships.gossip[row].as_ref().expect("non-pirate row mints Some");
+            assert_eq!(buf.slots.len(), 8, "craft comms-log cap from config");
+            assert_eq!(buf.occupied(), 0, "comms-logs mint empty");
+        }
+        assert!(w.ships.gossip[2].is_none(), "pirate rows are information-blind: None");
+        assert_eq!(w.next_alert_seq, 0, "alert mint counter starts at 0");
+        assert_eq!(w.media_diag.evictions, 0, "diagnostics mint zeroed");
+        assert!(w.media_diag.contacts.is_empty(), "diagnostics mint empty");
+
+        // The dual gate's single-lever case: same caps, engage 0.0 => NOT
+        // media-live; everything None/empty (no buffers anywhere).
+        cfg.trophic.engage_radius_au = 0.0;
+        let (w_off, _) = World::reset(cfg).expect("resolvable inert config");
+        assert!(!w_off.media_live(), "engage 0.0 must close the dual gate");
+        assert!(w_off.station_gossip.is_empty(), "no reservoirs when media is off");
+        assert!(
+            w_off.ships.gossip.iter().all(Option::is_none),
+            "no comms-logs when media is off"
+        );
     }
 
     /// One station (Ore=0) with a ∅->Ore(5) miner at interval 1, attached to it.

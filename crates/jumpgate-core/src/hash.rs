@@ -73,6 +73,19 @@
 //!   29. route_evidence: robs.len() as u64; per directed route (dense row-major
 //!       n_stations²): robs[0..8].0, then cursor as u64
 //!
+//! MEDIA RUNG (HASH_FORMAT_VERSION 5):
+//!
+//!  World-level (folded AFTER word 29, shared by `state_hash` and the parity
+//!  recompute; one gossip BUFFER fold = slots.len() then per slot 0 | 1 +
+//!  (alert_seq, route, pirate_slot, rob_tick.0, claimed_value_micros as u64,
+//!  first_heard.0, hops as u64)):
+//!   30. craft gossip comms-logs (`write_craft_gossip`): gossip.len() as u64;
+//!       per craft row in dense order (slot == row) a self-delimiting
+//!       0 (None) | 1 + buffer fold
+//!   31. station gossip reservoirs (`write_station_gossip`): station_gossip.len()
+//!       as u64; per station row a buffer fold
+//!   32. next_alert_seq as u64 (the alert mint counter, inline)
+//!
 //!  NOT folded at v4 (transient): `CraftStore.pending_upgrade` — purchase intent
 //!  written and consumed within the same tick (stage 1d), always `None` at every
 //!  hash point; `state_hash` debug_asserts that invariant (the `prev_*` doc
@@ -105,13 +118,15 @@ pub const HASH_MAGIC: u64 = 0x4a55_4d50_4741_5445; // "JUMPGATE"
 /// v3: + trophic state (per-craft `risk_appetite` + `pirate`, words 25..=26).
 /// v4: + pirates-rung state (per-craft `upgrades`/`info_tick` words 27..=28,
 /// `engage_cooldown_until` inside word 26, world-level `route_evidence` word 29).
-pub const HASH_FORMAT_VERSION: u32 = 4;
+/// v5: + media-rung state (craft gossip comms-logs word 30, station gossip
+/// reservoirs word 31, `next_alert_seq` word 32).
+pub const HASH_FORMAT_VERSION: u32 = 5;
 
 /// Golden per-tick hash of the minimal zero-init slice under HASH_FIELD_ORDER
 /// words 1..=13. Pinned so any change to the canonical encoding is caught.
 /// Captured from the first run of `golden_zero_state_hash`; if HASH_FIELD_ORDER
 /// or HASH_FORMAT_VERSION changes, recapture AND bump the version.
-pub const GOLDEN_ZERO_STATE_HASH: u64 = 0xafdc_5c35_6266_0ff0; // RE-PINNED: HASH_FORMAT_VERSION 3->4 (+upgrades/info_tick/engage_cooldown/route_evidence). Was 0x1d44_b373_5ccd_33f7.
+pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x0f20_843f_ccfd_8c70; // RE-PINNED: HASH_FORMAT_VERSION 4->5 (+craft/station gossip, next_alert_seq). Was 0xafdc_5c35_6266_0ff0.
 
 /// Shared FNV-1a 64-bit hasher for the per-tick state hash. Folds each u64 as 8
 /// little-endian bytes. `new()` seeds with `HASH_MAGIC` then the version word.
@@ -277,6 +292,13 @@ pub fn state_hash(world: &World) -> u64 {
 
     // HASH_FIELD_ORDER word 29: world-level route-evidence rings (format v4).
     write_route_evidence(&mut h, world);
+
+    // HASH_FIELD_ORDER words 30-31: gossip comms-logs + station reservoirs
+    // (format v5, shared folds).
+    write_craft_gossip(&mut h, world);
+    write_station_gossip(&mut h, world);
+    // HASH_FIELD_ORDER word 32: the alert mint counter (format v5).
+    h.write_u64(world.next_alert_seq as u64);
 
     // `pending_upgrade` is TRANSIENT intent: written and consumed within one
     // tick (stage 1d), so it must be empty at EVERY hash point. A `Some` here
@@ -459,6 +481,54 @@ pub(crate) fn write_route_evidence(h: &mut FnvHasher, world: &World) {
             h.write_u64(t.0);
         }
         h.write_u64(*cur as u64);
+    }
+}
+
+/// Fold one gossip buffer: `slots.len()` (self-delimiting), then per slot a
+/// 0|1 tag and, for a held alert, all seven `GossipAlert` fields in
+/// declaration order. SHARED by the craft and station folds below.
+fn write_gossip_buffer(h: &mut FnvHasher, buf: &crate::media::GossipBuffer) {
+    h.write_u64(buf.slots.len() as u64);
+    for slot in &buf.slots {
+        match slot {
+            None => h.write_u64(0),
+            Some(a) => {
+                h.write_u64(1);
+                h.write_u64(a.alert_seq as u64);
+                h.write_u64(a.route as u64);
+                h.write_u64(a.pirate_slot as u64);
+                h.write_u64(a.rob_tick.0);
+                h.write_u64(a.claimed_value_micros as u64);
+                h.write_u64(a.first_heard.0);
+                h.write_u64(a.hops as u64);
+            }
+        }
+    }
+}
+
+/// Fold the per-craft gossip comms-logs — HASH_FIELD_ORDER word 30 (format
+/// v5): per-craft gossip buffers, dense row order (slot == row),
+/// self-delimiting (len; per row tag 0 | 1 + buffer fold). SHARED by
+/// `state_hash` and the parity recompute.
+pub(crate) fn write_craft_gossip(h: &mut FnvHasher, world: &World) {
+    h.write_u64(world.ships.gossip.len() as u64);
+    for g in &world.ships.gossip {
+        match g {
+            None => h.write_u64(0),
+            Some(buf) => {
+                h.write_u64(1);
+                write_gossip_buffer(h, buf);
+            }
+        }
+    }
+}
+
+/// Fold the station gossip reservoirs — HASH_FIELD_ORDER word 31 (format v5):
+/// len; per row buffer fold. SHARED by `state_hash` and the parity recompute.
+pub(crate) fn write_station_gossip(h: &mut FnvHasher, world: &World) {
+    h.write_u64(world.station_gossip.len() as u64);
+    for buf in &world.station_gossip {
+        write_gossip_buffer(h, buf);
     }
 }
 
@@ -684,6 +754,12 @@ mod tests {
         super::write_economy_stores(&mut h, w);
         // HASH_FIELD_ORDER word 29: world-level route-evidence rings (shared fold).
         super::write_route_evidence(&mut h, w);
+        // HASH_FIELD_ORDER words 30-31: gossip comms-logs + station reservoirs
+        // (format v5, shared folds).
+        super::write_craft_gossip(&mut h, w);
+        super::write_station_gossip(&mut h, w);
+        // HASH_FIELD_ORDER word 32: the alert mint counter (format v5).
+        h.write_u64(w.next_alert_seq as u64);
         h.finish()
     }
 
@@ -938,14 +1014,98 @@ mod tests {
     }
 
     #[test]
+    fn state_v5_columns_are_folded() {
+        use crate::media::{GossipAlert, GossipBuffer};
+        use crate::time::Tick;
+        // v5 completeness guard (the state_v4_columns_are_folded pattern): each
+        // single-field mutation MUST move the hash — proving the field is folded
+        // (a forgotten field would let two distinct media states collide and
+        // silently break replay-divergence detection).
+        let h0 = state_hash(&populated_world());
+        macro_rules! moves {
+            ($name:expr, $mut:expr) => {{
+                let mut w = populated_world();
+                $mut(&mut w);
+                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+            }};
+        }
+        // HASH_FIELD_ORDER word 30: craft gossip PRESENCE (None -> Some(empty)
+        // must move the hash — the self-delimiting 0|1 tag).
+        moves!("craft gossip presence", |w: &mut World| {
+            w.ships.gossip[0] = Some(GossipBuffer::empty(2));
+        });
+        // HASH_FIELD_ORDER word 32: the alert mint counter.
+        moves!("next_alert_seq", |w: &mut World| w.next_alert_seq = 7);
+
+        // Each GossipAlert field in a HELD craft alert is folded (7 probes,
+        // against a base world that holds the alert — the engage_cooldown
+        // pbase/pmoved pattern).
+        let alert = GossipAlert {
+            alert_seq: 3,
+            route: 1,
+            pirate_slot: 2,
+            rob_tick: Tick(40),
+            claimed_value_micros: 1_500_000,
+            first_heard: Tick(44),
+            hops: 1,
+        };
+        let gossiped = |w: &mut World| {
+            let mut buf = GossipBuffer::empty(2);
+            buf.slots[0] = Some(alert);
+            w.ships.gossip[0] = Some(buf);
+        };
+        let mut gbase = populated_world();
+        gossiped(&mut gbase);
+        let hg = state_hash(&gbase);
+        let field_probes = [
+            ("alert_seq", (|a: &mut GossipAlert| a.alert_seq = 9) as fn(&mut GossipAlert)),
+            ("route", |a: &mut GossipAlert| a.route = 5),
+            ("pirate_slot", |a: &mut GossipAlert| a.pirate_slot = 6),
+            ("rob_tick", |a: &mut GossipAlert| a.rob_tick = Tick(41)),
+            ("claimed_value_micros", |a: &mut GossipAlert| a.claimed_value_micros = 1_500_001),
+            ("first_heard", |a: &mut GossipAlert| a.first_heard = Tick(45)),
+            ("hops", |a: &mut GossipAlert| a.hops = 2),
+        ];
+        for (name, mutate) in field_probes {
+            let mut w = populated_world();
+            gossiped(&mut w);
+            mutate(w.ships.gossip[0].as_mut().unwrap().slots[0].as_mut().unwrap());
+            assert_ne!(
+                state_hash(&w),
+                hg,
+                "GossipAlert.{name} must be folded into state_hash (word 30)"
+            );
+        }
+
+        // HASH_FIELD_ORDER word 31: a station-buffer alert. populated_world's
+        // station_gossip is empty at reset, so size one station buffer by hand
+        // (the route_evidence `evidenced` precedent).
+        let stationed = |w: &mut World| {
+            w.station_gossip = vec![GossipBuffer::empty(2)];
+        };
+        let mut sbase = populated_world();
+        stationed(&mut sbase);
+        let hs = state_hash(&sbase);
+        assert_ne!(hs, h0, "station gossip buffer presence must be folded (word 31)");
+        let mut sheld = populated_world();
+        stationed(&mut sheld);
+        sheld.station_gossip[0].slots[0] = Some(alert);
+        assert_ne!(
+            state_hash(&sheld),
+            hs,
+            "a held station-buffer alert must be folded into state_hash (word 31)"
+        );
+    }
+
+    #[test]
     fn state_hash_golden_zero_world() {
         // Hardcoded digest of the canonical zero-init world (cfg_with_craft_x(2.0),
         // tick 0). Pins HASH_FIELD_ORDER + HASH_FORMAT_VERSION. If this changes,
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
-        // RE-PINNED: HASH_FORMAT_VERSION 3->4 (+upgrades/info_tick/engage_cooldown/route_evidence). Was 0x2d92_c7ce_4daa_4567.
-        assert_eq!(state_hash(&w), 0xa29b_6334_16f7_cd20u64);
+        // RE-PINNED: HASH_FORMAT_VERSION 4->5 (+craft/station gossip, next_alert_seq). Was 0xa29b_6334_16f7_cd20.
+        assert_eq!(state_hash(&w), 0x274b_6874_3b8d_2700u64);
     }
 
     #[test]
@@ -1047,6 +1207,12 @@ mod tests {
         // world-level word 29: route_evidence (no stations -> 0 directed routes,
         // so only the self-delimiting length word is folded):
         h.write_u64(0); // 29. route_evidence robs.len()
+        // media words 30-32 (format v5): one craft with a None comms-log, zero
+        // station reservoirs, alert mint counter 0:
+        h.write_u64(1); // 30a. craft gossip len (one craft)
+        h.write_u64(0); // 30b. craft 0 gossip tag (None)
+        h.write_u64(0); // 31. station gossip len (zero stations)
+        h.write_u64(0); // 32. next_alert_seq
         h.finish()
     }
 

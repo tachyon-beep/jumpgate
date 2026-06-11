@@ -201,6 +201,12 @@ pub struct CraftStore {
     /// every hash point — `state_hash` debug_asserts exactly that. NOT folded
     /// into HASH_FIELD_ORDER.
     pub pending_upgrade: Vec<Option<UpgradeKind>>,
+    // --- Media-rung column (length-parallel, state v5) ---
+    /// Per-craft gossip comms-log: `Some(GossipBuffer)` ONLY for non-pirate
+    /// rows on a media-live world — pirates are information-blind by
+    /// construction (spec §16 OD-6) and get `None`, as does every row when
+    /// media is off. HASHED (HASH_FIELD_ORDER word 30).
+    pub gossip: Vec<Option<crate::media::GossipBuffer>>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -237,6 +243,7 @@ impl CraftStore {
             upgrades: Vec::new(),
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
+            gossip: Vec::new(),
         }
     }
 
@@ -271,6 +278,9 @@ impl CraftStore {
         self.upgrades.push(UpgradeLevels::default());
         self.info_tick.push(Tick(0));
         self.pending_upgrade.push(None);
+        // Media: `Some` only for non-pirate rows on a media-live world; the
+        // generic push seeds `None` (World::reset's mint loop decides).
+        self.gossip.push(None);
         CraftId { slot, generation }
     }
 
