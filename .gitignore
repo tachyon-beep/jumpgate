@@ -15,3 +15,14 @@ __pycache__/
 build/
 dist/
 .venv/
+
+# Filigree issue tracker
+.weft/
+.filigree/
+filigree-workflow/
+
+# Volatile bench/RL artifacts (runs/media_baseline is the uncommitted cross-branch digest reference by design)
+runs/
+
+# Machine-local Claude settings
+.claude/settings.local.json
