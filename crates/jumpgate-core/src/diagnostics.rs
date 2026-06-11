@@ -489,10 +489,11 @@ pub fn escaped_milli(samples: &[TrophicSample]) -> u32 {
 }
 
 /// Classify a windowed run's MEDIA propagation field (spec §9). Pure over the
-/// samples, like `classify`; precedence is the listed reading order. The
-/// operationalized rule deviations from the spec's wording are recorded on
-/// the `MediaReading` variants.
-pub fn media_classify(samples: &[TrophicSample]) -> MediaReading {
+/// samples, like `classify`; precedence is the listed reading order.
+/// `endpoint_rows` is the CommonKnowledge coverage denominator: news must
+/// reach every contract-endpoint station, not structurally-dark stations that
+/// host no contract endpoint.
+pub fn media_classify(samples: &[TrophicSample], endpoint_rows: &[bool]) -> MediaReading {
     let born: u64 = samples.iter().map(|s| u64::from(s.gossip_born)).sum();
     if born == 0 {
         return MediaReading::NoMedia;
@@ -516,9 +517,17 @@ pub fn media_classify(samples: &[TrophicSample]) -> MediaReading {
         }
     }
     let last = samples.last().expect("non-empty: born > 0");
+    let endpoints: Vec<usize> = endpoint_rows
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &e)| e.then_some(i))
+        .collect();
     if escaped_milli(samples) >= COMMON_KNOWLEDGE_ESCAPE_MILLI
         && !last.per_station_alerts.is_empty()
-        && last.stations_with_news as usize == last.per_station_alerts.len()
+        && !endpoints.is_empty()
+        && endpoints
+            .iter()
+            .all(|&i| last.per_station_alerts.get(i).copied().unwrap_or(0) > 0)
     {
         return MediaReading::CommonKnowledge;
     }
@@ -826,6 +835,23 @@ pub fn route_of(world: &World, contract: ContractId) -> Option<usize> {
     let fr = world.stations.ids.dense_index(from.slot, from.generation)?;
     let tr = world.stations.ids.dense_index(to.slot, to.generation)?;
     Some(fr.saturating_mul(n).saturating_add(tr))
+}
+
+/// Contract-endpoint station rows derived from the run's own config: row i is
+/// `true` iff some seeded contract has it as `from_station_index` or
+/// `to_station_index`. This is the scenario-conditional CommonKnowledge
+/// coverage denominator.
+pub fn endpoint_station_rows(cfg: &crate::config::RunConfig) -> Vec<bool> {
+    let mut rows = vec![false; cfg.stations.len()];
+    for k in &cfg.contracts {
+        if let Some(r) = rows.get_mut(k.from_station_index) {
+            *r = true;
+        }
+        if let Some(r) = rows.get_mut(k.to_station_index) {
+            *r = true;
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
@@ -1358,7 +1384,7 @@ mod tests {
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| m((w + 1) * WINDOW_TICKS, 0, 0, 2, 0, 0, 0, &[0, 0, 0]))
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::NoMedia);
+        assert_eq!(media_classify(&samples, &[true, true, true]), MediaReading::NoMedia);
     }
 
     #[test]
@@ -1371,7 +1397,10 @@ mod tests {
                 m((w + 1) * WINDOW_TICKS, 1, 0, 1, 0, (w + 1) as u32, 0, &[1, 0, 0])
             })
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::NewsDesert);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::NewsDesert
+        );
     }
 
     #[test]
@@ -1385,7 +1414,10 @@ mod tests {
                 m((w + 1) * WINDOW_TICKS, 1, heard, 1, 3, (w + 1) as u32, 4, &[2, 1, 0])
             })
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::StaleEcho);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::StaleEcho
+        );
     }
 
     #[test]
@@ -1401,7 +1433,10 @@ mod tests {
                 m((w + 1) * WINDOW_TICKS, born, heard, robs, 3, cum, 4, &[2, 1, 0])
             })
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::Localized);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::Localized
+        );
     }
 
     #[test]
@@ -1416,7 +1451,10 @@ mod tests {
                 m((w + 1) * WINDOW_TICKS, 2, 3, 1, 6, born_cum, escaped_cum, &[2, 1, 1])
             })
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::CommonKnowledge);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::CommonKnowledge
+        );
     }
 
     #[test]
@@ -1428,6 +1466,83 @@ mod tests {
                 m((w + 1) * WINDOW_TICKS, 1, 1, 1, 2, (w + 1) as u32, 6, &[2, 0, 0])
             })
             .collect();
-        assert_eq!(media_classify(&samples), MediaReading::Localized);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::Localized
+        );
+    }
+
+    #[test]
+    fn media_common_knowledge_denominates_on_contract_endpoint_stations() {
+        // Frontier shape: a dark station (no contract endpoint) never holds
+        // news; coverage must be satisfiable over the endpoint set.
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                let born_cum = ((w + 1) * 2) as u32;
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    2,
+                    3,
+                    1,
+                    6,
+                    born_cum,
+                    born_cum.saturating_sub(1),
+                    &[2, 1, 0],
+                )
+            })
+            .collect();
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::Localized,
+            "dark row counted -> coverage unsatisfiable"
+        );
+        assert_eq!(
+            media_classify(&samples, &[true, true, false]),
+            MediaReading::CommonKnowledge,
+            "endpoint coverage complete -> CommonKnowledge"
+        );
+    }
+
+    #[test]
+    fn media_empty_endpoint_set_never_reads_common_knowledge() {
+        let samples: Vec<TrophicSample> = (0..12u64)
+            .map(|w| {
+                let born_cum = ((w + 1) * 2) as u32;
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    2,
+                    3,
+                    1,
+                    6,
+                    born_cum,
+                    born_cum.saturating_sub(1),
+                    &[2, 1, 1],
+                )
+            })
+            .collect();
+        assert_eq!(
+            media_classify(&samples, &[false, false, false]),
+            MediaReading::Localized
+        );
+    }
+
+    #[test]
+    fn endpoint_station_rows_trophic_is_all_true() {
+        let cfg = crate::scenario::scenario_trophic(7);
+        assert_eq!(endpoint_station_rows(&cfg), vec![true; 6]);
+    }
+
+    #[test]
+    fn endpoint_station_rows_marks_a_contractless_station_dark() {
+        let mut cfg = crate::scenario::scenario_trophic(7);
+        cfg.stations.push(crate::config::StationInit {
+            body_index: 1,
+            initial_stock: [0, 0],
+            initial_price_micros: [0, 0],
+            sells_upgrades: false,
+        });
+        let rows = endpoint_station_rows(&cfg);
+        assert_eq!(rows.len(), 7);
+        assert!(!rows[6], "no contract touches the new station -> dark");
     }
 }

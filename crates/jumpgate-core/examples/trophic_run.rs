@@ -131,8 +131,10 @@ struct LivenessFacts {
 }
 
 /// `simulate`'s product: per-window samples, sampled `(tick, state_hash)`,
-/// final world, META facts, and runner-side liveness facts.
-type RunProduct = (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts, LivenessFacts);
+/// final world, META facts, runner-side liveness facts, and contract-endpoint
+/// station rows for MEDIA coverage.
+type RunProduct =
+    (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts, LivenessFacts, Vec<bool>);
 
 /// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
 /// the replay-check's second run shares nothing but the recipe.
@@ -153,6 +155,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             args.ticks, cfg.ephemeris_window
         ));
     }
+    let endpoint_rows = diagnostics::endpoint_station_rows(&cfg);
     let meta = MetaFacts {
         scenario: scenario_name,
         stations: cfg.stations.len(),
@@ -234,7 +237,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .unwrap_or(0),
         open_contracts: open_contracts.len(),
     };
-    Ok((samples, hashes, world, meta, liveness))
+    Ok((samples, hashes, world, meta, liveness, endpoint_rows))
 }
 
 /// Serialize one window sample as a JSONL line (field-for-field).
@@ -553,7 +556,8 @@ fn main() -> ExitCode {
         .jsonl
         .as_ref()
         .map(|p| BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}"))));
-    let (samples, hashes, world, meta, liveness) = match simulate(&args, jsonl_writer.as_mut()) {
+    let (samples, hashes, world, meta, liveness, endpoint_rows) =
+        match simulate(&args, jsonl_writer.as_mut()) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("trophic_run: {e}");
@@ -689,7 +693,7 @@ fn main() -> ExitCode {
         diagnostics::escaped_milli(&samples),
         median_lag,
         p90_lag,
-        diagnostics::media_classify(&samples),
+        diagnostics::media_classify(&samples, &endpoint_rows),
     );
 
     // The FUEL line (world-gets-big phase 0b/2, spec §8 — a window, not a gate;
@@ -749,7 +753,7 @@ fn main() -> ExitCode {
     }
 
     if args.replay_check {
-        let (_, hashes2, _, _, _) = match simulate(&args, None) {
+        let (_, hashes2, _, _, _, _) = match simulate(&args, None) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("trophic_run: replay arm: {e}");
