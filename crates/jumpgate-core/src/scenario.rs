@@ -250,6 +250,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         trophic,
         shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
         media: MediaCfg::default(),
+        refuel: crate::config::RefuelCfg::default(),
     }
 }
 

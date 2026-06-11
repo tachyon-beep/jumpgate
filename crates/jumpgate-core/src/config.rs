@@ -404,6 +404,32 @@ impl MediaCfg {
     }
 }
 
+/// The propellant-purchase verb (world-gets-big rung §5). Inert by default:
+/// `lot_mass == 0.0` makes BOTH refuel stages (1c3b `run_refuel_policies`,
+/// 1d2 `resolve_refuels`) deterministic no-ops — the named trophic-inertness
+/// gate (scenario_trophic leaves this default-off; proven by the phase-exit
+/// cross-branch digest, Task 1.2.7).
+#[derive(Clone, Copy, Debug)]
+pub struct RefuelCfg {
+    /// Propellant mass per integer lot (same f64 unit as `fuel_mass`).
+    /// `0.0` = the refuel verb is OFF. The settle decision is integer lots:
+    /// `units = min(floor((cap_eff - fuel)/lot), stock[Fuel], credits/price)`.
+    pub lot_mass: f64,
+    /// Corporation (config index) credited with every refuel payment — the
+    /// Port corp (the Yard precedent, `ShipyardCfg.corp_index`: dense
+    /// slot == row; a stale/out-of-range row is a deterministic settle skip,
+    /// never a one-legged debit). The frontier factory (phase 2) appends a
+    /// `CorporationInit { treasury_micros: 0, .. }` Port corp and points this
+    /// at it; on a lot-0 world this index is never read.
+    pub corp_index: u32,
+}
+
+impl Default for RefuelCfg {
+    fn default() -> Self {
+        RefuelCfg { lot_mass: 0.0, corp_index: 0 }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -433,6 +459,9 @@ pub struct RunConfig {
     // Media rung cut 1 (folded AFTER shipyard, append-only). Default leaves the
     // gossip machinery inert (both slot caps 0 => no buffers, no Media draws).
     pub media: MediaCfg,
+    // World-gets-big rung (folded AFTER media, append-only). Default leaves the
+    // refuel machinery inert (lot_mass == 0.0 => both refuel stages no-op).
+    pub refuel: RefuelCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -496,6 +525,7 @@ impl RunConfig {
     ///  23. trophic: all fields in declaration order (f64 via to_bits, enums via rank)
     ///  24. shipyard: all fields in declaration order
     ///  25. media: all fields in declaration order
+    ///  26. refuel: lot_mass.to_bits(), corp_index
     pub fn config_hash(&self) -> ConfigHash {
         // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
         // until it is explicitly folded below (D10/M6 — closes the silent-omission
@@ -518,6 +548,7 @@ impl RunConfig {
             trophic,  // NEW (pirates rung A): destructure forces folding below
             shipyard, // NEW (pirates rung A): destructure forces folding below
             media,    // NEW (media rung cut 1): destructure forces folding below
+            refuel,   // NEW (world-gets-big): destructure forces folding below
         } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
@@ -711,6 +742,13 @@ impl RunConfig {
         h.write_u64(*claimed_value_cap_micros as u64);
         h.write_u64(*value_ticks_milli as u64);
         h.write_u64(*staleness_from_rob_tick as u64);
+        // WORLD-GETS-BIG RUNG (TAIL, append-only — CONFIG_FIELD_ORDER 26). The
+        // byte stream above stays byte-identical; this only EXTENDS it.
+        // Exhaustive destructure: a NEW RefuelCfg field is a COMPILE ERROR here
+        // until explicitly folded (the D10/M6 discipline).
+        let RefuelCfg { lot_mass, corp_index } = refuel;
+        h.write_u64(lot_mass.to_bits());
+        h.write_u64(*corp_index as u64);
         ConfigHash(h.finish())
     }
 }
@@ -742,7 +780,7 @@ fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0xee02_df67_1889_78dc; // RE-PINNED: +media.staleness_from_rob_tick (WHY-panel probe knob). Was 0x5fda_1f2f_edf2_355c.
+    const GOLDEN_CONFIG_HASH: u64 = 0x128c_1299_5c48_4fdc; // RE-PINNED: +RefuelCfg{lot_mass,corp_index} folded at config tail (world-gets-big §5). Was 0xee02_df67_1889_78dc.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -789,6 +827,7 @@ mod tests {
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(),
             media: MediaCfg::default(),
+            refuel: RefuelCfg::default(),
         }
     }
 
@@ -996,6 +1035,17 @@ mod tests {
         let mut e = sample();
         e.media.staleness_from_rob_tick = true;
         assert_ne!(sample().config_hash(), e.config_hash());
+    }
+
+    #[test]
+    fn changing_refuel_cfg_changes_config_hash() {
+        let base = sample().config_hash();
+        let mut cfg = sample();
+        cfg.refuel.lot_mass = 5e-11;
+        assert_ne!(cfg.config_hash(), base, "lot_mass must be folded");
+        let mut cfg = sample();
+        cfg.refuel.corp_index = 4;
+        assert_ne!(cfg.config_hash(), base, "corp_index must be folded");
     }
 
     #[test]

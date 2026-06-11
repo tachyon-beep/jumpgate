@@ -84,6 +84,7 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
         trophic: jumpgate_core::config::TrophicCfg::default(),
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
+        refuel: jumpgate_core::config::RefuelCfg::default(),
     }
 }
 
@@ -357,6 +358,7 @@ fn transfer_to_moving_body_rendezvous() {
         trophic: jumpgate_core::config::TrophicCfg::default(),
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
+        refuel: jumpgate_core::config::RefuelCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");
@@ -488,6 +490,7 @@ fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
         trophic: jumpgate_core::config::TrophicCfg::default(),
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
+        refuel: jumpgate_core::config::RefuelCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");

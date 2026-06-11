@@ -927,6 +927,7 @@ mod tests {
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(), // corp_index 0 == the only corp
             media: crate::config::MediaCfg::default(),
+            refuel: crate::config::RefuelCfg::default(),
         }
     }
 

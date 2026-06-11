@@ -1298,6 +1298,7 @@ mod tests {
             trophic: crate::config::TrophicCfg::default(),
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
+            refuel: crate::config::RefuelCfg::default(),
         }
     }
 
@@ -1356,6 +1357,7 @@ mod tests {
             trophic: crate::config::TrophicCfg::default(),
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
+            refuel: crate::config::RefuelCfg::default(),
         }
     }
 
