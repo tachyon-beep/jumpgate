@@ -363,6 +363,10 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::UpgradePurchased { craft, .. } => Some(craft),
         EventKind::ContractAccepted { hauler, .. }
         | EventKind::ContractFulfilled { hauler, .. } => Some(hauler),
+        // World-gets-big §7: the refuel and the failure thread into the
+        // craft's life arc, so a stranded run reads end-to-end.
+        EventKind::Refueled { craft, .. } => Some(craft),
+        EventKind::ContractFailed { hauler, .. } => Some(hauler),
         EventKind::Robbed { pirate, .. }
         | EventKind::DrivenOff { pirate, .. }
         | EventKind::HaulerKilled { pirate, .. }
