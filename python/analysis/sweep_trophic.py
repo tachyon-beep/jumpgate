@@ -75,13 +75,15 @@ META_RE = re.compile(
 
 # The FUEL line (world-gets-big phase 0b) — lands in the SAME commit as the
 # runner's println! (the lockstep rule). HAULER numbers only on the anchored
-# line; pirates ride the per-role JSONL tail rows. Phase-1 refuel fields
-# append here with the mechanic; this phase prints only measured fields.
+# line; pirates ride the per-role JSONL tail rows. Refuel fields append with
+# the mechanic, and the tail is optional so banked pre-refuel stdout still
+# parses.
 FUEL_RE = re.compile(
     r"^FUEL seed=(?P<seed>\d+) hauler_duty_milli=(?P<duty>\d+) "
     r"hauler_burn_total_milli=(?P<burn>\d+) "
     r"hauler_median_leg_burn_permille=(?P<leg>\d+) "
-    r"hauler_min_tank_permille=(?P<min_tank>\d+)$"
+    r"hauler_min_tank_permille=(?P<min_tank>\d+)"
+    r"(?: refuels=(?P<refuels>\d+) refuel_spend_micros=(?P<refuel_spend_micros>-?\d+))?$"
 )
 
 ANCHORED = {

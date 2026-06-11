@@ -692,18 +692,23 @@ fn main() -> ExitCode {
         diagnostics::media_classify(&samples),
     );
 
-    // The FUEL line (world-gets-big phase 0b, spec §8 — a window, not a gate;
+    // The FUEL line (world-gets-big phase 0b/2, spec §8 — a window, not a gate;
     // the lockstep rule: this line and FUEL_RE land in the SAME commit).
-    // MEASURED fields only. Refuel fields append with the phase-1 mechanic,
-    // never as zeros for a verb that does not exist yet.
+    // Refuel totals append at the tail now that the mechanic and sampler fields
+    // exist; 0 means either "mechanic dark" or "nobody bought" by scenario.
+    let refuels_total: u64 = samples.iter().map(|s| u64::from(s.refuels)).sum();
+    let refuel_spend_total: i64 = samples.iter().map(|s| s.refuel_spend_micros).sum();
     println!(
         "FUEL seed={} hauler_duty_milli={} hauler_burn_total_milli={} \
-         hauler_median_leg_burn_permille={} hauler_min_tank_permille={}",
+         hauler_median_leg_burn_permille={} hauler_min_tank_permille={} \
+         refuels={} refuel_spend_micros={}",
         args.seed,
         hauler_fuel.duty_milli,
         hauler_fuel.burn_total_milli,
         hauler_fuel.median_leg_burn_permille,
         hauler_fuel.min_tank_permille,
+        refuels_total,
+        refuel_spend_total,
     );
     println!(
         "LIVENESS max_open_contract_age={} open_contracts={}",
