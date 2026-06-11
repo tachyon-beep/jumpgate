@@ -157,9 +157,10 @@ pub enum ResetError {
     /// a half-on config is a misconfiguration, rejected before tick 0.
     BadMediaCfg { reason: &'static str },
     /// A half-on `RefuelCfg`: `lot_mass > 0` while the Fuel price surface is
-    /// dead or the Port corp index cannot resolve. Refuel settlement is a
-    /// four-legged transfer, so reject before tick 0 rather than minting a
-    /// zero-price or one-legged world.
+    /// structurally dead (`price_cfg.base_micros[Fuel] == 0`) or any station's
+    /// seeded `initial_price_micros[Fuel] == 0`, or while the Port corp index
+    /// cannot resolve. Refuel settlement is a four-legged transfer, so reject
+    /// before tick 0 rather than minting a zero-price or one-legged world.
     BadRefuelCfg { reason: &'static str },
 }
 
@@ -222,13 +223,18 @@ impl World {
             });
         }
         // Refuel half-on validation (BEFORE minting, like BadMediaCfg): once
-        // `lot_mass` opens the verb, settlement must have a live Fuel price
-        // somewhere and a resolvable Port corporation row for the credit leg.
+        // `lot_mass` opens the verb, settlement must have a config-wide live
+        // Fuel price surface and a resolvable Port corporation row.
         if cfg.refuel.lot_mass > 0.0 {
             let fuel = crate::economy::Resource::Fuel.index();
-            if !cfg.stations.iter().any(|s| s.initial_price_micros[fuel] > 0) {
+            if cfg.price_cfg.base_micros[fuel] == 0 {
                 return Err(ResetError::BadRefuelCfg {
-                    reason: "lot_mass > 0 requires at least one positive initial Fuel price",
+                    reason: "lot_mass > 0 but price_cfg.base_micros[Fuel] == 0",
+                });
+            }
+            if cfg.stations.iter().any(|s| s.initial_price_micros[fuel] == 0) {
+                return Err(ResetError::BadRefuelCfg {
+                    reason: "lot_mass > 0 but a station's seeded initial_price_micros[Fuel] == 0",
                 });
             }
             if (cfg.refuel.corp_index as usize) >= cfg.corporations.len() {
@@ -1826,22 +1832,28 @@ mod tests {
     #[test]
     fn refuel_half_on_price_surface_is_a_reset_error() {
         // lot_mass > 0 with a dead Fuel price surface would make every refuel a
-        // silent zero-price transfer. Reject it before tick 0, like BadMediaCfg.
+        // silent `unit_price < 1` no-op. Reject it before tick 0, like BadMediaCfg.
         let mut cfg = one_body_two_stations_one_miner();
         cfg.corporations = vec![crate::config::CorporationInit {
             treasury_micros: 0,
             home_station_index: 0,
         }];
-        for station in cfg.stations.iter_mut() {
-            station.initial_price_micros[crate::economy::Resource::Fuel.index()] = 0;
-        }
         cfg.refuel = crate::config::RefuelCfg { lot_mass: 5e-11, corp_index: 0 };
+
+        // Arm 1: price_cfg.base_micros[Fuel] == 0 (the PriceCfg default).
         assert!(
             matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
-            "lot_mass > 0 with no Fuel price must reject"
+            "lot_mass > 0 with base_micros[Fuel] == 0 must reject"
         );
 
-        cfg.stations[0].initial_price_micros[crate::economy::Resource::Fuel.index()] = 1;
+        let fuel = crate::economy::Resource::Fuel.index();
+        cfg.price_cfg.base_micros[fuel] = 5_000;
+        cfg.stations[0].initial_price_micros[fuel] = 0;
+        assert!(
+            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            "lot_mass > 0 with a zero seeded station Fuel price must reject"
+        );
+
         cfg.refuel.corp_index = cfg.corporations.len() as u32;
         assert!(
             matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
@@ -1849,6 +1861,9 @@ mod tests {
         );
 
         cfg.refuel.corp_index = 0;
+        for station in cfg.stations.iter_mut() {
+            station.initial_price_micros[fuel] = 5_000;
+        }
         assert!(World::reset(cfg).is_ok(), "fully-on refuel config resolves");
     }
 
