@@ -23,8 +23,8 @@
 
 use crate::config::{
     BaseSpec, BodyInit, BuyPolicy, ContractInit, CorporationInit, CraftInit, DispatchCfg,
-    GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RunConfig, ShipyardCfg,
-    StationInit, SubstepCfg, TrophicCfg,
+    GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RefuelCfg, RunConfig,
+    ShipyardCfg, StationInit, SubstepCfg, TrophicCfg,
 };
 use crate::economy::{Recipe, Resource};
 use crate::math::{G_CANONICAL, Vec3};
@@ -54,6 +54,37 @@ pub const FRONTIER_ORBIT_AU: [f64; 10] = [
     2.362_918_136_859_245,
     3.0,
 ];
+
+/// Frontier populations (spec §2): 2 haulers per station; 10 pirates is a
+/// 2:1 predator:prey DESIGN CHOICE carried from the band, NOT a guard-derived
+/// cap — the Saturated guard's integer floor admits up to 13 at n=10 (the
+/// guard stays as ceiling documentation in `scenario_frontier_shape`).
+pub const FRONTIER_NUM_HAULERS: usize = 20;
+pub const FRONTIER_NUM_PIRATES: usize = 10;
+
+/// Frontier HAULER exhaust velocity — the ANALYTIC PRIOR, **pending
+/// calibration** (spec §4, OD-5): the phase-2 calibration ensemble
+/// (`craft.fuel_capacity_scale = 100`) measures the worst HAULER-leg burn and
+/// the baked value is derived as k ~= 2.5 x that MEASUREMENT — never spec
+/// arithmetic. The bake task replaces this value and writes the derivation
+/// into this doc comment. At 1.0: burn 2.5e-13/tick, endurance ~= 4,000
+/// thrusting ticks ~= 2.5x the worst round trip; tank (1e-9) = 100x the
+/// re-baked FUEL_EMPTY_EPS, so the FuelEmpty edge is LIVE. Pirates do NOT
+/// use this const — they keep the band's 20.0 per-craft (OD-6).
+pub const FRONTIER_HAULER_EXHAUST_VELOCITY: f64 = 1.0;
+
+/// Haven station row (spec §3, OD-3): the dark port at the SEAM — hosted by
+/// body 7 (1.4660 AU), a vendor (the pirate escort settle path requires a
+/// vendor at the hideout dock), hosting NO producer and NO contract endpoint.
+pub const FRONTIER_HAVEN_STATION: usize = 6;
+
+/// Partitioned tier loops (spec §3, OD-2 — the self-averaging fix):
+/// `(source_a, source_b, dest, fuel_sink)` station rows per tier. Dests and
+/// sinks are per-tier disjoint (independent Schmitt triggers); every loop
+/// touches a vendor (the vendor sits at the dest); the tier-2 return (9->8)
+/// rides the never-walkable 8-9 gap.
+pub const FRONTIER_TIER_WIRING: [(usize, usize, usize, usize); 3] =
+    [(0, 1, 2, 3), (3, 4, 5, 4), (7, 8, 9, 8)];
 
 /// Scripted haulers (2 per station body).
 pub const NUM_HAULERS: usize = 12;
@@ -271,6 +302,230 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
         media: MediaCfg::default(),
         refuel: crate::config::RefuelCfg::default(),
+    }
+}
+
+/// Build the world-gets-big frontier scenario for one master seed (WGB spec
+/// §2-§3): 10 stations on the geometric 0.35->3.0 AU band, partitioned tier
+/// loops (core/mid/frontier), the dark seam haven, per-class craft specs.
+/// Pure config: same seed => identical RunConfig (and config_hash); body mean
+/// anomalies and all spawn geometry are seed-derived (the same `mix`).
+///
+/// A NEW world sharing the band's economic constants (GEO-C3): all cross-map
+/// reads are rate-normalized distribution-vs-distribution, never same-seed
+/// paired deltas.
+pub fn scenario_frontier(seed: u64) -> RunConfig {
+    const STAR_MASS: f64 = 1.0e-3;
+    const BODY_MASS: f64 = 1.0e-12;
+
+    // --- bodies: star + 10 station bodies on the pinned band, seed-derived
+    // phases via the existing mix (anti-memorization unchanged) -------------
+    let mut bodies = vec![BodyInit {
+        mass: STAR_MASS,
+        elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+    }];
+    for (k, &a) in FRONTIER_ORBIT_AU.iter().enumerate() {
+        let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
+        bodies.push(BodyInit {
+            mass: BODY_MASS,
+            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0 },
+        });
+    }
+
+    // --- craft: per-CLASS specs (spec §4/§6, OD-6) --------------------------
+    // Haulers: v_e = the named analytic prior (the calibration bakes it);
+    // tank 1e-9 = 100x the re-baked eps — the FuelEmpty edge is LIVE.
+    let hauler_spec = BaseSpec {
+        base_dry_mass: 1.0e-9,
+        base_max_thrust: 1.0e-12,
+        base_exhaust_velocity: FRONTIER_HAULER_EXHAUST_VELOCITY,
+        base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 5,
+    };
+    // Pirates: the band's x10 endurance spec (~80k thrusting ticks — pirates
+    // cannot strand this rung; the unification trigger is W11).
+    let pirate_spec = BaseSpec {
+        base_dry_mass: 1.0e-9,
+        base_max_thrust: 1.0e-12,
+        base_exhaust_velocity: 20.0,
+        base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 5,
+    };
+    let co_orbit = |body_index: usize| -> (Vec3, Vec3) {
+        let el = &bodies[body_index].elements;
+        let mu = G_CANONICAL * (STAR_MASS + BODY_MASS);
+        let v_circ = (mu / el.a).sqrt();
+        let pos = Vec3::new(el.a * el.m0.cos(), el.a * el.m0.sin(), 0.0);
+        let vel = Vec3::new(-v_circ * el.m0.sin(), v_circ * el.m0.cos(), 0.0);
+        (pos, vel)
+    };
+    let mut craft = Vec::with_capacity(FRONTIER_NUM_HAULERS + FRONTIER_NUM_PIRATES);
+    for k in 0..FRONTIER_NUM_HAULERS {
+        let (pos, vel) = co_orbit(1 + (k % FRONTIER_ORBIT_AU.len()));
+        craft.push(CraftInit {
+            spec: hauler_spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: CraftRole::Idle,
+            scripted: true,
+        });
+    }
+    for _ in 0..FRONTIER_NUM_PIRATES {
+        // Pirates start co-orbiting the haven body (the seam); the reset
+        // Piracy draw scatters their initial lurks.
+        let (pos, vel) = co_orbit(1 + FRONTIER_HAVEN_STATION);
+        craft.push(CraftInit {
+            spec: pirate_spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: CraftRole::Pirate,
+            scripted: true,
+        });
+    }
+
+    // --- stations: partitioned tier loops (spec §3, FRONTIER_TIER_WIRING) --
+    // Vendors at the three tier dests (2/5/9: every loop touches a vendor)
+    // and the haven (6). Schmitt stagger carried as per-tier INITIAL stocks
+    // (18/14/10 dest Ore + 18/14/10 sink Fuel) against the ONE global 10/20
+    // band — the trophic DEVIATION comment applies unchanged.
+    let stock = |ore: i64, fuel: i64| -> [i64; crate::economy::N_RESOURCES] {
+        let mut s = [0i64; crate::economy::N_RESOURCES];
+        s[Resource::Ore.index()] = ore;
+        s[Resource::Fuel.index()] = fuel;
+        s
+    };
+    let station = |body_index: usize, ore: i64, fuel: i64, vendor: bool| StationInit {
+        body_index,
+        initial_stock: stock(ore, fuel),
+        initial_price_micros: [0, 0],
+        sells_upgrades: vendor,
+    };
+    let stations = vec![
+        // Tier-0 core: sources 0-1 -> dest 2 (vendor); Fuel sink at 3.
+        station(1, 40, 0, false),
+        station(2, 40, 0, false),
+        station(3, 18, 0, true),
+        // Tier-1 mid: sources 3-4 -> dest 5 (vendor); Fuel sink at 4. Row 3
+        // doubles as the tier-0 Fuel sink (18), row 4 as tier-1's own (14).
+        station(4, 40, 18, false),
+        station(5, 40, 14, false),
+        station(6, 14, 0, true),
+        // The haven (row 6, body 7): the dark port at the seam — vendor,
+        // NO producer, NO contract endpoint (spec §3).
+        station(7, 0, 0, true),
+        // Tier-2 frontier: sources 7-8 -> dest 9 (vendor); Fuel sink at 8
+        // (10). The 9->8 return rides the never-walkable 8-9 gap.
+        station(8, 40, 0, false),
+        station(9, 40, 10, false),
+        station(10, 10, 0, true),
+    ];
+    let producers = vec![
+        // Ore miners at the six tier sources.
+        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 3, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 4, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 7, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 8, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        // Refiners at the three tier dests: the Ore demand sinks and the
+        // propellant supply geography.
+        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
+        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
+        ProducerInit { station_index: 9, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
+        // Fuel sinks at the per-tier return-leg destinations.
+        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 8, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
+    ];
+
+    // --- corps: 3 tier corps + the Yard (3, upgrade payments) + the Port
+    // (4, propellant revenue — armed by RefuelCfg.corp_index in task 2.4).
+    let corporations = vec![
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 2 },
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 },
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 9 },
+        CorporationInit { treasury_micros: 0, home_station_index: 2 },
+        CorporationInit { treasury_micros: 0, home_station_index: 2 },
+    ];
+
+    // --- 9 directed route templates: per tier, 2 Ore legs src->dest + 1 Fuel
+    // return dest->sink (rewards 1.0M / 2.3M / 3.9M via the tier table).
+    let mut contracts = Vec::with_capacity(9);
+    for (tier, &(qty, mult_milli)) in TIERS.iter().enumerate() {
+        let reward = qty as i64 * PER_UNIT_BASE_MICROS * mult_milli / 1000;
+        let (src_a, src_b, dest, sink) = FRONTIER_TIER_WIRING[tier];
+        for from in [src_a, src_b] {
+            contracts.push(ContractInit {
+                corp_index: tier,
+                resource: Resource::Ore,
+                qty,
+                from_station_index: from,
+                to_station_index: dest,
+                reward_micros: reward,
+            });
+        }
+        contracts.push(ContractInit {
+            corp_index: tier,
+            resource: Resource::Fuel,
+            qty,
+            from_station_index: dest,
+            to_station_index: sink,
+            reward_micros: reward,
+        });
+    }
+
+    // --- the band's trophic constants as the STARTING WALK (spec §3): food
+    // 10k->15k (dock-exposure dilution; identities still pass), everything
+    // else carried and re-walked at the console — never "same band".
+    let trophic = TrophicCfg {
+        engage_radius_au: 5.0e-4,
+        upkeep_per_tick: 12,
+        food_per_unit_micros: 15_000,
+        grubstake_micros: 100_000,
+        ransom_cap_micros: 6_000_000,
+        starve_lie_low_ticks: 4_000,
+        hideout_body_index: 7,
+        pirate_max_reach_au: 0.6,
+        hauler_belief_scoring: true,
+        hauler_buy_policy: BuyPolicy::EscortFirst,
+        ..TrophicCfg::default()
+    };
+
+    RunConfig {
+        master_seed: seed,
+        dt: Dt::new(0.25),
+        softening: 1.0e-4,
+        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
+        ephemeris_window: 120_000,
+        bodies,
+        craft,
+        guidance: GuidanceParams::default(),
+        stations,
+        producers,
+        corporations,
+        contracts,
+        price_cfg: PriceCfg {
+            // DEAD until task 2.4 flips Fuel live. cap 0 = the structural-off
+            // switch; never inherit PriceCfg::default()'s live-ish cap [1,1]
+            // in a factory.
+            base_micros: [0, 0],
+            cap: [0, 0],
+            slope_milli: 1800,
+            reprice_interval: 1,
+        },
+        dispatch_cfg: DispatchCfg {
+            demand_low: 10,
+            demand_high: 20,
+            stagger_period: 16,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        },
+        trophic,
+        shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
+        media: MediaCfg::default(),
+        refuel: RefuelCfg::default(),
     }
 }
 
@@ -566,6 +821,250 @@ mod tests {
         assert!(
             outer_gap > 0.6,
             "outer gap {outer_gap} must exceed pirate reach 0.6 (never-opens seam)"
+        );
+    }
+
+    #[test]
+    fn scenario_frontier_shape() {
+        let cfg = scenario_frontier(7);
+
+        // 1 star + 10 station bodies riding the pinned band in order.
+        assert_eq!(cfg.bodies.len(), 11, "star + 10 station bodies");
+        assert_eq!(cfg.bodies[0].elements.a, 0.0, "central star");
+        let axes: Vec<f64> = cfg.bodies[1..].iter().map(|b| b.elements.a).collect();
+        assert_eq!(axes, FRONTIER_ORBIT_AU.to_vec(), "bodies ride FRONTIER_ORBIT_AU");
+
+        // 10 stations; body k+1 hosts station row k (the trophic law, n=10).
+        assert_eq!(cfg.stations.len(), 10);
+        let body_idx: Vec<usize> = cfg.stations.iter().map(|s| s.body_index).collect();
+        assert_eq!(body_idx, (1..=10).collect::<Vec<_>>());
+
+        // Populations (spec §2): 20 haulers (2/station), 10 pirates — a 2:1
+        // predator:prey DESIGN CHOICE, all scripted (no gym craft).
+        assert_eq!(cfg.craft.len(), FRONTIER_NUM_HAULERS + FRONTIER_NUM_PIRATES);
+        let pirates = cfg.craft.iter().filter(|c| c.role == CraftRole::Pirate).count();
+        let haulers = cfg.craft.iter().filter(|c| c.role == CraftRole::Idle).count();
+        assert_eq!(haulers, 20, "20 haulers");
+        assert_eq!(pirates, 10, "10-pirate pool");
+        assert!(cfg.craft.iter().all(|c| c.scripted), "all scripted (no gym craft)");
+        assert_eq!(haulers % cfg.stations.len(), 0, "haulers == 0 mod n (2/station)");
+
+        // Per-CLASS craft specs (spec §4/§6, OD-6): haulers ride the NAMED
+        // calibration-pending const; pirates keep the band's x10 endurance.
+        for c in &cfg.craft {
+            match c.role {
+                CraftRole::Pirate => assert_eq!(
+                    c.spec.base_exhaust_velocity, 20.0,
+                    "pirate v_e 20 per-craft (OD-6; cannot strand this rung)"
+                ),
+                _ => assert_eq!(
+                    c.spec.base_exhaust_velocity, FRONTIER_HAULER_EXHAUST_VELOCITY,
+                    "hauler v_e = the named analytic prior (calibration bakes it)"
+                ),
+            }
+            assert_eq!(c.spec.base_fuel_capacity, 1.0e-9, "tank = 100x re-baked eps");
+            assert_eq!(c.fuel_mass, 1.0e-9, "spawn with a full tank");
+        }
+
+        // The Saturated guard kept as CEILING DOCUMENTATION (spec §2): 10
+        // pirates is a predator:prey choice, not the guard's integer floor.
+        let runway = cfg.trophic.grubstake_micros / cfg.trophic.upkeep_per_tick;
+        let cycle = runway as u64 + cfg.trophic.starve_lie_low_ticks;
+        let expected_active = pirates as u64 * runway as u64 / cycle;
+        assert!(
+            expected_active <= cfg.stations.len() as u64 - 2,
+            "expected-active {expected_active} <= stations - 2"
+        );
+
+        // Food band re-walk STARTS at 15k (spec §3, OD-2: dock-exposure
+        // dilution); the band identities still pass at the new value.
+        assert_eq!(cfg.trophic.food_per_unit_micros, 15_000);
+        assert!(
+            5 * cfg.trophic.food_per_unit_micros
+                >= 2 * cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
+            "one qty-5 rob sustains >= 2 windows"
+        );
+        assert!(
+            cfg.trophic.grubstake_micros > cfg.trophic.upkeep_per_tick * WINDOW_TICKS as i64,
+            "grubstake outlasts one window"
+        );
+        assert!(
+            cfg.trophic.ransom_cap_micros >= cfg.shipyard.escort_price_micros[0],
+            "one capped ransom funds the pirate counter-rung"
+        );
+
+        // Physics block VERBATIM from the band (spec §2) + the 120k window.
+        assert_eq!(cfg.dt.get(), 0.25);
+        assert_eq!(cfg.softening, 1.0e-4);
+        assert_eq!(cfg.substep_cfg.accel_ref, 3.0e-4);
+        assert_eq!(cfg.substep_cfg.max_substeps, 64);
+        assert_eq!(cfg.ephemeris_window, 120_000, "frontier window (runner guard 2.5)");
+
+        // Seam-haven law REPLACES hideout-outermost (spec §3, OD-3): haven =
+        // station 6 hosted by body 7 (1.4660 AU), a vendor (the pirate escort
+        // settle path), NOT the outermost body.
+        assert_eq!(cfg.trophic.hideout_body_index, 7);
+        assert_eq!(cfg.stations[FRONTIER_HAVEN_STATION].body_index, 7);
+        assert!(
+            cfg.stations[FRONTIER_HAVEN_STATION].sells_upgrades,
+            "haven is a vendor (resolve_purchases settle path)"
+        );
+        assert!(
+            (cfg.trophic.hideout_body_index as usize) < cfg.bodies.len() - 1,
+            "haven sits at the SEAM, not the outermost body"
+        );
+
+        // Reach EXPLICIT in this factory too (spec §6) — the 8-9 gap is the
+        // never-opens seam against exactly this value.
+        assert_eq!(cfg.trophic.pirate_max_reach_au, 0.6);
+
+        // ASSIGN/belief/buy machinery carried from the band.
+        assert_eq!(cfg.dispatch_cfg.stagger_period, 16);
+        assert_eq!(cfg.dispatch_cfg.demand_low, 10);
+        assert_eq!(cfg.dispatch_cfg.demand_high, 20);
+        assert!(cfg.trophic.hauler_belief_scoring, "belief scoring ON");
+        assert_eq!(cfg.trophic.hauler_buy_policy, BuyPolicy::EscortFirst);
+        assert!(cfg.trophic.engage_radius_au > 0.0, "trophic machinery LIVE");
+    }
+
+    #[test]
+    fn scenario_frontier_wiring_invariants() {
+        let cfg = scenario_frontier(7);
+        let n = cfg.stations.len();
+
+        // Partitioned tier loops EXACT (spec §3): per tier, 2 Ore legs
+        // src->dest + 1 Fuel return dest->sink; rewards 1.0M / 2.3M / 3.9M.
+        assert_eq!(cfg.contracts.len(), 9, "3 tiers x (2 Ore legs + 1 Fuel return)");
+        for (tier, &(qty, mult_milli)) in TIERS.iter().enumerate() {
+            let (src_a, src_b, dest, sink) = FRONTIER_TIER_WIRING[tier];
+            let legs: Vec<&ContractInit> =
+                cfg.contracts.iter().filter(|k| k.corp_index == tier).collect();
+            assert_eq!(legs.len(), 3, "tier {tier} has 3 legs");
+            let reward = qty as i64 * PER_UNIT_BASE_MICROS * mult_milli / 1000;
+            for k in &legs {
+                assert_eq!(k.qty, qty, "tier {tier} lot size");
+                assert_eq!(k.reward_micros, reward, "tier {tier} reward ladder");
+            }
+            let ore_froms: std::collections::BTreeSet<usize> = legs
+                .iter()
+                .filter(|k| k.resource == Resource::Ore)
+                .map(|k| k.from_station_index)
+                .collect();
+            assert_eq!(
+                ore_froms,
+                [src_a, src_b].into_iter().collect::<std::collections::BTreeSet<_>>(),
+                "tier {tier} sources"
+            );
+            assert!(
+                legs.iter()
+                    .filter(|k| k.resource == Resource::Ore)
+                    .all(|k| k.to_station_index == dest),
+                "tier {tier} Ore legs land at dest {dest}"
+            );
+            let ret: Vec<_> = legs.iter().filter(|k| k.resource == Resource::Fuel).collect();
+            assert_eq!(ret.len(), 1, "tier {tier} has exactly one Fuel return");
+            assert_eq!(ret[0].from_station_index, dest, "return departs the dest");
+            assert_eq!(ret[0].to_station_index, sink, "return lands at the sink");
+        }
+        // Spec §3 headline rewards, recomputed from the tier table.
+        let rewards: Vec<i64> = TIERS
+            .iter()
+            .map(|&(q, m)| q as i64 * PER_UNIT_BASE_MICROS * m / 1000)
+            .collect();
+        assert_eq!(rewards, vec![1_000_000, 2_300_000, 3_900_000]);
+
+        // Per-tier dests and sinks pairwise DISJOINT (independent Schmitt
+        // triggers — the trophic decoupling law carried to the big map).
+        for (i, wi) in FRONTIER_TIER_WIRING.iter().enumerate() {
+            for (j, wj) in FRONTIER_TIER_WIRING.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                assert_ne!(wi.2, wj.2, "tier dests disjoint");
+                assert_ne!(wi.3, wj.3, "tier sinks disjoint");
+            }
+        }
+
+        // Every station in sources + dests + sinks + {haven} — no orphans.
+        let mut covered = std::collections::BTreeSet::new();
+        for &(a, b, d, s) in &FRONTIER_TIER_WIRING {
+            covered.extend([a, b, d, s]);
+        }
+        covered.insert(FRONTIER_HAVEN_STATION);
+        assert_eq!(
+            covered,
+            (0..n).collect::<std::collections::BTreeSet<_>>(),
+            "every station is in sources + dests + sinks + {{haven}}"
+        );
+
+        // The haven is DARK (spec §3): vendor, NO producer, NO contract
+        // endpoint — a dark port at the seam.
+        assert!(
+            cfg.contracts.iter().all(|k| {
+                k.from_station_index != FRONTIER_HAVEN_STATION
+                    && k.to_station_index != FRONTIER_HAVEN_STATION
+            }),
+            "haven hosts no contract endpoint"
+        );
+        assert!(
+            cfg.producers.iter().all(|p| p.station_index != FRONTIER_HAVEN_STATION),
+            "haven hosts no producer"
+        );
+
+        // Every tier loop touches a vendor (heavy haulers shop where they
+        // deliver — the restored mechanism): the vendor sits at each dest.
+        for &(_, _, dest, _) in &FRONTIER_TIER_WIRING {
+            assert!(cfg.stations[dest].sells_upgrades, "tier dest {dest} is a vendor");
+        }
+
+        // Per-tier Schmitt-stagger initial stocks carried (18/14/10 against
+        // the ONE global 10/20 band): dest Ore + sink Fuel, descending.
+        let dest_ore: Vec<i64> = FRONTIER_TIER_WIRING
+            .iter()
+            .map(|w| cfg.stations[w.2].initial_stock[Resource::Ore.index()])
+            .collect();
+        let sink_fuel: Vec<i64> = FRONTIER_TIER_WIRING
+            .iter()
+            .map(|w| cfg.stations[w.3].initial_stock[Resource::Fuel.index()])
+            .collect();
+        assert_eq!(dest_ore, vec![18, 14, 10], "dest Ore Schmitt stagger");
+        assert_eq!(sink_fuel, vec![18, 14, 10], "sink Fuel Schmitt stagger");
+
+        // Producers: miners at all 6 sources, refiners at the 3 dests, fuel
+        // sinks at the 3 sink rows.
+        assert_eq!(cfg.producers.len(), 12, "6 miners + 3 refiners + 3 fuel sinks");
+
+        // Corps: 3 tier corps + the Yard + the Port (Port armed in 2.4).
+        assert_eq!(cfg.corporations.len(), 5, "3 tier corps + Yard + Port");
+        assert_eq!(cfg.shipyard.corp_index, 3, "the Yard receives upgrade payments");
+        assert_eq!(cfg.corporations[4].treasury_micros, 0, "the Port starts empty");
+        assert!(cfg.contracts.iter().all(|k| k.corp_index < 3), "Yard/Port post no routes");
+
+        // Resolvable + brakable; reset mints the 10-pirate pool.
+        let (w, _h) = World::reset(cfg).expect("scenario_frontier must resolve");
+        assert_eq!(w.ships.pirate.iter().filter(|p| p.is_some()).count(), 10);
+    }
+
+    #[test]
+    fn scenario_frontier_is_seed_derived_and_deterministic() {
+        assert_eq!(
+            scenario_frontier(7).config_hash(),
+            scenario_frontier(7).config_hash()
+        );
+        let a = scenario_frontier(7);
+        let b = scenario_frontier(8);
+        assert_ne!(a.config_hash(), b.config_hash());
+        assert!(
+            a.bodies[1..]
+                .iter()
+                .zip(&b.bodies[1..])
+                .any(|(x, y)| x.elements.m0 != y.elements.m0),
+            "mean anomalies are seed-derived"
+        );
+        // A NEW world, not a re-skin: frontier != trophic at the same seed.
+        assert_ne!(
+            scenario_frontier(7).config_hash(),
+            scenario_trophic(7).config_hash()
         );
     }
 }
