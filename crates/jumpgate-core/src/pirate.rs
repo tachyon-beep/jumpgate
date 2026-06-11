@@ -1021,6 +1021,7 @@ mod tests {
                 ..TrophicCfg::default()
             },
             shipyard: ShipyardCfg::default(),
+            media: crate::config::MediaCfg::default(),
         }
     }
 

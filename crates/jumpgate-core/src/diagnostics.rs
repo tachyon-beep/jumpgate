@@ -656,6 +656,7 @@ mod tests {
             dispatch_cfg: DispatchCfg::default(),
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(), // corp_index 0 == the only corp
+            media: crate::config::MediaCfg::default(),
         };
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         let craft = world.ships.ids_at(0);

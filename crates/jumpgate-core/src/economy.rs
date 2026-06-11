@@ -1536,6 +1536,7 @@ mod tests {
             dispatch_cfg: crate::config::DispatchCfg::default(),
             trophic: crate::config::TrophicCfg::default(),
             shipyard: crate::config::ShipyardCfg::default(),
+            media: crate::config::MediaCfg::default(),
         }
     }
 
@@ -2280,6 +2281,7 @@ mod tests {
             dispatch_cfg: crate::config::DispatchCfg::default(),
             trophic: crate::config::TrophicCfg::default(),
             shipyard: crate::config::ShipyardCfg::default(),
+            media: crate::config::MediaCfg::default(),
         }
     }
 

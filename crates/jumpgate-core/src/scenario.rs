@@ -23,8 +23,8 @@
 
 use crate::config::{
     BaseSpec, BodyInit, BuyPolicy, ContractInit, CorporationInit, CraftInit, DispatchCfg,
-    GuidanceParams, OrbitalElements, PriceCfg, ProducerInit, RunConfig, ShipyardCfg, StationInit,
-    SubstepCfg, TrophicCfg,
+    GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RunConfig, ShipyardCfg,
+    StationInit, SubstepCfg, TrophicCfg,
 };
 use crate::economy::{Recipe, Resource};
 use crate::math::{G_CANONICAL, Vec3};
@@ -249,6 +249,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         },
         trophic,
         shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
+        media: MediaCfg::default(),
     }
 }
 
@@ -265,6 +266,7 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
     }
     let t = &mut cfg.trophic;
     let y = &mut cfg.shipyard;
+    let m = &mut cfg.media;
     match name {
         // TrophicCfg (spec §§2-7 knobs).
         "engage_radius_au" => t.engage_radius_au = p(name, value)?,
@@ -311,6 +313,15 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
         "demand_low" => cfg.dispatch_cfg.demand_low = p(name, value)?,
         "demand_high" => cfg.dispatch_cfg.demand_high = p(name, value)?,
         "stagger_period" => cfg.dispatch_cfg.stagger_period = p(name, value)?,
+        // MediaCfg (media rung cut 1, spec §11 knobs).
+        "station_gossip_slots" => m.station_gossip_slots = p(name, value)?,
+        "craft_gossip_slots" => m.craft_gossip_slots = p(name, value)?,
+        "sig_floor_milli" => m.sig_floor_milli = p(name, value)?,
+        "sig_divisor_micros" => m.sig_divisor_micros = p(name, value)?,
+        "hop_loss_milli" => m.hop_loss_milli = p(name, value)?,
+        "inflation_milli" => m.inflation_milli = p(name, value)?,
+        "claimed_value_cap_micros" => m.claimed_value_cap_micros = p(name, value)?,
+        "value_ticks_milli" => m.value_ticks_milli = p(name, value)?,
         other => return Err(format!("--set {other}: unknown knob")),
     }
     Ok(())
@@ -490,6 +501,11 @@ mod tests {
         assert_eq!(cfg.trophic.hauler_buy_policy, BuyPolicy::HullFirst);
         apply_knob(&mut cfg, "demand_high", "25").expect("dispatch knob");
         assert_eq!(cfg.dispatch_cfg.demand_high, 25);
+        // MediaCfg knobs (media rung cut 1, spec §11).
+        apply_knob(&mut cfg, "station_gossip_slots", "16").expect("media slot knob");
+        assert_eq!(cfg.media.station_gossip_slots, 16);
+        apply_knob(&mut cfg, "hop_loss_milli", "200").expect("media hop knob");
+        assert_eq!(cfg.media.hop_loss_milli, 200);
         // Errors are loud: unknown knob, malformed value, bad enum.
         assert!(apply_knob(&mut cfg, "warp_factor", "9").is_err());
         assert!(apply_knob(&mut cfg, "p_rob_milli", "many").is_err());

@@ -210,6 +210,7 @@ fn config_template(num_craft: usize) -> RunConfig {
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
         trophic: jumpgate_core::config::TrophicCfg::default(),
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
+        media: jumpgate_core::config::MediaCfg::default(),
     }
 }
 
@@ -486,6 +487,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
         },
         trophic,
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
+        media: jumpgate_core::config::MediaCfg::default(),
     }
 }
 

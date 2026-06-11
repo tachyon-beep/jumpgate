@@ -47,7 +47,8 @@ pub mod world;
 pub use autopilot::{ARRIVAL_RADIUS, autopilot_command};
 pub use config::{
     BaseSpec, BodyInit, ConfigHash, ContractInit, CorporationInit, CraftInit, DispatchCfg,
-    GuidanceParams, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit, SubstepCfg,
+    GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit,
+    SubstepCfg,
 };
 pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
 pub use diagnostics::{Diagnosis, TrophicSample, Verdict, classify, sample_window};

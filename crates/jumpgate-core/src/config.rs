@@ -349,6 +349,53 @@ impl Default for ShipyardCfg {
     }
 }
 
+/// Media/gossip knobs (media rung cut 1, spec §11). Inert by default: BOTH slot
+/// caps 0 ⇒ no buffers, no Media draws, default worlds behavior-identical.
+/// media-live = both caps > 0 AND trophic.engage_radius_au > 0 (documented DUAL
+/// gating; exactly one cap > 0 is a reset error). DIAGNOSTIC/TUNING knobs, not
+/// gates (PDR-0006).
+#[derive(Clone, Copy, Debug)]
+pub struct MediaCfg {
+    /// Reservoir cap; part of the live predicate. 0 | live start 16.
+    pub station_gossip_slots: u32,
+    /// Hauler comms-log cap; part of the live predicate. 0 | live start 8.
+    pub craft_gossip_slots: u32,
+    /// Minimum transfer P (re-derive at console). 50.
+    pub sig_floor_milli: u32,
+    /// Claimed micros per sig-milli (against the real tier spread). 10_000.
+    pub sig_divisor_micros: i64,
+    /// Per-hop transfer attenuation (the distance tax). 150.
+    pub hop_loss_milli: u32,
+    /// Retelling inflation (hops>=2 only). 125.
+    pub inflation_milli: u32,
+    /// Claim saturation bound. 32_000_000.
+    pub claimed_value_cap_micros: i64,
+    /// Eviction-priority ticks per credit. 1000.
+    pub value_ticks_milli: u32,
+}
+
+impl Default for MediaCfg {
+    fn default() -> Self {
+        MediaCfg {
+            station_gossip_slots: 0,
+            craft_gossip_slots: 0,
+            sig_floor_milli: 50,
+            sig_divisor_micros: 10_000,
+            hop_loss_milli: 150,
+            inflation_milli: 125,
+            claimed_value_cap_micros: 32_000_000,
+            value_ticks_milli: 1000,
+        }
+    }
+}
+
+impl MediaCfg {
+    /// Both caps live (the config half of the dual gate).
+    pub fn caps_live(&self) -> bool {
+        self.station_gossip_slots > 0 && self.craft_gossip_slots > 0
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -375,6 +422,9 @@ pub struct RunConfig {
     // leave the trophic machinery inert (engage_radius_au == 0.0, BuyPolicy::Off).
     pub trophic: TrophicCfg,
     pub shipyard: ShipyardCfg,
+    // Media rung cut 1 (folded AFTER shipyard, append-only). Default leaves the
+    // gossip machinery inert (both slot caps 0 => no buffers, no Media draws).
+    pub media: MediaCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -437,6 +487,7 @@ impl RunConfig {
     ///  22. per-station: sells_upgrades                                  (pirates rung A)
     ///  23. trophic: all fields in declaration order (f64 via to_bits, enums via rank)
     ///  24. shipyard: all fields in declaration order
+    ///  25. media: all fields in declaration order
     pub fn config_hash(&self) -> ConfigHash {
         // Exhaustive destructure: a NEW RunConfig field is a COMPILE ERROR here
         // until it is explicitly folded below (D10/M6 — closes the silent-omission
@@ -458,6 +509,7 @@ impl RunConfig {
             dispatch_cfg,
             trophic,  // NEW (pirates rung A): destructure forces folding below
             shipyard, // NEW (pirates rung A): destructure forces folding below
+            media,    // NEW (media rung cut 1): destructure forces folding below
         } = self;
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
@@ -627,6 +679,28 @@ impl RunConfig {
         h.write_u64(*max_hulls as u64);
         h.write_u64(*max_escorts as u64);
         h.write_u64(*buy_headroom_milli as u64);
+        // MEDIA RUNG CUT 1 (TAIL, append-only — CONFIG_FIELD_ORDER 25). The byte
+        // stream above stays byte-identical; this only EXTENDS it. Exhaustive
+        // destructure: a NEW MediaCfg field is a COMPILE ERROR here until
+        // explicitly folded (the D10/M6 discipline).
+        let MediaCfg {
+            station_gossip_slots,
+            craft_gossip_slots,
+            sig_floor_milli,
+            sig_divisor_micros,
+            hop_loss_milli,
+            inflation_milli,
+            claimed_value_cap_micros,
+            value_ticks_milli,
+        } = media;
+        h.write_u64(*station_gossip_slots as u64);
+        h.write_u64(*craft_gossip_slots as u64);
+        h.write_u64(*sig_floor_milli as u64);
+        h.write_u64(*sig_divisor_micros as u64);
+        h.write_u64(*hop_loss_milli as u64);
+        h.write_u64(*inflation_milli as u64);
+        h.write_u64(*claimed_value_cap_micros as u64);
+        h.write_u64(*value_ticks_milli as u64);
         ConfigHash(h.finish())
     }
 }
@@ -658,7 +732,7 @@ fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0x1798_b108_edae_5bb6; // RE-PINNED: +trophic/shipyard/role/scripted/sells_upgrades/base_cargo_capacity config surface (pirates rung A). Was 0xf4bc_85c3_7cb6_8a6b.
+    const GOLDEN_CONFIG_HASH: u64 = 0x5fda_1f2f_edf2_355c; // RE-PINNED: +MediaCfg (media rung cut 1). Was 0x1798_b108_edae_5bb6.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -704,6 +778,7 @@ mod tests {
             dispatch_cfg: DispatchCfg::default(),
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(),
+            media: MediaCfg::default(),
         }
     }
 
@@ -898,6 +973,16 @@ mod tests {
         let mut e = sample();
         e.shipyard.hull_price_micros[1] = 21_000_000;
         assert_ne!(sample().config_hash(), e.config_hash());
+    }
+
+    #[test]
+    fn changing_media_cfg_changes_config_hash() {
+        let mut c = sample();
+        c.media.station_gossip_slots = 16;
+        assert_ne!(sample().config_hash(), c.config_hash());
+        let mut d = sample();
+        d.media.sig_divisor_micros = 20_000;
+        assert_ne!(sample().config_hash(), d.config_hash());
     }
 
     #[test]

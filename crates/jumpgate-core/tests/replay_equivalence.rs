@@ -51,6 +51,7 @@ fn base_config() -> RunConfig {
         dispatch_cfg: jumpgate_core::config::DispatchCfg::default(),
         trophic: jumpgate_core::config::TrophicCfg::default(),
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
+        media: jumpgate_core::config::MediaCfg::default(),
     }
 }
 
