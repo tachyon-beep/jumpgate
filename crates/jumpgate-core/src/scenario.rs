@@ -1059,6 +1059,44 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "prints the golden constant for frontier_trajectory_golden"]
+    fn print_golden_frontier() {
+        let (mut w, _) =
+            World::reset(scenario_frontier(7)).expect("scenario_frontier must resolve");
+        let mut cmds = Vec::new();
+        for _ in 0..2_000 {
+            w.step(&mut cmds);
+        }
+        println!("FRONTIER_TRAJECTORY_GOLDEN=0x{:016x}", crate::hash::state_hash(&w));
+    }
+
+    /// The NEW frontier trajectory golden (world-gets-big spec §9): seed-7
+    /// `scenario_frontier` stepped 2_000 ticks (one window), state_hash
+    /// pinned. Existing goldens pin tick-0 worlds only; this pins a STEPPED
+    /// big-map trajectory so physics/stage/config drift on the frontier is
+    /// loud. Re-derive ONLY via `print_golden_frontier` (single-cause re-pin
+    /// commits; the calibration v_e bake is the one scheduled re-pin).
+    // PINNED from print_golden_frontier output, pre-calibration hauler v_e
+    // prior (1.0).
+    const FRONTIER_TRAJECTORY_GOLDEN: u64 = 0xe5b3c68a9b4f727c;
+
+    #[test]
+    fn frontier_trajectory_golden() {
+        let (mut w, _) =
+            World::reset(scenario_frontier(7)).expect("scenario_frontier must resolve");
+        let mut cmds = Vec::new();
+        for _ in 0..2_000 {
+            w.step(&mut cmds);
+        }
+        assert_eq!(
+            crate::hash::state_hash(&w),
+            FRONTIER_TRAJECTORY_GOLDEN,
+            "frontier trajectory drifted: re-pin only if intentional (single-cause commit, \
+             re-derive via print_golden_frontier)"
+        );
+    }
+
+    #[test]
     fn scenario_frontier_is_seed_derived_and_deterministic() {
         assert_eq!(
             scenario_frontier(7).config_hash(),
