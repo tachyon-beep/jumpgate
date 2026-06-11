@@ -1049,6 +1049,18 @@ pub fn resolve_refuels(
             corporations.treasury_micros[port_row].saturating_add(cost);
         ships.fuel_mass[crow] = (fuel + units as f64 * lot).min(cap_eff);
         let tank_after_permille = permille_floor(ships.fuel_mass[crow], cap_eff);
+        // FUEL-C1: a refueled craft already Seeking may have been dispatched
+        // with an exhausted budget. Re-derive from the just-written tank using
+        // the same Tsiolkovsky source as dispatch/ingest so the same tick's
+        // physics stage can burn instead of coasting forever at dv_remaining 0.
+        if let NavState::Seeking { dest, .. } = ships.nav[crow] {
+            let dv = crate::math::tsiolkovsky_dv(
+                eff.exhaust_velocity,
+                eff.dry_mass,
+                ships.fuel_mass[crow],
+            );
+            ships.nav[crow] = NavState::Seeking { dest, dv_remaining: dv };
+        }
         let craft = ships.ids_at(crow);
         if let Some(station) = stations
             .ids
@@ -2143,6 +2155,46 @@ mod tests {
         world.ships.prev_pos[0] = world.ships.pos[0];
         world.step(&mut Vec::new());
         no_refuel(&mut world, "undocked");
+    }
+
+    #[test]
+    fn refuel_rederives_dv_for_seeking_craft_fuel_c1() {
+        use crate::types::NavDest;
+        use crate::world::World;
+        let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
+        world.ships.credits_micros[0] = 1_000_000;
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Position(crate::math::Vec3::new(0.5, 0.0, 0.0)),
+            dv_remaining: 0.0,
+        };
+        world.step(&mut Vec::new());
+
+        let refilled: f64 = (0.0 + 4.0 * 2.5e-10_f64).min(1.0e-9);
+        let dv_applied: f64 = world
+            .events_mut()
+            .since(Tick(0))
+            .iter()
+            .find_map(|e| match e.kind {
+                EventKind::ThrustApplied { dv, .. } => Some(dv),
+                _ => None,
+            })
+            .expect("the re-derived budget unlocked a same-tick burn");
+        assert!(
+            world.ships.fuel_mass[0] < refilled,
+            "the same-tick burn drew from the refilled tank"
+        );
+        let dv_full = crate::math::tsiolkovsky_dv(1e-2, 1e-9, refilled);
+        match world.ships.nav[0] {
+            NavState::Seeking { dv_remaining, .. } => {
+                assert_eq!(
+                    dv_remaining,
+                    dv_full - dv_applied,
+                    "budget re-derived from the refilled tank, then burned once"
+                );
+                assert!(dv_remaining > 0.0, "no more coast-at-zero with a full tank");
+            }
+            other => panic!("expected Seeking, got {other:?}"),
+        }
     }
 
     /// Capacity-gate fixture: two bodies (origin star hosts station A, a 0.3 AU
