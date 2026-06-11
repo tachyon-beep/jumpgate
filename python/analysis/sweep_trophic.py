@@ -112,6 +112,23 @@ def parse_knobset(spec: str):
     return name, pairs
 
 
+def runner_cmd(scenario, seed, ticks, jsonl, knobs):
+    """The trophic_run invocation for one (arm, seed) cell.
+
+    --scenario is passed UNCONDITIONALLY: the runner owns the
+    unknown-scenario error.
+    """
+    cmd = [
+        "cargo", "run", "-q", "-p", "jumpgate-core", "--release",
+        "--example", "trophic_run", "--",
+        "--scenario", scenario,
+        "--seed", str(seed), "--ticks", str(ticks), "--jsonl", str(jsonl),
+    ]
+    for k, v in knobs:
+        cmd += ["--set", f"{k}={v}"]
+    return cmd
+
+
 def parse_stdout(text):
     """Scan one run's stdout for anchored lines.
 
@@ -130,17 +147,14 @@ def parse_stdout(text):
 
 def run_one(args, name, knobs, seed, out_dir):
     jsonl = out_dir / f"{name}_s{seed}.jsonl"
-    cmd = [
-        "cargo", "run", "-q", "-p", "jumpgate-core", "--release",
-        "--example", "trophic_run", "--",
-        "--seed", str(seed), "--ticks", str(args.ticks), "--jsonl", str(jsonl),
-    ]
-    for k, v in knobs:
-        cmd += ["--set", f"{k}={v}"]
+    cmd = runner_cmd(args.scenario, seed, args.ticks, jsonl, knobs)
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
         raise SystemExit(f"run failed: {name} seed={seed}")
+    # Bank the full stdout beside the JSONL: standalone grid/packet panels
+    # parse META/RESULT from it, and /tmp sweep dirs need same-day capture.
+    (out_dir / f"{name}_s{seed}.stdout").write_text(proc.stdout)
     parsed = parse_stdout(proc.stdout)
     for key, (required, _rx) in ANCHORED.items():
         if required and parsed[key] is None:
@@ -376,6 +390,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seeds", type=int, nargs="+", default=[7, 11, 13])
     ap.add_argument("--ticks", type=int, default=50_000)
+    ap.add_argument(
+        "--scenario",
+        default="trophic",
+        help="runner scenario factory (phase-2 flag): trophic | frontier",
+    )
     ap.add_argument(
         "--knobset",
         action="append",
