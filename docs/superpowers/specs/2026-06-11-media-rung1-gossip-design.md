@@ -1,6 +1,6 @@
 # Media Rung Cut 1 — "News Travels at Ship Speed" (gossip epidemiology design)
 
-**Status: DRAFT — pending owner decisions §16 (OD-1…OD-6). Build NOT authorized until resolved.**
+**Status: APPROVED 2026-06-11 — owner resolved OD-1…OD-6, all recommended options (§16). Build authorized.**
 
 Designed 2026-06-11 by an 18-agent panel (5 grounding readers, 6 design lenses, 6
 adversarial critics, 1 synthesis) over the owner's banked design authority
@@ -399,7 +399,18 @@ read through the existing verdict machinery + MediaReading.
 - `stolen_from` goods provenance hook (§14.6 first-class goods) — the alert
   schema is append-only, the superset stays open.
 
-## 16. Owner decision points — ALL PENDING
+## 16. Owner decision points — RESOLVED 2026-06-11
+
+Owner reviewed the presented decision points and authorized "plan and implement
+the media cut-1 design" — all six recommended options stand approved: **OD-1(a)**
+stakes as a sweep axis, defaults re-baked only after the owner console session;
+**OD-2(a)** ring sunset in cut 2's format bump (digest control + console PDR,
+bundling the `risk_appetite` ghost removal); **OD-3(a)** inflation-only
+corruption, identifiers/routes TRUE; **OD-4(a)** console-only cut 1, obs
+contract frozen as a paper appendix; **OD-5(a)+(b)** both ratifications (board/
+prices = the AIR-mundane channel; the two-sided generators-AND-consumer rule);
+**OD-6(a)** pirates information-blind. Original options preserved below for
+provenance.
 
 **OD-1 — Stakes re-pricing.** The recorded ablation NULL says robbery is too
 cheap (~2–20 cr/decision) for risk information to matter; the lawful fix is world
