@@ -173,6 +173,18 @@ pub struct TrophicSample {
     /// `assign_diag.candidate_counts` snapshot (run-cumulative): evidence
     /// count per scored candidate, buckets 0..=5 then >=6 (the clamp region).
     pub assign_counts_cum: Vec<u64>,
+    // --- fuel lab fields (world-gets-big phase 0b, spec §8; windows, not
+    // gates). Additive: every pre-fuel JSONL key above is untouched. ---
+    /// `CraftRole::rank()` per craft at the sample point (dense row order).
+    pub per_craft_role: Vec<u32>,
+    /// `fuel_diag.thrust_ticks` snapshot, run-cumulative.
+    pub per_craft_thrust_ticks: Vec<u64>,
+    /// `fuel_diag.burned_mass` as milli of effective fuel capacity, FLOOR.
+    pub per_craft_burn_milli: Vec<u32>,
+    /// `fuel_diag.min_fuel_mass` as permille of effective fuel capacity, FLOOR.
+    pub per_craft_min_tank_permille: Vec<u32>,
+    /// Burn of each completed contract leg in the window, permille of capacity.
+    pub leg_burn_permille: Vec<u32>,
 }
 
 /// A named row of the spec-§9 diagnosis matrix. Diagnosis vocabulary only —
@@ -637,6 +649,33 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         assign_decisions_cum: world.assign_diag.decisions,
         assign_flips_cum: world.assign_diag.flips,
         assign_counts_cum: world.assign_diag.candidate_counts.to_vec(),
+        // Fuel lab fields: pure snapshots of the UNHASHED fuel_diag,
+        // integerized through the one permille_floor seam.
+        per_craft_role: world.ships.role.iter().map(|r| u32::from(r.rank())).collect(),
+        per_craft_thrust_ticks: world.fuel_diag.thrust_ticks.clone(),
+        per_craft_burn_milli: (0..world.ships.ids.len())
+            .map(|r| {
+                let cap =
+                    crate::stores::effective_params(&world.ships.spec[r], &world.ships.mods[r])
+                        .fuel_capacity;
+                permille_floor(world.fuel_diag.burned_mass[r], cap)
+            })
+            .collect(),
+        per_craft_min_tank_permille: (0..world.ships.ids.len())
+            .map(|r| {
+                let cap =
+                    crate::stores::effective_params(&world.ships.spec[r], &world.ships.mods[r])
+                        .fuel_capacity;
+                permille_floor(world.fuel_diag.min_fuel_mass[r], cap)
+            })
+            .collect(),
+        leg_burn_permille: world
+            .fuel_diag
+            .leg_burns
+            .iter()
+            .filter(|(t, _)| t.0 > window_start.0 && t.0 <= tick.0)
+            .map(|&(_, p)| p)
+            .collect(),
     }
 }
 
@@ -840,24 +879,16 @@ mod tests {
         );
     }
 
-    /// The Task-6 sampler wires: `UpgradePurchased` events count into the
-    /// per-window purchase fields, and the Yard corp treasury
-    /// (`ShipyardCfg.corp_index`) is read at the sample point — the
-    /// purchase-desync and Yard-circulation panels' inputs (spec §9).
-    #[test]
-    fn sample_window_counts_purchases_and_reads_yard_treasury() {
+    fn one_craft_vendor_cfg() -> crate::config::RunConfig {
         use crate::config::{
             BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
             OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
             TrophicCfg,
         };
-        use crate::contract::Command;
         use crate::math::Vec3;
-        use crate::stores::UpgradeKind;
         use crate::time::Dt;
-        use crate::types::{CommandKind, EntityRef, Target};
-        use crate::world::World;
-        let cfg = RunConfig {
+
+        RunConfig {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
@@ -896,8 +927,21 @@ mod tests {
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(), // corp_index 0 == the only corp
             media: crate::config::MediaCfg::default(),
-        };
-        let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
+        }
+    }
+
+    /// The Task-6 sampler wires: `UpgradePurchased` events count into the
+    /// per-window purchase fields, and the Yard corp treasury
+    /// (`ShipyardCfg.corp_index`) is read at the sample point — the
+    /// purchase-desync and Yard-circulation panels' inputs (spec §9).
+    #[test]
+    fn sample_window_counts_purchases_and_reads_yard_treasury() {
+        use crate::contract::Command;
+        use crate::stores::UpgradeKind;
+        use crate::types::{CommandKind, EntityRef, Target};
+        use crate::world::World;
+
+        let (mut world, _h) = World::reset(one_craft_vendor_cfg()).expect("resolvable cfg");
         let craft = world.ships.ids_at(0);
         world.ships.credits_micros[0] = 50_000_000;
         let buy = |kind| Command {
@@ -927,6 +971,34 @@ mod tests {
         assert!(s.heard_lag_ticks.is_empty());
         assert!(s.heard_hops.is_empty());
         assert_eq!(s.alerts_evicted_cum, 0);
+    }
+
+    /// Phase-0b fuel lab fields: synthetic FuelDiag -> sample_window integer
+    /// reads. Values choose FLOOR cases and a window filter boundary.
+    #[test]
+    fn sample_window_reads_fuel_diag_through_the_floor_seam() {
+        use crate::world::World;
+
+        let (mut world, _h) = World::reset(one_craft_vendor_cfg()).expect("resolvable cfg");
+        let mut cmds = Vec::new();
+        world.step(&mut cmds);
+        world.step(&mut cmds);
+
+        world.fuel_diag.thrust_ticks[0] = 41;
+        world.fuel_diag.burned_mass[0] = 0.5999e-9;
+        world.fuel_diag.min_fuel_mass[0] = 0.4001e-9;
+        world.fuel_diag.leg_burns = vec![(Tick(1), 77), (Tick(2), 123), (Tick(5000), 200)];
+
+        let s = sample_window(&world, Tick(0));
+        assert_eq!(s.per_craft_role, vec![0], "role snapshot (Idle rank 0)");
+        assert_eq!(s.per_craft_thrust_ticks, vec![41], "duty numerator snapshot");
+        assert_eq!(s.per_craft_burn_milli, vec![599], "FLOOR: 599.9 -> 599");
+        assert_eq!(s.per_craft_min_tank_permille, vec![400], "FLOOR: 400.1 -> 400");
+        assert_eq!(
+            s.leg_burn_permille,
+            vec![77, 123],
+            "window filter: window_start < close_tick <= sample tick only"
+        );
     }
 
     /// Phase-0b FLOOR pin (world-gets-big spec §7/§8): no f64-to-fixed-point
