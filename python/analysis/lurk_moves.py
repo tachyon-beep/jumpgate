@@ -62,7 +62,8 @@ def quartiles(xs):
     if not xs:
         return None
     s = sorted(xs)
-    return (s[len(s) // 4], s[len(s) // 2], s[(len(s) * 3) // 4])
+    n = len(s)
+    return (s[(n - 1) // 4], s[(n - 1) // 2], s[(3 * (n - 1)) // 4])
 
 
 def main():

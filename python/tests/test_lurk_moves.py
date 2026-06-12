@@ -39,4 +39,8 @@ def test_dwell_ticks_are_per_pirate_consecutive_move_deltas():
         {"e": "lurk_moved", "tick": 120, "pirate": 2, "to_station": 3, "breakout": False},
     ]
     assert lm.dwell_ticks(events) == [15, 55, 100]
-    assert lm.quartiles([15, 55, 100]) == (15, 55, 100)
+    assert lm.quartiles([15, 55, 100]) == (15, 55, 55)
+
+
+def test_quartiles_use_phase3_lower_index_convention_for_even_samples():
+    assert lm.quartiles([40, 10, 20, 30]) == (10, 20, 30)
