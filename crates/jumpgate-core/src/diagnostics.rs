@@ -228,6 +228,15 @@ pub struct TrophicSample {
     /// craft propellant.
     pub per_station_fuel_stock: Vec<i64>,
     pub per_station_fuel_price: Vec<i64>,
+    // --- goods-as-goods lab fields (rung A, A0; additive — every pre-goods
+    // JSONL key above is byte-untouched). per_station_fuel_stock/price remain
+    // the scalar fuel columns; these flat matrices carry ALL resources. ---
+    /// Per-station stock at the sample point: `[station_row][resource_index]`.
+    /// Sized n_stations × N_RESOURCES. Fuel column equals per_station_fuel_stock.
+    pub per_station_stock: Vec<Vec<i64>>,
+    /// Per-station price_micros at the sample point: `[station_row][resource_index]`.
+    /// Sized n_stations × N_RESOURCES. Fuel column equals per_station_fuel_price.
+    pub per_station_price: Vec<Vec<i64>>,
     /// Windowed `Refueled` event reads.
     pub refuels: u32,
     pub refuel_units: u64,
@@ -813,6 +822,18 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .price_micros
             .iter()
             .map(|pr| pr[Resource::Fuel.index()])
+            .collect(),
+        per_station_stock: world
+            .stations
+            .stock
+            .iter()
+            .map(|st| st.to_vec())
+            .collect(),
+        per_station_price: world
+            .stations
+            .price_micros
+            .iter()
+            .map(|pr| pr.to_vec())
             .collect(),
         refuels,
         refuel_units,
@@ -1544,5 +1565,25 @@ mod tests {
         let rows = endpoint_station_rows(&cfg);
         assert_eq!(rows.len(), 7);
         assert!(!rows[6], "no contract touches the new station -> dark");
+    }
+
+    #[test]
+    fn sample_window_has_per_station_stock_and_price_matrices() {
+        use crate::{scenario_trophic, World};
+        let (world, _) = World::reset(scenario_trophic(7)).expect("reset");
+        let s = sample_window(&world, crate::time::Tick(0));
+        // After A0.1 these fields exist and have n_stations entries.
+        let n = world.stations.ids.len();
+        assert_eq!(s.per_station_stock.len(), n,
+            "per_station_stock: one row per station");
+        assert_eq!(s.per_station_price.len(), n,
+            "per_station_price: one row per station");
+        // Each row covers all resources (N_RESOURCES columns today).
+        // Fuel column must equal the existing per_station_fuel_stock scalar.
+        let fuel_r = crate::economy::Resource::Fuel.index();
+        for (row, stock) in s.per_station_stock.iter().enumerate() {
+            assert_eq!(stock[fuel_r], s.per_station_fuel_stock[row],
+                "per_station_stock fuel column matches existing fuel scalar at row {row}");
+        }
     }
 }

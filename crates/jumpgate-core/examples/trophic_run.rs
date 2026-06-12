@@ -298,6 +298,10 @@ fn sample_json(s: &TrophicSample) -> String {
         "pirates_at_haven": s.pirates_at_haven,
         "per_station_fuel_stock": s.per_station_fuel_stock,
         "per_station_fuel_price": s.per_station_fuel_price,
+        // goods-as-goods lab keys (rung A, A0) — ADDITIVE: every pre-goods key
+        // above is byte-untouched. per_station_fuel_stock/price remain.
+        "per_station_stock": s.per_station_stock,
+        "per_station_price": s.per_station_price,
         "refuels": s.refuels,
         "refuel_units": s.refuel_units,
         "refuel_spend_micros": s.refuel_spend_micros,
