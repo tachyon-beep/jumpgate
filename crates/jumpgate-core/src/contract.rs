@@ -45,11 +45,11 @@ pub fn command_sort_key(c: &Command) -> (u8, u32, u32) {
 /// Each variant corresponds to a `continue` site in `resolve_refuels`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RefuelDeniedReason {
-    /// Station stock was zero or negative (`stock <= 0` guard, economy.rs:1028).
+    /// Station stock was zero or negative (the `stock <= 0` guard in `resolve_refuels`).
     NoStock,
-    /// Craft wallet too low to buy one unit (`afford < 1`, economy.rs:1044).
+    /// Craft wallet too low to buy one unit (the `afford < 1` guard in `resolve_refuels`).
     CannotAfford,
-    /// Tank already full — need rounds to zero (`need < 1`, economy.rs:1040).
+    /// Tank already full — need rounds to zero (the `need < 1` guard in `resolve_refuels`).
     TankFull,
 }
 

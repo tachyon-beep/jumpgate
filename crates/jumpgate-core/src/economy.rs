@@ -224,7 +224,7 @@ impl EconCounters {
     }
 }
 
-use crate::contract::{Event, EventKind};
+use crate::contract::{Event, EventKind, RefuelDeniedReason};
 use crate::events::EventStream;
 
 /// Producer firing stage (deterministic, sorted-`ProducerId` order — the dense
@@ -1043,7 +1043,7 @@ pub fn resolve_refuels(
                     kind: EventKind::RefuelDenied {
                         craft,
                         station,
-                        reason: crate::contract::RefuelDeniedReason::NoStock,
+                        reason: RefuelDeniedReason::NoStock,
                     },
                 });
             }
@@ -1065,7 +1065,7 @@ pub fn resolve_refuels(
                     kind: EventKind::RefuelDenied {
                         craft,
                         station,
-                        reason: crate::contract::RefuelDeniedReason::TankFull,
+                        reason: RefuelDeniedReason::TankFull,
                     },
                 });
             }
@@ -1079,7 +1079,7 @@ pub fn resolve_refuels(
                     kind: EventKind::RefuelDenied {
                         craft,
                         station,
-                        reason: crate::contract::RefuelDeniedReason::CannotAfford,
+                        reason: RefuelDeniedReason::CannotAfford,
                     },
                 });
             }
@@ -2115,12 +2115,26 @@ mod tests {
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
         assert_refuel_skipped(&mut world, 12_000, 0.0, 0, "stock-0");
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::RefuelDenied { reason: RefuelDeniedReason::NoStock, .. }
+            )),
+            "stock-0: RefuelDenied(NoStock) must be emitted"
+        );
 
         let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
         world.ships.credits_micros[0] = 4_999;
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
         assert_refuel_skipped(&mut world, 4_999, 0.0, 40, "wallet-short");
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::RefuelDenied { reason: RefuelDeniedReason::CannotAfford, .. }
+            )),
+            "wallet-short: RefuelDenied(CannotAfford) must be emitted"
+        );
 
         let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
         world.ships.credits_micros[0] = 12_000;
@@ -2129,6 +2143,13 @@ mod tests {
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
         assert_refuel_skipped(&mut world, 12_000, 1.0e-9, 40, "tank-full");
+        assert!(
+            world.events_mut().since(Tick(0)).iter().any(|e| matches!(
+                e.kind,
+                EventKind::RefuelDenied { reason: RefuelDeniedReason::TankFull, .. }
+            )),
+            "tank-full: RefuelDenied(TankFull) must be emitted"
+        );
 
         let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
         world.ships.credits_micros[0] = 12_000;
