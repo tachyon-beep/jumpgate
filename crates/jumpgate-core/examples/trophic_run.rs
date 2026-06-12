@@ -505,7 +505,7 @@ fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> 
         | EventKind::PirateLeft { .. }
         | EventKind::PirateSpawned { .. }
         | EventKind::UpgradePurchased { .. }
-        | EventKind::Trade { .. } => None,
+        | EventKind::RefuelDenied { .. } => None,
     }
 }
 
@@ -535,9 +535,10 @@ fn adrift_end_count(world: &World) -> u64 {
 }
 
 /// The craft a chronicle line belongs to. Per-tick noise (ThrustApplied,
-/// ActionIngested) and world-scoped economy events (offers, prices,
-/// production, trades) have no chronicle subject; future variants default
-/// to skipped rather than breaking the printer.
+/// ActionIngested) and world-scoped economy events (offers, prices, production)
+/// have no chronicle subject. This match is EXHAUSTIVE — the wildcard is
+/// intentionally absent so that adding a new EventKind variant forces a
+/// deliberate decision here (synthesis-cut Part 3 Chronicle policy reversal).
 fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
     match *kind {
         EventKind::Arrival { craft, .. }
@@ -547,10 +548,11 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::UpgradePurchased { craft, .. } => Some(craft),
         EventKind::ContractAccepted { hauler, .. }
         | EventKind::ContractFulfilled { hauler, .. } => Some(hauler),
-        // World-gets-big §7: the refuel and the failure thread into the
-        // craft's life arc, so a stranded run reads end-to-end.
+        // World-gets-big §7: refuel and failure thread into the craft's life arc.
         EventKind::Refueled { craft, .. } => Some(craft),
         EventKind::ContractFailed { hauler, .. } => Some(hauler),
+        // Goods-as-goods A0: the WB4 middle beat (robbed→broke→RefuelDenied→ADRIFT).
+        EventKind::RefuelDenied { craft, .. } => Some(craft),
         EventKind::Robbed { pirate, .. }
         | EventKind::DrivenOff { pirate, .. }
         | EventKind::HaulerKilled { pirate, .. }
@@ -558,15 +560,21 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::PirateLeft { pirate }
         | EventKind::PirateSpawned { pirate }
         | EventKind::LurkMoved { pirate, .. } => Some(pirate),
-        // Craft hearings thread into the carrier's life arc; station hearings
-        // feed the gossip log/panels (a station-thread chronicle is a named
-        // deferral, media rung spec §8). AlertBorn shadows Robbed: no arm.
+        // Craft hearings thread into the carrier's arc; station hearings feed
+        // the panels (a station-thread chronicle is a named deferral).
+        // AlertBorn shadows Robbed: no arm.
         EventKind::GossipHeard {
             carrier: GossipNode::Craft(c),
             ..
         } => Some(c),
-        EventKind::GossipHeard { .. } | EventKind::AlertBorn { .. } => None,
-        _ => None,
+        // No craft subject for these world-scoped and noise variants.
+        EventKind::GossipHeard { .. }
+        | EventKind::AlertBorn { .. }
+        | EventKind::ThrustApplied { .. }
+        | EventKind::ActionIngested { .. }
+        | EventKind::Production { .. }
+        | EventKind::PriceUpdate { .. }
+        | EventKind::ContractOffered { .. } => None,
     }
 }
 
@@ -1054,5 +1062,23 @@ mod tests {
         assert_eq!(row["e"].as_str(), Some("rob"));
         assert_eq!(row["pirate"].as_u64(), Some(8),
             "rob row must carry pirate slot");
+    }
+
+    #[test]
+    fn chronicle_subject_threads_refuel_denied_to_craft() {
+        // RefuelDenied must produce a chronicle line for the stranded-ship arc (WB4).
+        // Before A0.3 this variant doesn't exist; the test catches it at compile.
+        use jumpgate_core::CraftId;
+        // StationId for the denied station
+        use jumpgate_core::StationId;
+        let craft = CraftId { slot: 3, generation: 0 };
+        let station = StationId { slot: 1, generation: 0 };
+        let kind = EventKind::RefuelDenied {
+            craft,
+            station,
+            reason: jumpgate_core::RefuelDeniedReason::NoStock,
+        };
+        assert_eq!(chronicle_subject(&kind), Some(craft),
+            "RefuelDenied must thread into craft life arc");
     }
 }

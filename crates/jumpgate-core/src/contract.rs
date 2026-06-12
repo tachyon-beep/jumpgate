@@ -41,6 +41,18 @@ pub fn command_sort_key(c: &Command) -> (u8, u32, u32) {
 
 // ---- event stream ----
 
+/// Why a refuel attempt was silently skipped (A0 instrument; hash-neutral).
+/// Each variant corresponds to a `continue` site in `resolve_refuels`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RefuelDeniedReason {
+    /// Station stock was zero or negative (`stock <= 0` guard, economy.rs:1028).
+    NoStock,
+    /// Craft wallet too low to buy one unit (`afford < 1`, economy.rs:1044).
+    CannotAfford,
+    /// Tank already full — need rounds to zero (`need < 1`, economy.rs:1040).
+    TankFull,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventKind {
     Arrival {
@@ -71,12 +83,6 @@ pub enum EventKind {
         producer: ProducerId,
         resource: Resource,
         qty: u32,
-    },
-    Trade {
-        station: StationId,
-        resource: Resource,
-        qty: u32,
-        price_micros: i64,
     },
     PriceUpdate {
         station: StationId,
@@ -198,6 +204,15 @@ pub enum EventKind {
     /// of the draw's own anchor (fresh post-refuge draw anchors at the
     /// pirate's position; hungry relocation anchors at the old lurk station).
     LurkMoved { pirate: CraftId, to_station: u32, breakout: bool },
+    // --- Goods-as-goods events (rung A; hash-neutral like all events) ---
+    /// A craft's pending refuel was silently skipped because one of three
+    /// preconditions failed (A0 instrument; WB4 middle beat). The `craft` is the
+    /// one holding `pending_refuel = Some(_)`. `station` is the dock station.
+    RefuelDenied {
+        craft: CraftId,
+        station: StationId,
+        reason: RefuelDeniedReason,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -414,12 +429,8 @@ mod tests {
             resource: Resource::Ore,
             qty: 5,
         };
-        let trade = EventKind::Trade {
-            station,
-            resource: Resource::Ore,
-            qty: 3,
-            price_micros: 1_000_000,
-        };
+        // Trade is deleted (A0.3); ContractOffered is the Copy+PartialEq proof witness.
+        let offered2 = EventKind::ContractOffered { contract };
         let price_update = EventKind::PriceUpdate {
             station,
             resource: Resource::Fuel,
@@ -431,7 +442,7 @@ mod tests {
 
         // Copy: binding by assignment leaves the original usable.
         let production_copy = production;
-        let trade_copy = trade;
+        let offered2_copy = offered2;
         let price_copy = price_update;
         let offered_copy = offered;
         let accepted_copy = accepted;
@@ -439,14 +450,14 @@ mod tests {
 
         // PartialEq: copies equal originals.
         assert_eq!(production, production_copy);
-        assert_eq!(trade, trade_copy);
+        assert_eq!(offered2, offered2_copy);
         assert_eq!(price_update, price_copy);
         assert_eq!(offered, offered_copy);
         assert_eq!(accepted, accepted_copy);
         assert_eq!(fulfilled, fulfilled_copy);
 
         // PartialEq: distinct variants differ.
-        assert_ne!(production, trade);
+        assert_ne!(production, offered2);
         assert_ne!(price_update, offered);
         assert_ne!(accepted, fulfilled);
 

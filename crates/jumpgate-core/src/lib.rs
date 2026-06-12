@@ -51,7 +51,7 @@ pub use config::{
     GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit,
     SubstepCfg,
 };
-pub use contract::{Command, Event, EventKind, Integrator, StateView, command_sort_key};
+pub use contract::{Command, Event, EventKind, Integrator, RefuelDeniedReason, StateView, command_sort_key};
 pub use diagnostics::{Diagnosis, TrophicSample, Verdict, classify, sample_window};
 pub use ephemeris::Ephemeris;
 pub use events::{EventStream, FUEL_EMPTY_EPS, detect_boundary_events};

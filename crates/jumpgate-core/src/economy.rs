@@ -1020,12 +1020,33 @@ pub fn resolve_refuels(
         let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
             continue;
         };
+
+        // Resolve craft and station identities early so RefuelDenied can be emitted
+        // at each guard site (A0 instrument, WB4 middle beat).
+        let craft = ships.ids_at(crow);
+        let station_id = stations
+            .ids
+            .id_at(srow)
+            .map(|(slot, generation)| StationId { slot, generation });
+
         let unit_price = stations.price_micros[srow][fuel_r];
         if unit_price < 1 {
+            // price<1 guard: no deny event (the station is effectively not selling;
+            // this is a config state, not a craft-level denial to narrate).
             continue;
         }
         let stock = stations.stock[srow][fuel_r];
         if stock <= 0 {
+            if let Some(station) = station_id {
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::RefuelDenied {
+                        craft,
+                        station,
+                        reason: crate::contract::RefuelDeniedReason::NoStock,
+                    },
+                });
+            }
             continue;
         }
         let port_row = refuel.corp_index as usize;
@@ -1038,10 +1059,30 @@ pub fn resolve_refuels(
         let fuel = ships.fuel_mass[crow];
         let need = ((cap_eff - fuel) / lot).floor() as i64;
         if need < 1 {
+            if let Some(station) = station_id {
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::RefuelDenied {
+                        craft,
+                        station,
+                        reason: crate::contract::RefuelDeniedReason::TankFull,
+                    },
+                });
+            }
             continue;
         }
         let afford = ships.credits_micros[crow].max(0) / unit_price;
         if afford < 1 {
+            if let Some(station) = station_id {
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::RefuelDenied {
+                        craft,
+                        station,
+                        reason: crate::contract::RefuelDeniedReason::CannotAfford,
+                    },
+                });
+            }
             continue;
         }
         let units = need.min(stock).min(afford);
@@ -1067,12 +1108,7 @@ pub fn resolve_refuels(
             );
             ships.nav[crow] = NavState::Seeking { dest, dv_remaining: dv };
         }
-        let craft = ships.ids_at(crow);
-        if let Some(station) = stations
-            .ids
-            .id_at(srow)
-            .map(|(slot, generation)| StationId { slot, generation })
-        {
+        if let Some(station) = station_id {
             events.emit(Event {
                 tick,
                 kind: EventKind::Refueled {
