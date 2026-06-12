@@ -185,7 +185,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .iter()
             .map(|s| diagnostics::permille_floor(cfg.bodies[s.body_index].elements.a, 1.0))
             .collect(),
-        bazaar_mode: false, // set true in scenario_bazaar (A3); trophic/frontier stay silent
+        bazaar_mode: false, // set true when simulate() builds MetaFacts for scenario_bazaar (A5); trophic/frontier stay silent
     };
     let (mut world, _config_hash) =
         World::reset(cfg).map_err(|e| format!("scenario_{} must resolve: {e}", args.scenario))?;
