@@ -113,3 +113,12 @@ def test_v5_bazaar_line_parses_and_older_reads_none():
     for legacy_text in (V1_STDOUT, V2_STDOUT, V3_STDOUT, V4_STDOUT):
         legacy = sweep.parse_stdout(legacy_text)
         assert legacy["bazaar"] is None, "bazaar is None for pre-bazaar stdout"
+
+
+def test_meta_goods_tail_is_none_for_trophic_frontier():
+    # trophic/frontier META lines have no goods= tail; parser must return None.
+    for text in (V2_STDOUT, V3_STDOUT, V4_STDOUT):
+        parsed = sweep.parse_stdout(text)
+        assert parsed["meta"] is not None
+        assert parsed["meta"]["goods"] is None, \
+            "goods= must be None for pre-bazaar META lines"

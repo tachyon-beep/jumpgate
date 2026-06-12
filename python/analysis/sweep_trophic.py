@@ -72,7 +72,8 @@ META_RE = re.compile(
     r"^META seed=(?P<seed>\d+) scenario=(?P<scenario>\w+) "
     r"stations=(?P<stations>\d+) haulers=(?P<haulers>\d+) "
     r"pirates_initial=(?P<pirates_initial>\d+) "
-    r"station_radii_milli_au=\[(?P<radii>[0-9, ]*)\]$"
+    r"station_radii_milli_au=\[(?P<radii>[0-9, ]*)\]"
+    r"(?: goods=(?P<goods>\d+))?$"
 )
 
 # The FUEL line (world-gets-big phase 0b) — lands in the SAME commit as the

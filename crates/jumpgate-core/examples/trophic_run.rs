@@ -123,6 +123,7 @@ struct MetaFacts {
     pirates_initial: usize,
     station_radii_milli_au: Vec<u32>,
     bazaar_mode: bool,   // A0: gate for BAZAAR anchored line
+    n_goods: usize,   // A0.5: for optional META goods= tail
 }
 
 /// Runner-side W9 liveness read: open-contract age at final tick.
@@ -186,6 +187,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .map(|s| diagnostics::permille_floor(cfg.bodies[s.body_index].elements.a, 1.0))
             .collect(),
         bazaar_mode: false, // set true when simulate() builds MetaFacts for scenario_bazaar (A5); trophic/frontier stay silent
+        n_goods: jumpgate_core::economy::N_RESOURCES,
     };
     let (mut world, _config_hash) =
         World::reset(cfg).map_err(|e| format!("scenario_{} must resolve: {e}", args.scenario))?;
@@ -793,16 +795,30 @@ fn main() -> ExitCode {
         .sum();
     // The META anchored line (world-gets-big phase 0b): population and map facts
     // come from the run, not from mirrored Python constants.
-    println!(
-        "META seed={} scenario={} stations={} haulers={} pirates_initial={} \
-         station_radii_milli_au={:?}",
-        args.seed,
-        meta.scenario,
-        meta.stations,
-        meta.haulers,
-        meta.pirates_initial,
-        meta.station_radii_milli_au,
-    );
+    if meta.bazaar_mode {
+        println!(
+            "META seed={} scenario={} stations={} haulers={} pirates_initial={} \
+             station_radii_milli_au={:?} goods={}",
+            args.seed,
+            meta.scenario,
+            meta.stations,
+            meta.haulers,
+            meta.pirates_initial,
+            meta.station_radii_milli_au,
+            meta.n_goods,
+        );
+    } else {
+        println!(
+            "META seed={} scenario={} stations={} haulers={} pirates_initial={} \
+             station_radii_milli_au={:?}",
+            args.seed,
+            meta.scenario,
+            meta.stations,
+            meta.haulers,
+            meta.pirates_initial,
+            meta.station_radii_milli_au,
+        );
+    }
     // Machine-readable summary line (the sweep aggregator parses this).
     println!(
         "RESULT seed={} ticks={} verdict={:?} cycled={} risk_heterogeneous={} \
