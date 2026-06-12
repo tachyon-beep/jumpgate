@@ -1,0 +1,227 @@
+{
+ "ground": [
+  "/tmp/gag-plan-a/ground-resource-plumbing.md",
+  "/tmp/gag-plan-a/ground-economy-verbs.md",
+  "/tmp/gag-plan-a/ground-contracts-conservation.md",
+  "/tmp/gag-plan-a/ground-craft-stores.md",
+  "/tmp/gag-plan-a/ground-scenario-config.md",
+  "/tmp/gag-plan-a/ground-lab.md",
+  "/tmp/gag-plan-a/ground-events-chronicle.md"
+ ],
+ "drafts": [
+  {
+   "path": "/tmp/gag-plan-a/draft-a0.md",
+   "tasks": [
+    "A0.1: per-station flat stock/price matrices in TrophicSample + JSONL",
+    "A0.2: gossip-log enhancements \u2014 accept gains resource/reward; new deliver and lie_low rows; rob gains pirate field",
+    "A0.3: exhaustive match in chronicle_subject + RefuelDenied event + remove EventKind::Trade corpse",
+    "A0.4: BAZAAR anchored stdout line + JSONL transport table row + sweep_trophic.py V5 fixture",
+    "A0.5: META optional goods= tail field",
+    "A0.6: behavior-digest baseline bank"
+   ],
+   "deviations": [
+    "A0.3 combines three concerns (Trade deletion + RefuelDenied + exhaustive chronicle match) into one commit instead of separate commits. Rationale: the exhaustive-match replacement in chronicle_subject must handle RefuelDenied in the same compile unit that adds it, and the removal of Trade from the exhaustive None arm in gossip_log_event_json (from A0.2) must happen in the same commit that removes Trade from the enum \u2014 a three-way forced coupling. Each concern is documented separately in the commit message.",
+    "The gossip-log Rob row gains a 'pirate' field in A0.2. This is not explicitly listed as a named A0 instrument in the synthesis cut \u00a71.1, but the accept row's resource/reward enrichment and the new deliver/lie_low rows are listed. The pirate field is added because the exhaustive-match replacement in A0.2 rewrites the Robbed arm anyway and the panel scripts (referenced in ground-lab.md) require pirate identity for engagement attribution. This is an interpretation, not a spec deviation, but it is flagged here for review.",
+    "The BAZAAR print and transport-table JSONL tail row (A0.4) land as infrastructure stubs (bazaar_mode=false for trophic/frontier, transport_table is an empty array). The synthesis cut requires the lockstep commit for the regex and println! to land together; this satisfies the rule while keeping trophic/frontier stdout byte-identical. The actual bazaar-mode values will be populated in A3.",
+    "The per_station_stock/price fields in A0.1 use .to_vec() on [i64; N_RESOURCES] fixed arrays. This is valid today (pre-A1) and remains valid post-A1 when the type becomes Vec<i64>. The plan notes this explicitly to prevent confusion at the A1 migration step.",
+    "A0.6 banks digests for seeds 7 and 23 only (matching the WGB phase-1 precedent). The synthesis cut does not specify a seed count for the baseline, only that it must be pinned at the A0 tip. The 20-seed W4 ladder is for WA panel reads (A3+), not the baseline itself."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a1.md",
+   "tasks": [
+    "A1.1: Good(u16) newtype \u2014 economy.rs, hash.rs, config.rs, contract.rs call sites (A1a commit, hash-neutral)",
+    "A1.2: Vec-backed arrays, GoodsCfg stub, ResetError::BadGoodsCfg, pinned-index tests (A1b commit, hash-neutral)"
+   ],
+   "deviations": [
+    "Split A1 into two commits (A1a/A1b) \u2014 not explicitly in the spec cut but follows the 'split into reviewable commits if the mechanical surface is large, each hash-checked' instruction; the surface (7 files, 30+ call sites) justifies it.",
+    "GoodsCfg is added to RunConfig in A1b (so the exhaustive destructure catches it) but NOT folded into config_hash until A3. A `let _ = goods;` suppresses the unused-variable warning. This keeps A1 hash-neutral on the config side: no GOLDEN_CONFIG_HASH re-pin in A1.",
+    "Resource::ALL is replaced by Good::ALL_V1 in A1a rather than removing it; the old ALL constant would have required updating the PriceUpdate event emitter at economy.rs:325 which references it. ALL_V1 keeps the name distinct and signals its v1-bounded nature.",
+    "N_GOODS_V1: usize = 2 is introduced as a migration aid for Default impls and old-lineage tests only (all runtime sizing reads from GoodsCfg). The spec does not name this constant but it is needed to avoid hard-coding 2 in Default impls while staying hash-neutral.",
+    "assert_resource_identity is updated to take &[i64] (slice) instead of &[i64; N_RESOURCES] in A1b. The in-transit hold-sum obligation cited in the cross-beat gotchas belongs to A2 (same-commit with the hold column), not A1 \u2014 the plan correctly defers it and notes this explicitly.",
+    "PriceCfg::default() base_micros uses vec![0i64; N_GOODS_V1] and cap uses vec![1i64; N_GOODS_V1] matching the old [0; N_RESOURCES] / [1; N_RESOURCES] defaults \u2014 byte-identical at n=2."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a2.md",
+   "tasks": [
+    "A2.1: hold column skeleton \u2014 struct, push, empty, reset + HASH_FORMAT_VERSION 5\u21926 bump with all three goldens re-derived",
+    "A2.2: assert_resource_identity \u2014 extend in-transit sum to include hold (same-commit obligation)",
+    "A2.3: pending_trade_buy / pending_trade_sell transient columns + debug_assert guards in state_hash",
+    "A2.4: Food as Good(2) \u2014 constant declaration and consumption recipe wired into scenario_bazaar only",
+    "A2.5: behavior-digest cross-check \u2014 trophic/frontier stdout+JSONL unchanged at v6 (verification step, no commit)"
+   ],
+   "deviations": [
+    "A2.1 combines the hold column addition, HASH_FORMAT_VERSION bump, and all three golden re-pins into a single task (5 steps) because the spec and gotchas require them to be one single-cause commit. The grounding extract lists all three goldens (GOLDEN_ZERO_STATE_HASH, state_hash_golden_zero_world, FRONTIER_TRAJECTORY_GOLDEN) as must-be-updated in the same v6 bump commit.",
+    "A2.4 notes a dependency on A1 for the Good newtype: Recipe.input uses Resource pre-A1 and Good post-A1. The plan shows the post-A1 form (Good::FOOD) but adds an explicit note that Good::FOOD may need to be added here if A1 deferred it, to avoid assuming A1 fully landed.",
+    "assert_resource_identity signature changes from &[i64; N_RESOURCES] to &[i64] (a slice) so Vec<i64> built in A2.2 and any future n_goods-length initial array are accepted by the same helper \u2014 this is an interpretation of the recommended cut obligation, not explicit in the spec text.",
+    "A2.5 is structured as an explicit verification task with no commit (the spec says the behavior digest is the rung exit measurement; this task makes the cross-branch comparison a concrete, observable builder step rather than an implicit assumption). The spec says 'make that check an explicit step' which confirms this.",
+    "Food consumption recipe parameters (qty=5, interval=80, station rows 3/4/8) are inferred from the frontier-band inheritance described in the spec and the scenario_frontier Fuel sink shape \u2014 the spec says 'fuel-sink shape' and 'sink-side input-only recipes at sink stations' but does not pin exact qty/interval. The builder should treat these as starting calibration values subject to console judgment."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a3.md",
+   "tasks": [
+    "A3.1: Per-good live pricing generalization (update_prices over goods_cfg.goods.len(), cap==0 skip preserved, Resource::ALL -> Good(r) in PriceUpdate)",
+    "A3.2: GoodsCfg + ArbitrageCfg + ExchangeCfg config structs \u2014 the ONE rung-A GOLDEN_CONFIG_HASH re-pin",
+    "A3.3: pending_trade_buy/sell transient columns + state_hash debug_asserts",
+    "A3.4: TradeBought/TradeSold events + delete dead EventKind::Trade + exhaustive chronicle/gossip-log matches",
+    "A3.5: run_trade_policies stage 1c3x \u2014 scripted two-mode intent writer",
+    "A3.6: resolve_trade_buys + resolve_trade_sells stage 1dx \u2014 settle stages with stock<->hold TRANSFER, Exchange money legs, 6+4 skip arms",
+    "A3.7: EXCHANGE drain standing-read instrument (lockstep: println + regex + fixture)"
+   ],
+   "deviations": [
+    "A3.1 update_prices signature: the new `goods_cfg` parameter is added to the function signature. The call site in world.rs must be updated. This matches the spec's intent that update_prices iterates all goods, but the exact parameter threading is an interpretation (the spec says 'generalize'; the grounding extract shows the current two-element N_RESOURCES loop that must become goods_cfg.goods.len()).",
+    "A3.5 two-mode policy net calculation: the spec says best_trade_net = spread*qty - transport[route] using a factory-time integer transport table (synthesis cut \u00a71.2). The transport table (ArbitrageCfg.wage_flat_micros used as a proxy) is not yet fully built in A3; the full table comparison is the Exchange poster's job (not in A3 scope). The plan uses (dest_price - src_price)*qty as the spread proxy and wage_flat_micros as trade_reserve, with a note that the full transport-table join is added when ArbitrageCfg is plumbed into the poster.",
+    "A3.6 resolve_trade_sells goods-loop: the plan drains the entire hold and re-queues any good whose station price is <1. This is consistent with the saturating semantics ('goods still unload') but the price<1 re-queue behavior (keeping unsellable goods in hold) is an interpretation of the L2-C3 guard applied to the sell arm \u2014 the spec says 'clone into every sell settle', which could mean skip-the-lot or skip-the-good; the plan skips per-good and keeps unsold goods.",
+    "A3.7 drain_per_100k placeholder: the spec says 'drain printed as a standing read'; computing the actual drain requires a treasury baseline from reset that is not yet threaded through TrophicSample. The plan prints drain_per_100k=0 as a placeholder and notes the hook for console calibration, consistent with the 'honestly sized battery' framing in OD-2.",
+    "assert_resource_identity hold sum: the cross-beat gotcha says this is 'a same-commit obligation in A2'. The plan places it in A3.6 (first commit that reads hold in production settle code) with a note that if A2 already landed it, this step is a no-op. The planner cannot verify A2's completion state at plan time.",
+    "StationId in pending_trade_sell payload: uses StationId (the Refueled precedent) rather than a dense row u32. This matches the new-events-should-use-StationId guidance in ground-events-chronicle.md \u00a710 gotcha 5, and differs from LurkMoved's dense-row encoding."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a4.md",
+   "tasks": [
+    "A4.1: OfferWithdrawn event + exhaustive chronicle match",
+    "A4.2: ArbitrageCfg in config + GOLDEN_CONFIG_HASH re-pin",
+    "A4.3: REPOST structural off \u2014 early-return prelude commit (hash-neutral, behavior-identical)",
+    "A4.4: Arbitrage poster in run_scripted_dispatch (stage 1b2)",
+    "A4.5: Withdrawal sweep \u2014 Offered price-recheck + Accepted-never-loaded corp solvency (L1-C1)",
+    "A4.6: Exchange battery sizing note + BAZAAR drain read (recorded, never gated)"
+   ],
+   "deviations": [
+    "ArbitrageCfg treated as landing in A4.2 rather than A3: the task brief says A4 covers the arbitrage scan but places ArbitrageCfg in A3. Since A3 may or may not be landed when this plan section is executed, A4.2 is written as a conditional commit that either verifies A3's shape or lands the struct itself. If A3 is already landed, A4.2 reduces to a GOLDEN_CONFIG_HASH re-pin verification only.",
+    "Good(u16) post-A1 resource substitution in the arbitrage poster body is flagged as a builder instruction with a conditional (pre-A1: Resource::Ore/Fuel index; post-A1: Good(good_idx as u16)). The plan cannot write a single concrete type since whether A1 has landed before A4 is execution-order-dependent. This is not a spec deviation \u2014 it is an explicit builder instruction per the plan's TDD discipline.",
+    "OfferWithdrawn's chronicle_subject returns None (no craft subject for a corp-level posting event). The synthesis mandates subject arms for TradeBought/TradeSold and other craft-centric events, but OfferWithdrawn does not correspond to any single craft. This is consistent with the AlertBorn/GossipHeard None precedent in chronicle_subject.",
+    "The withdrawal sweep's Offered recheck skips rows where hauler.is_some() (meaning a craft has bound intent but resolve_contracts hasn't yet fired). This is a conservative safe choice: if the sweep fires before resolve_contracts in the same tick, skipping avoids racing with the escrow path. The craft-intent clear still fires on the spread-collapse path where hauler is None \u2014 this is the common case. A follow-up observation: a hauler holding intent on a spread-collapsed row will get REVERT'd by resolve_contracts in the same tick regardless (funded check fails if spread < transport means wage is near 0 and corp has headroom), so no permanent fleet attrition occurs on that tick.",
+    "ExchangeCfg::active field is referenced in A4.6 but is defined as part of A3. The plan notes this dependency explicitly and the BAZAAR drain read is guarded on cfg.exchange.active. If A3 is not landed, A4.6 is blocked \u2014 this is the correct sequencing."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a5.md",
+   "tasks": [
+    "A5.1: two-mode policy at the ASSIGN write site",
+    "A5.2: scenario_bazaar factory",
+    "A5.3: factory invariant tests",
+    "A5.4: fleet_scale per-role-block replication",
+    "A5.5: workspace clean pass"
+   ],
+   "deviations": [
+    "Good(u16) newtype is referenced throughout as a type assumed to exist after A1; the plan cites Good(g as u16) and Good::FUEL/Good::ORE constants that will be defined in A1 \u2014 A5 tasks depend on A1 landing first. This is the stated dependency chain.",
+    "ArbitrageCfg.stock_cap_hint is declared as NOT folded (cosmetic hint) because it is a display-time filter used only in run_trade_policies and does not affect cross-branch determinism. The spec/cut did not explicitly address whether this field should be folded; I judged it cosmetic by analogy with GoodSpec.name (OD-7: name is never folded).",
+    "The two-mode policy in A5.1 writes pending_trade_buy for the BUY leg only; the SELL leg (pending_trade_sell) is written by the craft's own logic once it has arrived at the destination \u2014 this write site is NOT in run_trade_policies (which only makes the channel decision at dispatch time). A separate sell-intent stage (run_trade_sell_policies) will need to write pending_trade_sell when a hold-carrying own-trader docks at a station with a live bid. This is a gap I identified: the spec describes buy at origin and sell at destination as a two-verb pattern, but the sell-intent writer was not explicitly staged. I have included resolve_trade_sells (the consume stage) but the sell-intent policy writer is left as a follow-on step that belongs in A5.1's commit or a dedicated A5.1b task.",
+    "fleet_scale_count knob is introduced as a NEW knob name distinct from the existing float fleet_scale (which scales fuel/tank mass). The spec/cut says 'per-role-block replication' but the existing apply_knob fleet_scale arm is a float that scales fuel. Rather than overloading the semantics, I introduce fleet_scale_count (integer, replicates craft rows). This naming deviation is documented here; if the owner prefers reusing the float knob name with integer semantics, the implementation can be adjusted.",
+    "The transport_micros table in ArbitrageCfg uses a simplified ring-arc model (|i-j| * 50_000) rather than a true AU-distance derived table. The spec says 'phase-independent ring-radius geometry (the tier-reward precedent)' \u2014 the tier-reward precedent uses integer multiples, which I followed. A more accurate model would compute arc length from FRONTIER_ORBIT_AU radii, but that introduces f64 at factory time. The simple arc-hop model is deterministic, integer, and consistent with the spec's intent of a static integer table that is not an ephemeris read.",
+    "PriceCfg and StationInit fields become Vec<i64> after A1's Good(u16) refactor. The plan's scenario_bazaar factory uses Vec-valued fields (initial_stock: Vec<i64>, price_cfg.base_micros: Vec<i64>, etc.) which are the post-A1 shapes. If A1 has not yet landed when A5 is built, the builder will need to adapt the literal shapes to whatever interim form A1 leaves behind. This is a sequencing note, not a design deviation."
+   ]
+  },
+  {
+   "path": "/tmp/gag-plan-a/draft-a6.md",
+   "tasks": [
+    "A6.0: Behavior digest baseline (A0 tip pinned)",
+    "A6.1: WA1 survival-by-market reader",
+    "A6.2: WA2 spread-closure reader",
+    "A6.3: WA3 + WA5 joint reader (channel mix vs capitalization, trophic preservation)",
+    "A6.4: WA4 emergent-tanker reader",
+    "A6.5: Rung-A BAZAAR anchored line + per_station_stock/price JSONL + route-concentration panel",
+    "A6.6: Per-station epilogue block + chronicle enrichment",
+    "A6.7: 20-seed ensemble + rung-A exit digest + console packet"
+   ],
+   "deviations": [
+    "A6.5 BAZAAR impl notes: `World::n_goods()`, `TrophicSample::exchange_treasury_micros`, and `TrophicSample::packages_posted` are referenced in the BAZAAR println! step but do not yet exist in the codebase \u2014 they are A3 deliverables. The plan step explicitly tells the builder to add these fields when A3 has landed, and to zero-init them if A3 has not yet landed. This is an ordering dependency the plan encodes as prose rather than as code, because the field shapes are spec-defined but not yet grounded in source.",
+    "A6.6 per-station epilogue: the plan assumes `World::n_goods()` and `World::n_stations()` are methods the A1 commit will add (they are natural accessors on the runtime-goods representation). If those accessors are named differently, the builder must adapt the call sites. The plan uses the spec-pinned names.",
+    "A6.3 wa3_wa5_joint.py: `own_trade_share_milli` reads `trade_sold_count` and `laden_trips` from the window dict. The `trade_sold_count` field is added in A6.5's TrophicSample additions; on pre-A6.5 banked JSONL the field is absent and the function returns 0 (safe fallback). This version-gating is not shown as a test pin but is encoded in the dict `.get()` pattern.",
+    "WA1 anti-mirroring (L4-F4): the transport_table no-tick tail row format (`{e: 'transport_table', routes: [...], transport_micros: [...]}`) is specified in the plan based on the grounding's description of the fuel_role tail-row precedent. The exact field names are not grounded in existing source (the row does not yet exist); the builder must match whatever the A3/A5 runner emits. The test pins the dict shape, which will need updating if the emitted keys differ.",
+    "WA2 spread-closure: the 'post' gossip-log row format (`{e: 'post', contract, route, good, spread_micros, to_station}`) is specified based on the synthesis-cut description ('runner-enriched from ContractOffered event + current prices'). This row does not yet exist in the codebase (A5 lands it). The test fixtures use this shape; the builder must match the A5 runner's actual emitted keys."
+   ]
+  }
+ ],
+ "assembled": "/tmp/gag-plan-a/assembled-plan.md",
+ "taskList": [
+  "A0.1: per-station flat stock/price matrices in TrophicSample + JSONL",
+  "A0.2: gossip-log enhancements \u2014 accept gains resource/reward; new deliver and lie_low rows; rob gains pirate field",
+  "A0.3: exhaustive match in chronicle_subject + RefuelDenied event + remove EventKind::Trade corpse",
+  "A0.4: BAZAAR anchored stdout line + JSONL transport table row + sweep_trophic.py V5 fixture",
+  "A0.5: META optional goods= tail field",
+  "A0.6: behavior-digest baseline bank",
+  "A1.1: Good(u16) newtype \u2014 economy.rs, hash.rs, config.rs, contract.rs call sites",
+  "A1.2: Vec-backed arrays, GoodsCfg stub, ResetError::BadGoodsCfg, pinned-index tests",
+  "A2.1: hold column skeleton \u2014 struct, push, empty, reset",
+  "A2.2: assert_resource_identity \u2014 extend in-transit sum to include hold",
+  "A2.3: pending_trade_buy / pending_trade_sell transient columns + debug asserts",
+  "A2.4: Food as Good(2) \u2014 the good definition and consumption recipe in scenario_bazaar",
+  "A2.5: Behavior-digest cross-check \u2014 trophic/frontier unchanged at v6",
+  "A3.1: per-good live pricing generalization",
+  "A3.2: GoodsCfg, ArbitrageCfg, ExchangeCfg config \u2014 the ONE rung-A GOLDEN_CONFIG_HASH re-pin",
+  "A3.3: TradeBuy/TradeSell pending columns + debug_asserts",
+  "A3.4: TradeBought/TradeSold events + delete dead EventKind::Trade",
+  "A3.5: run_trade_policies (stage 1c3x) \u2014 scripted intent writer",
+  "A3.6: resolve_trade_buys and resolve_trade_sells (stage 1dx) \u2014 settle stages",
+  "A3.7: Exchange drain instrument (A0 standing read)",
+  "A4.1: OfferWithdrawn event and its chronicle arm",
+  "A4.2: ArbitrageCfg in config (A3 dependency confirmation + transport table)",
+  "A4.3: REPOST structural off \u2014 early-return prelude commit",
+  "A4.4: Arbitrage poster in run_scripted_dispatch",
+  "A4.5: Withdrawal sweep \u2014 Offered price-recheck and Accepted-never-loaded corp solvency",
+  "A4.6: Exchange battery sizing note and drain read (recorded, never gated)",
+  "A5.1: two-mode policy at the ASSIGN write site",
+  "A5.2: scenario_bazaar factory",
+  "A5.3: factory invariant tests",
+  "A5.4: fleet_scale per-role-block replication",
+  "A5.5: workspace clean pass",
+  "A6.0: Behavior digest baseline (A0 tip pinned)",
+  "A6.1: WA1 survival-by-market reader",
+  "A6.2: WA2 spread-closure reader",
+  "A6.3: WA3 + WA5 joint reader (channel mix vs capitalization, trophic preservation)",
+  "A6.4: WA4 emergent-tanker reader",
+  "A6.5: Rung-A BAZAAR anchored line + per-good route-concentration panel",
+  "A6.6: Per-station epilogue block + chronicle enrichment",
+  "A6.7: 20-seed ensemble + rung-A exit digest + console packet"
+ ],
+ "assemblerFixes": [
+  "CONTENT CONFLICT A0.3 vs A3.4 (EventKind::Trade deletion): A0.3 deletes EventKind::Trade; A3.4 also instructs 'delete dead EventKind::Trade'. By the time A3.4 executes, the variant is already gone. A3.4's deletion step will be a no-op (or compile-skipped); the builder must skip that deletion sub-step and only add TradeBought/TradeSold in A3.4. Flagged in deviations; task IDs unchanged per instructions.",
+  "BROKEN REFERENCE FIX in A4.1 Step 2: The draft referenced EventKind::Trade { .. } => None in the exhaustive chronicle match arm to be added. Since EventKind::Trade is deleted in A0.3 (and confirmed deleted again in A3.4), this arm cannot compile. Fixed by replacing that arm with a NOTE comment: 'EventKind::Trade was deleted in A0.3 / A3.4. Do NOT add an arm for it.'",
+  "CONTENT CONFLICT A2.3 vs A3.3 (pending_trade_buy/sell column type mismatch): A2.3 defines pending_trade_buy: Vec<Option<TradeBuyIntent>> and pending_trade_sell: Vec<Option<TradeSellIntent>> using named structs. A3.3 redefines the same columns with raw tuple types Option<(Good, u32, StationId)>. A5.1 adds them a third time also with raw tuples. The builder must pick ONE type definition (A2.3's named-struct form or A3.3/A5.1's tuple form); subsequent tasks that reference the same columns (A3.3 and A5.1 Steps 1-2) must skip the re-definition and only use the already-existing columns. Flagged; task IDs unchanged.",
+  "STALE Was-value cross-reference in A5.2: The A5.2 GOLDEN_CONFIG_HASH re-pin comment says 'Was 0x128c_1299_5c48_4fdc' (the original pre-A3 value). By A5, the hash has already been re-pinned in A3.2 to whatever print_golden_config output; the 'Was' value in the A5.2 provenance comment is thus stale (it documents the pre-A3 original, not the A3.2 result). This is a documentation inaccuracy in the provenance comment. The actual derive-and-paste instruction remains correct; no invented literal. Flagged; content not rewritten per instructions.",
+  "No forbidden placeholder patterns found (TBD, TODO, 'similar to Task', 'add appropriate', 'fill in') across any of the 7 section files.",
+  "No invented golden literals found: every golden re-pin step instructs the builder to run print_golden / print_golden_config / print_golden_frontier and paste the output. The only hex literals present are 'Was 0x...' provenance documentation of OLD values (legitimate) or placeholder tokens like 0x<NEW_VALUE> and 0x????_????_????_???? (correct derive-and-paste instructions).",
+  "No rung-B contraband found as built config or code: all occurrences of jettison/scoop/fence/posture/greed/jetsam appear only as deferred mentions, exclusion statements, or L5-C4 prohibition checklists."
+ ],
+ "reviews": [
+  {
+   "path": "/tmp/gag-plan-a/review-reality.md",
+   "critical": 1,
+   "major": 1,
+   "minor": 4,
+   "headline": "1 compile-blocking hallucination: A0.2 exhaustive match missing EventKind::Trade; 1 wrong region: frontier ContractInit at scenario.rs:470 not 156; all symbols and paths verified"
+  },
+  {
+   "path": "/tmp/gag-plan-a/review-quality.md",
+   "critical": 4,
+   "major": 4,
+   "minor": 3,
+   "headline": "Four compile-blocking conflicts (double Trade delete, dual ArbitrageCfg, triple assert_resource_identity, missing WA3/WA5 joint-read instrument) block safe execution; ASSIGN empty-hold gate (L3-M3) has no test."
+  },
+  {
+   "path": "/tmp/gag-plan-a/review-architecture.md",
+   "critical": 3,
+   "major": 3,
+   "minor": 4,
+   "headline": "Three CRITICAL task-sequencing contradictions (EventKind::Trade deleted twice, GoodsCfg triple-defined with type conflicts, pending_trade columns added twice with incompatible payloads) make the plan non-executable as written without structural pre-repair."
+  },
+  {
+   "path": "/tmp/gag-plan-a/review-systems.md",
+   "critical": 1,
+   "major": 3,
+   "minor": 2,
+   "headline": "Own-trade sell branch absent in A5.1 (own-traders deadlock); corp rotation vacuous with 1 Exchange corp; battery 5.4B uncalibrated; monoculture risk from zero trade reserve."
+  }
+ ],
+ "synthesis": {
+  "path": "/tmp/gag-plan-a/synthesis.md",
+  "critical": 6,
+  "major": 5,
+  "minor": 3,
+  "headline": "FIX-THEN-SHIP: 6 compile-blocking plan-assembly duplications (ArbitrageCfg x3, Trade-delete x2, pending-columns x2, assert_resource_identity x3, A0.2 missing Trade arm, GoodSpec.name type split); design is sound and cut-faithful. Systems' 'no sell branch' rejected (stale draft)."
+ }
+}
