@@ -1585,5 +1585,9 @@ mod tests {
             assert_eq!(stock[fuel_r], s.per_station_fuel_stock[row],
                 "per_station_stock fuel column matches existing fuel scalar at row {row}");
         }
+        for (row, price) in s.per_station_price.iter().enumerate() {
+            assert_eq!(price[fuel_r], s.per_station_fuel_price[row],
+                "per_station_price fuel column matches existing fuel scalar at row {row}");
+        }
     }
 }
