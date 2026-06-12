@@ -379,7 +379,8 @@ fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
 /// Post-run media event log (plan Task 8.4): one JSONL line per
 /// media-relevant event from the retained stream — AlertBorn ("born"),
 /// GossipHeard ("heard"), Robbed ("rob"), ContractAccepted ("accept"),
-/// Refueled ("refuel"), LurkMoved ("lurk_moved") — for
+/// ContractFulfilled ("deliver"), Refueled ("refuel"),
+/// LurkMoved ("lurk_moved"), PirateLieLow ("lie_low") — for
 /// `python/analysis/media_log.py`, the I2 radial-zone panel, and the W6 lurk
 /// movement panel. Routes join through the now-public
 /// `diagnostics::route_of` (a settled/unresolvable contract reads `null`).
@@ -418,15 +419,48 @@ fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> 
                 "claimed": claimed_value_micros, "rob_tick": rob_tick.0,
             }))
         }
-        EventKind::Robbed { contract, .. } => Some(serde_json::json!({
+        EventKind::Robbed { pirate, contract, .. } => Some(serde_json::json!({
             "e": "rob", "tick": e.tick.0,
+            "pirate": pirate.slot,
             "route": diagnostics::route_of(world, contract),
         })),
-        EventKind::ContractAccepted { contract, hauler } => Some(serde_json::json!({
-            "e": "accept", "tick": e.tick.0,
-            "route": diagnostics::route_of(world, contract),
-            "hauler": hauler.slot,
-        })),
+        EventKind::ContractAccepted { contract, hauler } => {
+            // Accept row gains resource + reward keys (A0, WA2/WA4 joins).
+            let (resource, reward) = diagnostics::contract_resource_reward(world, contract)
+                .map(|(r, w)| {
+                    (
+                        serde_json::Value::String(format!("{r:?}")),
+                        serde_json::json!(w),
+                    )
+                })
+                .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
+            Some(serde_json::json!({
+                "e": "accept", "tick": e.tick.0,
+                "route": diagnostics::route_of(world, contract),
+                "hauler": hauler.slot,
+                "resource": resource,
+                "reward": reward,
+            }))
+        }
+        // "deliver" row: required by WA2/WA4 joins. Previously fell through to
+        // _ => None. StationId precedent: use slot (matching Refueled).
+        EventKind::ContractFulfilled { contract, hauler } => {
+            let (resource, reward) = diagnostics::contract_resource_reward(world, contract)
+                .map(|(r, w)| {
+                    (
+                        serde_json::Value::String(format!("{r:?}")),
+                        serde_json::json!(w),
+                    )
+                })
+                .unwrap_or((serde_json::Value::Null, serde_json::Value::Null));
+            Some(serde_json::json!({
+                "e": "deliver", "tick": e.tick.0,
+                "route": diagnostics::route_of(world, contract),
+                "hauler": hauler.slot,
+                "resource": resource,
+                "reward": reward,
+            }))
+        }
         EventKind::Refueled {
             craft,
             station,
@@ -449,7 +483,29 @@ fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> 
             "e": "lurk_moved", "tick": e.tick.0, "pirate": pirate.slot,
             "to_station": to_station, "breakout": breakout,
         })),
-        _ => None,
+        // "lie_low" row: required by WB2. Previously fell through to _ => None.
+        EventKind::PirateLieLow { pirate, until } => Some(serde_json::json!({
+            "e": "lie_low", "tick": e.tick.0, "pirate": pirate.slot,
+            "until": until.0,
+        })),
+        // Variants that are world-scoped or per-tick noise have no gossip row.
+        // This exhaustive list prevents future variants from silently vanishing.
+        EventKind::Arrival { .. }
+        | EventKind::FuelEmpty { .. }
+        | EventKind::ThrustApplied { .. }
+        | EventKind::ActionIngested { .. }
+        | EventKind::Reward { .. }
+        | EventKind::Wake { .. }
+        | EventKind::Production { .. }
+        | EventKind::PriceUpdate { .. }
+        | EventKind::ContractOffered { .. }
+        | EventKind::ContractFailed { .. }
+        | EventKind::DrivenOff { .. }
+        | EventKind::HaulerKilled { .. }
+        | EventKind::PirateLeft { .. }
+        | EventKind::PirateSpawned { .. }
+        | EventKind::UpgradePurchased { .. }
+        | EventKind::Trade { .. } => None,
     }
 }
 
@@ -911,5 +967,92 @@ mod tests {
         assert_eq!(row["craft"].as_u64(), Some(3));
         assert_eq!(row["station"].as_u64(), Some(4));
         assert_eq!(row["units"].as_i64(), Some(2));
+    }
+
+    #[test]
+    fn gossip_log_encodes_contract_fulfilled_as_deliver() {
+        use jumpgate_core::{scenario_trophic, ContractId, CraftId, World};
+        let world = World::reset(scenario_trophic(7))
+            .expect("trophic resolves")
+            .0;
+        let e = Event {
+            tick: Tick(100),
+            kind: EventKind::ContractFulfilled {
+                contract: ContractId { slot: 1, generation: 0 },
+                hauler: CraftId { slot: 3, generation: 0 },
+            },
+        };
+        let row = gossip_log_event_json(&world, &e)
+            .expect("ContractFulfilled must produce a deliver row");
+        assert_eq!(row["e"].as_str(), Some("deliver"));
+        assert_eq!(row["tick"].as_u64(), Some(100));
+        assert_eq!(row["hauler"].as_u64(), Some(3));
+    }
+
+    #[test]
+    fn gossip_log_encodes_pirate_lie_low_as_lie_low() {
+        use jumpgate_core::{CraftId, World, scenario_trophic};
+        let world = World::reset(scenario_trophic(7))
+            .expect("trophic resolves")
+            .0;
+        let e = Event {
+            tick: Tick(55),
+            kind: EventKind::PirateLieLow {
+                pirate: CraftId { slot: 7, generation: 0 },
+                until: Tick(155),
+            },
+        };
+        let row = gossip_log_event_json(&world, &e)
+            .expect("PirateLieLow must produce a lie_low row");
+        assert_eq!(row["e"].as_str(), Some("lie_low"));
+        assert_eq!(row["tick"].as_u64(), Some(55));
+        assert_eq!(row["pirate"].as_u64(), Some(7));
+        assert_eq!(row["until"].as_u64(), Some(155));
+    }
+
+    #[test]
+    fn gossip_log_accept_row_has_resource_and_reward() {
+        use jumpgate_core::{ContractId, CraftId, World, scenario_trophic};
+        let world = World::reset(scenario_trophic(7))
+            .expect("trophic resolves")
+            .0;
+        let e = Event {
+            tick: Tick(20),
+            kind: EventKind::ContractAccepted {
+                contract: ContractId { slot: 0, generation: 0 },
+                hauler: CraftId { slot: 2, generation: 0 },
+            },
+        };
+        // The world has contracts from scenario_trophic; slot 0 may not be live —
+        // so we only assert the keys exist when a route is resolvable.
+        // For a non-existent contract the row is still emitted with route=null.
+        let row = gossip_log_event_json(&world, &e)
+            .expect("ContractAccepted always emits an accept row");
+        assert_eq!(row["e"].as_str(), Some("accept"));
+        // The new keys must be present (null is ok for a stale contract).
+        assert!(row.get("resource").is_some(), "accept row must have 'resource' key");
+        assert!(row.get("reward").is_some(), "accept row must have 'reward' key");
+    }
+
+    #[test]
+    fn gossip_log_rob_row_has_pirate_field() {
+        use jumpgate_core::{ContractId, CraftId, World, scenario_trophic};
+        let world = World::reset(scenario_trophic(7))
+            .expect("trophic resolves")
+            .0;
+        let e = Event {
+            tick: Tick(30),
+            kind: EventKind::Robbed {
+                pirate: CraftId { slot: 8, generation: 0 },
+                hauler: CraftId { slot: 2, generation: 0 },
+                contract: ContractId { slot: 0, generation: 0 },
+                value_micros: 1_000_000,
+            },
+        };
+        let row = gossip_log_event_json(&world, &e)
+            .expect("Robbed always emits a rob row");
+        assert_eq!(row["e"].as_str(), Some("rob"));
+        assert_eq!(row["pirate"].as_u64(), Some(8),
+            "rob row must carry pirate slot");
     }
 }

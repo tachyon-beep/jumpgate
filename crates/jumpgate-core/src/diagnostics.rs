@@ -858,6 +858,21 @@ pub fn route_of(world: &World, contract: ContractId) -> Option<usize> {
     Some(fr.saturating_mul(n).saturating_add(tr))
 }
 
+/// Resource and reward for a contract, for the gossip-log `accept` / `deliver`
+/// rows (A0, WA2/WA4 joins). Returns `None` when the contract slot/generation
+/// is no longer live (stale id); the caller serialises `null` in that case.
+/// Pub since A0.2: called from `trophic_run.rs` examples.
+pub fn contract_resource_reward(
+    world: &World,
+    contract: ContractId,
+) -> Option<(Resource, i64)> {
+    let k = world
+        .contracts
+        .ids
+        .dense_index(contract.slot, contract.generation)?;
+    Some((world.contracts.resource[k], world.contracts.reward_micros[k]))
+}
+
 /// Contract-endpoint station rows derived from the run's own config: row i is
 /// `true` iff some seeded contract has it as `from_station_index` or
 /// `to_station_index`. This is the scenario-conditional CommonKnowledge
