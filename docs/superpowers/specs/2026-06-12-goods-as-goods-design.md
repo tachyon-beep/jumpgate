@@ -75,11 +75,20 @@ corridors to act on); the tragedy tail is unreachable through play.
 
 ## 3. Rung A — goods, boards, packages, two modes
 
-**Goods.** Extend the resource set to 10: keep Ore / Food / Fuel (they carry
-existing mechanics) + 7 trade goods with real names (working set: Alloys,
-Medicine, Machinery, Luxuries, Electronics, Textiles, Chemicals — chronicle
-lines read better than "Widget D"; final naming free at plan time). Per-good
-property table ships uniform (D1).
+**Goods.** Extend the resource set to 10. PANEL CORRECTION (2026-06-12,
+re-verified): `Resource` is `{Ore, Fuel}` — **Food does not exist as a good**
+(every chronicle "food" is the pirate's `food_micros` ledger). So: keep Ore /
+Fuel + 8 new goods, of which **Food ships as a real good WITH a consumption
+recipe** (input-only Recipe, the fuel-sink shape) or WA1 has nothing to read.
+Remaining 7 with real names (working set: Alloys, Medicine, Machinery,
+Luxuries, Electronics, Textiles, Chemicals — chronicle lines read better than
+"Widget D"; final naming free at plan time). Representation per OD-1:
+runtime `Good(u16)` + Vec-backed columns, count from a config-tail GoodsCfg —
+the per-resource hash folds carry no count word, so the refactor commit is
+provably hash-neutral and Experiment C's 10→20 is config-only. Per-good
+property table ships **minimal-live** per OD-7: name (never folded) +
+unit_mass_milli (uniform 1000, read by the capacity gate on every transfer);
+further columns land each with their first reader.
 
 **Boards.** Per-station per-good live pricing — the generalization OD-4
 anticipated when world-gets-big made Fuel the first live-priced good. The
@@ -172,13 +181,18 @@ Rung B:
 - **WB6 gossip self-selection watch (PDR-0008) re-read:** with jetsam and
   fence events now in the world, re-read the carried-alert age skew.
 
-## 6. Determinism and hash discipline
+## 6. Determinism and hash discipline (amended per panel, 2026-06-12)
 
-- Multi-good craft holds and the per-good property table are store/schema
-  changes: expect the first **HASH_FORMAT_VERSION bump since v5**, with the
-  usual single-cause documentation, golden re-derivations via the print
-  fixtures, and a cross-branch digest proving scenario_trophic and
-  scenario_frontier byte-identity (the rung-A exit measurement).
+- **Two format bumps, one per rung:** v6 = the owned `hold` column on all
+  craft (rung A; pirate rows hold zeros, the cargo-None precedent); v7 =
+  JetsamStore + pirate fence state (rung B). The pirate crate hold REUSES the
+  v6 column.
+- **The exit measurement is a behavior digest, never cross-bump hash
+  equality** (HASH_FORMAT_VERSION folds as word 2 of every state hash):
+  sha256 over stdout ∪ window-JSONL ∪ gossip-log per (scenario, seed) — the
+  WGB phase-1 procedure. State-hash sequence equality is available for
+  exactly one commit: the OD-1 runtime-goods representation commit (no bump).
+  Instruments land FIRST and pin the digest baseline.
 - New events (PackagePosted, TradeBought/TradeSold, Jettisoned, Scooped,
   CrateSeized, Fenced) are unhashed event-stream additions per the WGB idiom.
 - No new RNG streams: all v1 policies read hashed world state.
@@ -186,12 +200,60 @@ Rung B:
   dial) folds at config tail → one GOLDEN_CONFIG_HASH re-pin per rung,
   cause-documented.
 
+## 6b. Panel record (15 agents, 2026-06-12, banked
+`docs/superpowers/posts/2026-06-12-goods-as-goods-panel/`)
+
+All 17 adversarial CRITICALs dispositioned in the banked recommended cut,
+which is the buildable reference for the plan. Owner resolved all seven new
+ODs to the panel recommendations (2026-06-12/13, no overrides):
+
+- **OD-1(a)** runtime `Good(u16)` goods representation (unanimous).
+- **OD-2(a)** one **Exchange corp** as the goods money counterparty
+  (Yard/Port idiom, merged, covers the haven), honestly sized as a wind-down
+  battery with drain printed as a standing read — "we're not standing up the
+  economy out of whole cloth, we're laying the tubes" (owner). Named trigger:
+  consumption-minted money if the console shows universal heat death.
+- **OD-3(a)** fuel base-price re-bake in scenario_bazaar only (≈50_000) so a
+  fixed-size fuel package can clear the arbitrage trigger (WA4 reachable).
+  Fixed package sizes v1; **ORDER-IN** recorded as a named hook (§7).
+- **OD-4(a)** wage = static transport floor + share of spread surplus —
+  dangerous-lane wages rise through pure price mechanics; WB1 stays an
+  honest emergent read.
+- **OD-5(a)** omniscience principle RATIFIED: sealing binds POLICY reads,
+  never the unhashed event stream (events are the owner's omniscient
+  window). Riders: contents unseal on seizure (fence-seeking; the engagement
+  decision stays content-blind); no gossip/media mint may ever source a
+  sealed payload field. Recurs at INFO-LAYER.
+- **OD-6(a)** ransom takings are prey-agnostic — a pressed-and-robbed trader
+  loses goods AND wallet (this is what arms WB4's robbed→broke→stranded).
+- **OD-7(a)** minimal-live property table (amends §7's literal 4-field
+  wording; D1's seam intent honored).
+
+Load-bearing panel corrections (each re-verified in the main loop):
+rung-A piracy is coherent unchanged but own-cargo traders are mechanically
+invisible to pirates, so **WA3 and WA5 are a joint read** (own-trade share IS
+the pirate food supply); pirates are structurally immortal (starvation
+re-mints grubstake — fence re-timing creates a duty-cycle hazard, never
+extinction; the band re-walk accounts for the welfare mint); jetsam is a real
+hashed store (cursor-folded, TTL expiry → consumed leg; the press-arm
+canister floats); partial seize at pirate capacity, remainder → jetsam at the
+rob point; corp posting uses deterministic rotation and the lurk-relocation
+weighting reads Offered rows only (the dumb-by-signature law is repealed in
+exactly those words); per-good topology must be CLUMPED (partitioned
+k-ranges) with a pre-registered rung-A route-concentration panel — the three
+self-averaging costumes each carry a constraint + a read.
+
 ## 7. Named future hooks (seams, not promises)
 
 - **INDUSTRY:** per-good property matrix (mass/volume/value-density/
   perishability) on the D1 table + multi-input recipes on the Producer seam.
 - **CORPS/COOPS:** ownership structures over treasuries and posting rights on
   the arbitrage premium seam.
+- **ORDER-IN (owner, 2026-06-13):** need-sized, demand-pull corp ordering —
+  "I need 30 clothes, they're expensive here but cheaper at Y, so I'll order
+  them in": package quantity derived from the corp's own demand gap + price
+  comparison, replacing fixed lots. The ghost of order-up-to returning, but
+  PRICED as arbitrage rather than free restock.
 - **NAVY/LAW:** lands on the D5 moral geography — policing shifts gray-market
   posture and displaces predation outward (the two-regime hypothesis).
 - **INFO-LAYER:** board localization/staleness inherits the PDR-0008 horizon;
