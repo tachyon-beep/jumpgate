@@ -26,3 +26,7 @@ runs/
 
 # Machine-local Claude settings
 .claude/settings.local.json
+.env
+
+# Legis — local working dir / config (regenerated/local; never commit)
+.weft/legis/

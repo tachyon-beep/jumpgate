@@ -1,10 +1,38 @@
 {
   "mcpServers": {
     "filigree": {
-      "type": "stdio",
-      "command": "/home/john/.local/bin/filigree-mcp",
       "args": [],
-      "env": {}
+      "command": "/home/john/.local/bin/filigree-mcp",
+      "type": "stdio"
+    },
+    "legis": {
+      "args": [
+        "mcp",
+        "--agent-id",
+        "claude-code"
+      ],
+      "command": "/home/john/.local/bin/legis",
+      "env": {},
+      "type": "stdio"
+    },
+    "loomweave": {
+      "args": [
+        "serve"
+      ],
+      "command": "/home/john/.local/share/uv/tools/loomweave/bin/loomweave",
+      "env": {},
+      "type": "stdio"
+    },
+    "wardline": {
+      "args": [
+        "mcp",
+        "--root",
+        ".",
+        "--loomweave-url",
+        "http://127.0.0.1:10251"
+      ],
+      "command": "/home/john/.local/bin/wardline",
+      "type": "stdio"
     }
   }
 }
