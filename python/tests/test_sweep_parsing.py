@@ -37,6 +37,14 @@ V3_STDOUT = V1_STDOUT + (
     "refuels=3 refuel_spend_micros=45000\n"
 )
 
+V4_STDOUT = V1_STDOUT + (
+    "META seed=7 scenario=frontier stations=10 haulers=20 pirates_initial=10 "
+    "station_radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]\n"
+    "FUEL seed=7 hauler_duty_milli=537 hauler_burn_total_milli=3149 "
+    "hauler_median_leg_burn_permille=2 hauler_min_tank_permille=745 "
+    "refuels=49 refuel_spend_micros=128200 strandings=2 adrift_end=1\n"
+)
+
 
 def test_v1_banked_output_still_parses():
     parsed = sweep.parse_stdout(V1_STDOUT)
@@ -73,3 +81,16 @@ def test_v3_fuel_line_refuel_tail_parses_and_v2_tail_reads_none():
     legacy = sweep.parse_stdout(V2_STDOUT)
     assert legacy["fuel"]["refuels"] is None
     assert legacy["fuel"]["refuel_spend_micros"] is None
+
+
+def test_v4_fuel_line_stranding_tail_parses_and_older_tails_read_none():
+    parsed = sweep.parse_stdout(V4_STDOUT)
+    assert parsed["fuel"] is not None
+    assert parsed["fuel"]["refuels"] == "49"
+    assert parsed["fuel"]["refuel_spend_micros"] == "128200"
+    assert parsed["fuel"]["strandings"] == "2"
+    assert parsed["fuel"]["adrift_end"] == "1"
+    for legacy_text in (V2_STDOUT, V3_STDOUT):
+        legacy = sweep.parse_stdout(legacy_text)
+        assert legacy["fuel"]["strandings"] is None
+        assert legacy["fuel"]["adrift_end"] is None

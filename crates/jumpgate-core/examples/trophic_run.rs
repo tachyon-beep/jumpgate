@@ -30,9 +30,9 @@ use std::process::ExitCode;
 
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
-    Command, ContractId, CraftId, CraftRole, EntityRef, EventKind, FUEL_EMPTY_EPS, GossipNode,
-    NavDest, RunConfig, StateView, Tick, World, apply_knob, scenario_frontier, scenario_trophic,
-    state_hash,
+    Command, ContractId, CraftId, CraftRole, EntityRef, Event, EventKind, FUEL_EMPTY_EPS,
+    GossipNode, NavDest, RunConfig, StateView, Tick, World, apply_knob, scenario_frontier,
+    scenario_trophic, state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -133,8 +133,14 @@ struct LivenessFacts {
 /// `simulate`'s product: per-window samples, sampled `(tick, state_hash)`,
 /// final world, META facts, runner-side liveness facts, and contract-endpoint
 /// station rows for MEDIA coverage.
-type RunProduct =
-    (Vec<TrophicSample>, Vec<(u64, u64)>, World, MetaFacts, LivenessFacts, Vec<bool>);
+type RunProduct = (
+    Vec<TrophicSample>,
+    Vec<(u64, u64)>,
+    World,
+    MetaFacts,
+    LivenessFacts,
+    Vec<bool>,
+);
 
 /// One full seeded run. The config is rebuilt per run from `(seed, sets)` so
 /// the replay-check's second run shares nothing but the recipe.
@@ -142,7 +148,11 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
     let (scenario_name, mut cfg): (&'static str, RunConfig) = match args.scenario.as_str() {
         "trophic" => ("trophic", scenario_trophic(args.seed)),
         "frontier" => ("frontier", scenario_frontier(args.seed)),
-        other => return Err(format!("--scenario {other}: unknown scenario (trophic|frontier)")),
+        other => {
+            return Err(format!(
+                "--scenario {other}: unknown scenario (trophic|frontier)"
+            ));
+        }
     };
     for (k, v) in &args.sets {
         apply_knob(&mut cfg, k, v)?;
@@ -329,8 +339,10 @@ fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
         .saturating_mul(1000)
         .checked_div(craft_ticks)
         .unwrap_or(0);
-    let burn_total_milli: u64 =
-        rows.iter().map(|&r| u64::from(last.per_craft_burn_milli[r])).sum();
+    let burn_total_milli: u64 = rows
+        .iter()
+        .map(|&r| u64::from(last.per_craft_burn_milli[r]))
+        .sum();
     // Contract legs are hauler-only by construction; pirates read the 0
     // sentinel because they fly no contract legs.
     let median_leg_burn_permille = if pirate_side {
@@ -341,7 +353,11 @@ fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
             .flat_map(|s| s.leg_burn_permille.iter().copied())
             .collect();
         legs.sort_unstable();
-        if legs.is_empty() { 0 } else { legs[(legs.len() - 1) / 2] }
+        if legs.is_empty() {
+            0
+        } else {
+            legs[(legs.len() - 1) / 2]
+        }
     };
     let min_tank_permille = rows
         .iter()
@@ -359,75 +375,103 @@ fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
 /// Post-run media event log (plan Task 8.4): one JSONL line per
 /// media-relevant event from the retained stream — AlertBorn ("born"),
 /// GossipHeard ("heard"), Robbed ("rob"), ContractAccepted ("accept"),
-/// Refueled ("refuel") — for `python/analysis/media_log.py` and the I2
-/// radial-zone panel. Routes join through the now-public
+/// Refueled ("refuel"), LurkMoved ("lurk_moved") — for
+/// `python/analysis/media_log.py`, the I2 radial-zone panel, and the W6 lurk
+/// movement panel. Routes join through the now-public
 /// `diagnostics::route_of` (a settled/unresolvable contract reads `null`).
 /// Carrier encoding: `"s<row>"` station / `"c<slot>"` craft — station slot ==
 /// dense row in v1 (stations mint once at reset and never despawn).
+fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> {
+    match e.kind {
+        EventKind::AlertBorn {
+            alert_seq,
+            route,
+            pirate,
+            hauler,
+            truth_value_micros,
+            claimed_value_micros,
+        } => Some(serde_json::json!({
+            "e": "born", "tick": e.tick.0, "alert": alert_seq, "route": route,
+            "pirate": pirate.slot, "hauler": hauler.slot,
+            "truth": truth_value_micros, "claimed": claimed_value_micros,
+        })),
+        EventKind::GossipHeard {
+            carrier,
+            alert_seq,
+            route,
+            claimed_value_micros,
+            hops,
+            rob_tick,
+            ..
+        } => {
+            let carrier = match carrier {
+                GossipNode::Station(s) => format!("s{}", s.slot),
+                GossipNode::Craft(c) => format!("c{}", c.slot),
+            };
+            Some(serde_json::json!({
+                "e": "heard", "tick": e.tick.0, "alert": alert_seq,
+                "carrier": carrier, "route": route, "hops": hops,
+                "claimed": claimed_value_micros, "rob_tick": rob_tick.0,
+            }))
+        }
+        EventKind::Robbed { contract, .. } => Some(serde_json::json!({
+            "e": "rob", "tick": e.tick.0,
+            "route": diagnostics::route_of(world, contract),
+        })),
+        EventKind::ContractAccepted { contract, hauler } => Some(serde_json::json!({
+            "e": "accept", "tick": e.tick.0,
+            "route": diagnostics::route_of(world, contract),
+            "hauler": hauler.slot,
+        })),
+        EventKind::Refueled {
+            craft,
+            station,
+            units,
+            price_micros,
+            tank_before_permille,
+            tank_after_permille,
+        } => Some(serde_json::json!({
+            "e": "refuel", "tick": e.tick.0, "craft": craft.slot,
+            "station": station.slot, "units": units,
+            "price_micros": price_micros,
+            "before_permille": tank_before_permille,
+            "after_permille": tank_after_permille,
+        })),
+        EventKind::LurkMoved {
+            pirate,
+            to_station,
+            breakout,
+        } => Some(serde_json::json!({
+            "e": "lurk_moved", "tick": e.tick.0, "pirate": pirate.slot,
+            "to_station": to_station, "breakout": breakout,
+        })),
+        _ => None,
+    }
+}
+
 fn write_gossip_log(world: &World, path: &str) {
     let mut w =
         BufWriter::new(File::create(path).unwrap_or_else(|e| panic!("--gossip-log {path}: {e}")));
     for e in world.recent_events(Tick(0)) {
-        let line = match e.kind {
-            EventKind::AlertBorn {
-                alert_seq,
-                route,
-                pirate,
-                hauler,
-                truth_value_micros,
-                claimed_value_micros,
-            } => serde_json::json!({
-                "e": "born", "tick": e.tick.0, "alert": alert_seq, "route": route,
-                "pirate": pirate.slot, "hauler": hauler.slot,
-                "truth": truth_value_micros, "claimed": claimed_value_micros,
-            }),
-            EventKind::GossipHeard {
-                carrier,
-                alert_seq,
-                route,
-                claimed_value_micros,
-                hops,
-                rob_tick,
-                ..
-            } => {
-                let carrier = match carrier {
-                    GossipNode::Station(s) => format!("s{}", s.slot),
-                    GossipNode::Craft(c) => format!("c{}", c.slot),
-                };
-                serde_json::json!({
-                    "e": "heard", "tick": e.tick.0, "alert": alert_seq,
-                    "carrier": carrier, "route": route, "hops": hops,
-                    "claimed": claimed_value_micros, "rob_tick": rob_tick.0,
-                })
-            }
-            EventKind::Robbed { contract, .. } => serde_json::json!({
-                "e": "rob", "tick": e.tick.0,
-                "route": diagnostics::route_of(world, contract),
-            }),
-            EventKind::ContractAccepted { contract, hauler } => serde_json::json!({
-                "e": "accept", "tick": e.tick.0,
-                "route": diagnostics::route_of(world, contract),
-                "hauler": hauler.slot,
-            }),
-            EventKind::Refueled {
-                craft,
-                station,
-                units,
-                price_micros,
-                tank_before_permille,
-                tank_after_permille,
-            } => serde_json::json!({
-                "e": "refuel", "tick": e.tick.0, "craft": craft.slot,
-                "station": station.slot, "units": units,
-                "price_micros": price_micros,
-                "before_permille": tank_before_permille,
-                "after_permille": tank_after_permille,
-            }),
-            _ => continue,
+        let Some(line) = gossip_log_event_json(world, e) else {
+            continue;
         };
         writeln!(w, "{line}").expect("gossip-log write");
     }
     w.flush().expect("gossip-log flush");
+}
+
+fn adrift_end_count(world: &World) -> u64 {
+    world
+        .craft_ids()
+        .into_iter()
+        .filter(|&id| {
+            world.craft_is_idle(id) == Some(true)
+                && world
+                    .craft_fuel(id)
+                    .is_some_and(|fuel| fuel <= FUEL_EMPTY_EPS)
+        })
+        .count() as u64
 }
 
 /// The craft a chronicle line belongs to. Per-tick noise (ThrustApplied,
@@ -516,15 +560,21 @@ fn print_chronicle(world: &World, gossip_min_micros: i64) {
             .map_or_else(|| "stale".to_string(), |r| format!("{r:?}"));
         let fuel = world.craft_fuel(id).unwrap_or(0.0);
         let cap = world.craft_fuel_capacity(id).unwrap_or(0.0);
-        let tank_permille = if cap > 0.0 { ((fuel / cap) * 1000.0).floor() as u32 } else { 0 };
+        let tank_permille = if cap > 0.0 {
+            ((fuel / cap) * 1000.0).floor() as u32
+        } else {
+            0
+        };
         let credits = world.craft_credits(id).unwrap_or(0);
         // Mean radial distance (milli-AU, FLOOR) of bodies this craft arrived
         // at over the whole run. Factory orbits are circular, so radius is
         // time-invariant for these scenarios.
         let (mut r_sum, mut r_n) = (0.0f64, 0u64);
         for e in world.recent_events(Tick(0)) {
-            if let EventKind::Arrival { craft, dest: NavDest::Entity(EntityRef::Body(b)) } =
-                e.kind
+            if let EventKind::Arrival {
+                craft,
+                dest: NavDest::Entity(EntityRef::Body(b)),
+            } = e.kind
                 && craft == id
                 && let Some(p) = world.body_pos(b, world.tick())
             {
@@ -532,8 +582,11 @@ fn print_chronicle(world: &World, gossip_min_micros: i64) {
                 r_n += 1;
             }
         }
-        let workplace_radius_milli_au =
-            if r_n == 0 { 0 } else { ((r_sum / r_n as f64) * 1000.0).floor() as u64 };
+        let workplace_radius_milli_au = if r_n == 0 {
+            0
+        } else {
+            ((r_sum / r_n as f64) * 1000.0).floor() as u64
+        };
         let adrift = world.craft_is_idle(id) == Some(true) && fuel <= FUEL_EMPTY_EPS;
         let line = format!(
             "  == epilogue: role={role} workplace_radius_milli_au={workplace_radius_milli_au} \
@@ -573,12 +626,12 @@ fn main() -> ExitCode {
         .map(|p| BufWriter::new(File::create(p).unwrap_or_else(|e| panic!("--jsonl {p}: {e}"))));
     let (samples, hashes, world, meta, liveness, endpoint_rows) =
         match simulate(&args, jsonl_writer.as_mut()) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("trophic_run: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("trophic_run: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
     let hauler_fuel = fuel_agg(&samples, false);
     let pirate_fuel = fuel_agg(&samples, true);
     if let Some(mut w) = jsonl_writer {
@@ -717,10 +770,12 @@ fn main() -> ExitCode {
     // exist; 0 means either "mechanic dark" or "nobody bought" by scenario.
     let refuels_total: u64 = samples.iter().map(|s| u64::from(s.refuels)).sum();
     let refuel_spend_total: i64 = samples.iter().map(|s| s.refuel_spend_micros).sum();
+    let strandings_total = fuel_empty;
+    let adrift_end = adrift_end_count(&world);
     println!(
         "FUEL seed={} hauler_duty_milli={} hauler_burn_total_milli={} \
          hauler_median_leg_burn_permille={} hauler_min_tank_permille={} \
-         refuels={} refuel_spend_micros={}",
+         refuels={} refuel_spend_micros={} strandings={} adrift_end={}",
         args.seed,
         hauler_fuel.duty_milli,
         hauler_fuel.burn_total_milli,
@@ -728,11 +783,12 @@ fn main() -> ExitCode {
         hauler_fuel.min_tank_permille,
         refuels_total,
         refuel_spend_total,
+        strandings_total,
+        adrift_end,
     );
     println!(
         "LIVENESS max_open_contract_age={} open_contracts={}",
-        liveness.max_open_contract_age,
-        liveness.open_contracts,
+        liveness.max_open_contract_age, liveness.open_contracts,
     );
 
     // The ASSIGN line (WHY-panel windows, 2026-06-11; a window, not a gate):
@@ -792,4 +848,64 @@ fn main() -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gossip_log_encodes_lurk_moved_for_w6() {
+        let world = World::reset(scenario_frontier(7))
+            .expect("frontier resolves")
+            .0;
+        let e = Event {
+            tick: Tick(42),
+            kind: EventKind::LurkMoved {
+                pirate: CraftId {
+                    slot: 12,
+                    generation: 0,
+                },
+                to_station: 8,
+                breakout: true,
+            },
+        };
+
+        let row = gossip_log_event_json(&world, &e).expect("LurkMoved is W6 gossip evidence");
+        assert_eq!(row["e"].as_str(), Some("lurk_moved"));
+        assert_eq!(row["tick"].as_u64(), Some(42));
+        assert_eq!(row["pirate"].as_u64(), Some(12));
+        assert_eq!(row["to_station"].as_u64(), Some(8));
+        assert_eq!(row["breakout"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn gossip_log_encodes_refueled_for_i2() {
+        let world = World::reset(scenario_frontier(7))
+            .expect("frontier resolves")
+            .0;
+        let e = Event {
+            tick: Tick(99),
+            kind: EventKind::Refueled {
+                craft: CraftId {
+                    slot: 3,
+                    generation: 0,
+                },
+                station: jumpgate_core::StationId {
+                    slot: 4,
+                    generation: 0,
+                },
+                units: 2,
+                price_micros: 8_200,
+                tank_before_permille: 900,
+                tank_after_permille: 999,
+            },
+        };
+
+        let row = gossip_log_event_json(&world, &e).expect("Refueled stays in gossip log");
+        assert_eq!(row["e"].as_str(), Some("refuel"));
+        assert_eq!(row["craft"].as_u64(), Some(3));
+        assert_eq!(row["station"].as_u64(), Some(4));
+        assert_eq!(row["units"].as_i64(), Some(2));
+    }
 }

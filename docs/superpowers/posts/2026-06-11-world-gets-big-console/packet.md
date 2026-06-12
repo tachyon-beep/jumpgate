@@ -23,10 +23,10 @@ The session judges PLAY at the console; these are the windows beside it.
 | W3 | hub/backwater ratio > 3.0 | gossip-born mostly above 3.0 with two exceptions in the printed panel (2.9, 2.8); gossip-rob printed ratios are >= 3.0, with large hub skew in several seeds (for example 15.1). | grid_sweep_stdout.txt |
 | W4 | flip-share VALUE: gossip-vs-ring over 20 clean seeds x both anchor arms (registered alternative: mixing persists -> the deferred dispatch-locality lever) | Clean seeds 18/20, dirty [31, 99]. A/A twins sound. Clean deltas: born-anchor +713500 micros median final hauler credits (-244789 milli per laden trip); rob-anchor +622275 micros (-350703 milli per laden trip). | w4_readout.txt |
 | W5 | I1 correlations with the position-blind-dispatch confound registered | Frontier seed 7: Spearman radius/median lag = 0.166, radius/end credits = 0.152 over 20 haulers. Trophic control seed 7: -0.098 and 0.818 over 12 haulers. PLAY-C3 confound named in both panels. | i1_frontier_s7.txt, i1_trophic_control.txt |
-| W6 | breakout share + landing distribution + lurk-dwell bimodality | Proxy snapshot only, not a LurkMoved chronicle panel: final_lurker_zone_totals core=194, mid=265, haven=0, frontier=357; frontier_lurker_share_permille quartiles (166, 400, 600); final pirates_at_haven quartiles (1, 1, 3); final pirates_commuting quartiles (1, 1, 2). | grid_aux_summary.txt |
+| W6 | breakout share + landing distribution + lurk-dwell bimodality | Corrected structured `LurkMoved` read, frontier seed 7: moves=49, breakouts=24, breakout_permille=489; landing_by_zone core=9, mid=34, haven=0, frontier=6; dwell_ticks_q=(2015, 2862, 12333). The old grid snapshot remains context only. | w6_lurk_moves_frontier_s7.txt, grid_aux_summary.txt |
 | W7 | tier-2 service rate + regime onset vs the upgrade ladder | Frontier seed 7 zone panel: frontier zone first shows traffic at window 48000 (traffic 3, robs 2), then 50000 (traffic 5, robs 1, fuel_stock 25, price_max 10000). | i2_frontier_s7.txt |
 | W8 | hauler per-leg burn/duty (the calibration input) | Grid hauler fuel tail summary: duty_milli quartiles (546, 557, 565), burn_total_milli (3206, 3269, 3318), median_leg_burn_permille (2, 2, 2), min_tank_permille (936, 942, 944). | grid_sweep_stdout.txt, grid_aux_summary.txt |
-| W9 | strandings 0-2/run band + robbed->stranded chains + contract-age liveness | fuel_empty_counts {0: 120}; max_open_contract_age quartiles (1077, 1257, 1439); open_contracts quartiles (20, 20, 20). Stranding chains were not separately chronicle-banked in this packet. | grid_aux_summary.txt |
+| W9 | strandings 0-2/run band + robbed->stranded chains + contract-age liveness | Corrected runner surface, frontier seed 7: `strandings=0 adrift_end=0`, `refuels=49`, `refuel_spend_micros=128200`, `LIVENESS max_open_contract_age=37810 open_contracts=19`. Since strandings and adrift_end are both zero, there are no robbed->stranded chains in this seed. Grid context: fuel_empty_counts {0: 120}; max_open_contract_age quartiles (1077, 1257, 1439); open_contracts quartiles (20, 20, 20). | w9_frontier_s7.txt, grid_aux_summary.txt |
 | W10 | station fuel stock-out map + price gradient + fuel_starve discriminator | seed 7 radial readings: core NoStockout, mid NoStockout, haven Stockout, frontier NoStockout. Per-row refuel fill share recorded with row-order rationing note. | i2_frontier_s7.txt |
 | W11 | fleet attrition + per-role pirate fuel low-water (the OD-6 trigger input) | Tail fuel rows: hauler min_tank_permille quartiles (936, 942, 944), pirate min_tank_permille quartiles (877, 897, 911); pirate duty_milli quartiles (107, 117, 124), burn_total_milli (664, 730, 773). | grid_aux_summary.txt |
 | W12 | trophic arms bit-identical digest + fuel_empty=0 (the control stays a control) | Regenerated 20-seed trophic baseline: fuel_empty=0 for all baseline runs; verdict mix RiskEqualized 18, Alive 2. Trophic control: RiskEqualized 20/20, fuel_empty=0 for all runs. The Phase-1 digest artifact is not reprinted here. | trophic_baseline_summary.txt, fit_trophic.txt |
@@ -80,6 +80,11 @@ cargo run -q -p jumpgate-core --release --example trophic_run -- \
   capacity-ladder reads; the I1 panel prints this directly.
 - A/A twins: blind/ring born-vs-rob arms are identical on every seed in
   `w4_readout.txt`.
+- W6 correction: `--gossip-log` now emits `lurk_moved` rows. The W6 packet read
+  uses `w6_lurk_moves_frontier_s7.txt`; the older final-window lurker snapshot
+  is context, not the pre-registered breakout-share read.
+- W9 correction: the FUEL line now appends `strandings` and `adrift_end` after
+  the refuel fields with version-gated parser support.
 - Clean-seed rule: blind-born != PermanentPeace; clean count 18/20.
 - GEO-C3: cross-map reads are rate-normalized distributions, never same-seed
   pairs. `w4_readout.txt` records frontier gossip-born credits/trip quartiles

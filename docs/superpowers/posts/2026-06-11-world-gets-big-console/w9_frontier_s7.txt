@@ -1,0 +1,7 @@
+META seed=7 scenario=frontier stations=10 haulers=20 pirates_initial=10 station_radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+RESULT seed=7 ticks=50000 verdict=RiskEqualized cycled=true risk_heterogeneous=false outcomes_disperse=true fuel_empty=0 robs=96 laden_trips=954 purchases=67
+FUEL seed=7 hauler_duty_milli=537 hauler_burn_total_milli=3149 hauler_median_leg_burn_permille=2 hauler_min_tank_permille=745 refuels=49 refuel_spend_micros=128200 strandings=0 adrift_end=0
+LIVENESS max_open_contract_age=37810 open_contracts=19
+
+-- gossip event counts --
+{'accept': 1069, 'lurk_moved': 49, 'refuel': 49, 'rob': 96}

@@ -1,5 +1,6 @@
 grid_aux_summary - derived from same-day per-cell stdout and JSONL before packet banking
 All values are RECORDED, never gated. W6 is a snapshot/proxy summary, not a LurkMoved chronicle event panel.
+W6 correction: see w6_lurk_moves_frontier_s7.txt for the structured LurkMoved breakout-share read used by packet.md.
 
 -- W2 MEDIA lag summary (per-cell MEDIA lines) --
 gossip-born: readings={'Localized': 12, 'CommonKnowledge': 8} escaped_milli_q=(875, 934, 962) median_lag_q=(5694, 6963, 9228) p90_lag_q=(15309, 19932, 24136)

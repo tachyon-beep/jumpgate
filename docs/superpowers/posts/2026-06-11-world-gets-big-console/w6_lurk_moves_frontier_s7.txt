@@ -1,0 +1,4 @@
+lurk_moves (PDR-0006: windows, not gates) - moves=49 breakouts=24 breakout_permille=489
+landing_by_station={0: 1, 1: 5, 2: 3, 3: 2, 4: 3, 5: 29, 7: 2, 8: 2, 9: 2}
+landing_by_zone={'core': 9, 'mid': 34, 'haven': 0, 'frontier': 6}
+dwell_ticks_count=39 dwell_ticks_q=(2015, 2862, 12333)
