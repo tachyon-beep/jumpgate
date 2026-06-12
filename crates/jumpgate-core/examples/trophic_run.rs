@@ -358,8 +358,9 @@ fn fuel_agg(samples: &[TrophicSample], pirate_side: bool) -> FuelAgg {
 
 /// Post-run media event log (plan Task 8.4): one JSONL line per
 /// media-relevant event from the retained stream — AlertBorn ("born"),
-/// GossipHeard ("heard"), Robbed ("rob"), ContractAccepted ("accept") — for
-/// `python/analysis/media_log.py`. Routes join through the now-public
+/// GossipHeard ("heard"), Robbed ("rob"), ContractAccepted ("accept"),
+/// Refueled ("refuel") — for `python/analysis/media_log.py` and the I2
+/// radial-zone panel. Routes join through the now-public
 /// `diagnostics::route_of` (a settled/unresolvable contract reads `null`).
 /// Carrier encoding: `"s<row>"` station / `"c<slot>"` craft — station slot ==
 /// dense row in v1 (stations mint once at reset and never despawn).
@@ -407,6 +408,20 @@ fn write_gossip_log(world: &World, path: &str) {
                 "e": "accept", "tick": e.tick.0,
                 "route": diagnostics::route_of(world, contract),
                 "hauler": hauler.slot,
+            }),
+            EventKind::Refueled {
+                craft,
+                station,
+                units,
+                price_micros,
+                tank_before_permille,
+                tank_after_permille,
+            } => serde_json::json!({
+                "e": "refuel", "tick": e.tick.0, "craft": craft.slot,
+                "station": station.slot, "units": units,
+                "price_micros": price_micros,
+                "before_permille": tank_before_permille,
+                "after_permille": tank_after_permille,
             }),
             _ => continue,
         };
