@@ -200,9 +200,43 @@ Rung B:
   fraction, greed) are the DRL player surfaces, per the two-layer agent
   architecture.
 
-## 8. Out of scope (this pair of rungs)
+## 8. Experiment C — depth and headcount (pre-registered, after Rung A or B)
+
+Owner-added 2026-06-12. A secondary scaling experiment on the bazaar
+substrate, no new mechanics:
+
+- **Goods 10 → 20** by adding a raw-materials layer and a processed layer
+  (flavor names in the spirit of "wafer rods", "viscous gel", "rockite").
+  Processing is single-input (raw X → processed Y) — today's `Recipe` already
+  does this (Ore→Fuel is one); multi-input stays behind the INDUSTRY hook.
+  The goods graph gains DEPTH: some stations mine, some process, demand sits
+  at the end of two-leg chains that must be HAULED between.
+- **Ship-count ratchet:** sweep arms scaling total craft of all kinds
+  (e.g. ×1 / ×2 / ×4 over the bazaar baseline, exact ladder at plan time),
+  same seeds, same geometry.
+
+**The question:** does more goods/industry feed more underlying people, or do
+the existing cycles snap? Three registered outcomes, all findings:
+
+- **WC1 capacity grows:** larger fleets stay fed (utilization, credits,
+  pirate food) — economic depth raises carrying capacity.
+- **WC2 cycles snap — collapse:** starvation cascades propagate through the
+  two-leg chains (the processed-goods chokepoint: the wafer-rod shortage that
+  stalls every chain downstream of it).
+- **WC3 cycles snap — flatline:** boom-bust amplitude self-averages away as
+  headcount rises (the contention-game LLN risk; the partitioned tier loops
+  were built against exactly this — this experiment measures whether they
+  hold). Alternation counts and per-window HHI vs fleet size are the read.
+- **WC4 niche formation watch:** does the two-mode policy sort by goods layer
+  (some craft live on raw legs, others on processed legs) without being told
+  to — emergent specialization.
+
+## 9. Out of scope (this pair of rungs)
 
 Navy/police craft; learned policies (all brains scripted v1); the property
-matrix (table ships uniform); multi-input recipes; board localization;
-pirate-on-pirate predation of laden pirates (recorded as a watch, not built);
-co-op/ownership structures.
+matrix (table ships uniform); multi-input recipes (single-input processing
+chains are IN for Experiment C); board localization; pirate-on-pirate
+predation of laden pirates (recorded as a watch, not built); co-op/ownership
+structures; population entry/exit economics for cargo craft (fleet size is a
+sweep arm in Experiment C, not yet an endogenous quantity — the natural
+follow-on if WC1 reads).
