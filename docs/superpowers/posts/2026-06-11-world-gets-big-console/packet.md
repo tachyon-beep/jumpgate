@@ -12,7 +12,17 @@ The session judges PLAY at the console; these are the windows beside it.
    nobody warned, the station that sold its last tank at four times the core
    price.
 3. W4 anchor adoption call (born vs rob staleness anchor, gossip arms).
+   **RESOLVED 2026-06-12 (owner): ROB anchor adopted — PDR-0008.** Realism
+   argues both ways; the owner tiebreak was gameplay novelty: the rob anchor
+   creates the information horizon (W2's registered alternative becomes a
+   feature) and keeps timeliness valuable, which preserves the selection
+   gradient for the registered gossip-self-selection watch. Born stays a
+   registered counterfactual arm in future grids. Value cost recorded:
+   +622,275 vs +713,500 micros (both > ring; full 2026-06-12 re-run was
+   byte-identical to this packet's banked evidence).
 4. W11 read = the named pirate-fuel unification trigger (OD-6).
+   **READ 2026-06-12:** pirate min_tank quartiles (877, 897, 911)‰ vs hauler
+   (936, 942, 944)‰ — nowhere near the trigger; ×10 endurance stays parked.
 
 ## 2. Pre-registered windows and readings
 
