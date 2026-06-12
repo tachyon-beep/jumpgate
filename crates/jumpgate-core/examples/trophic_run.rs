@@ -122,6 +122,7 @@ struct MetaFacts {
     haulers: usize,
     pirates_initial: usize,
     station_radii_milli_au: Vec<u32>,
+    bazaar_mode: bool,   // A0: gate for BAZAAR anchored line
 }
 
 /// Runner-side W9 liveness read: open-contract age at final tick.
@@ -184,6 +185,7 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .iter()
             .map(|s| diagnostics::permille_floor(cfg.bodies[s.body_index].elements.a, 1.0))
             .collect(),
+        bazaar_mode: false, // set true in scenario_bazaar (A3); trophic/frontier stay silent
     };
     let (mut world, _config_hash) =
         World::reset(cfg).map_err(|e| format!("scenario_{} must resolve: {e}", args.scenario))?;
@@ -720,6 +722,22 @@ fn main() -> ExitCode {
             )
             .expect("jsonl write");
         }
+        // Transport-table tail row (WA1 anti-mirroring, synthesis-cut L4-F4):
+        // echoes the factory-time integer transport table so the rejection arithmetic
+        // reads run-emitted numbers, never mirrored Python constants.
+        // No "tick" key — window consumers gate on `"tick" in row`.
+        // For trophic/frontier, the table is empty (no bazaar config); the row is
+        // still emitted (with an empty array) so the parser contract is unconditional.
+        writeln!(
+            w,
+            "{}",
+            serde_json::json!({
+                "transport_table": serde_json::Value::Array(Vec::new()),
+                // route_costs will be a Vec<{from, to, cost_micros}> in A3 when
+                // the bazaar transport table is built; empty here is the structural off.
+            })
+        )
+        .expect("jsonl write");
         w.flush().expect("jsonl flush");
     }
 
@@ -875,6 +893,22 @@ fn main() -> ExitCode {
             last.assign_flips_cum,
             flip_milli,
             last.assign_counts_cum,
+        );
+    }
+
+    // BAZAAR anchored line (rung A, scenario_bazaar; lockstep: regex in same commit).
+    // Config-gated: silent for trophic/frontier so banked baseline stays byte-identical.
+    if meta.bazaar_mode {
+        println!(
+            "BAZAAR seed={} scenario={} exchange_treasury_micros={} \
+             trade_buys={} trade_sells={} arb_posts={} arb_withdrawals={}",
+            args.seed,
+            meta.scenario,
+            0i64,  // placeholder; scenario_bazaar populates via world accessor in A3
+            0u64,  // trade_buys
+            0u64,  // trade_sells
+            0u64,  // arb_posts
+            0u64,  // arb_withdrawals
         );
     }
 

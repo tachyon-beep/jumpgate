@@ -94,3 +94,22 @@ def test_v4_fuel_line_stranding_tail_parses_and_older_tails_read_none():
         legacy = sweep.parse_stdout(legacy_text)
         assert legacy["fuel"]["strandings"] is None
         assert legacy["fuel"]["adrift_end"] is None
+
+
+# V5: adds optional BAZAAR anchored line (rung A, scenario_bazaar; config-gated
+# so trophic/frontier stdout stays byte-identical). Regex lands in same commit
+# as the Rust println! (lockstep rule).
+V5_STDOUT = V4_STDOUT + (
+    "BAZAAR seed=7 scenario=bazaar exchange_treasury_micros=1234567890 "
+    "trade_buys=0 trade_sells=0 arb_posts=0 arb_withdrawals=0\n"
+)
+
+
+def test_v5_bazaar_line_parses_and_older_reads_none():
+    parsed = sweep.parse_stdout(V5_STDOUT)
+    assert parsed["bazaar"] is not None
+    assert parsed["bazaar"]["exchange_treasury"] == "1234567890"
+    assert parsed["bazaar"]["trade_buys"] == "0"
+    for legacy_text in (V1_STDOUT, V2_STDOUT, V3_STDOUT, V4_STDOUT):
+        legacy = sweep.parse_stdout(legacy_text)
+        assert legacy["bazaar"] is None, "bazaar is None for pre-bazaar stdout"

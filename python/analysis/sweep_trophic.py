@@ -89,11 +89,22 @@ FUEL_RE = re.compile(
     r"(?: strandings=(?P<strandings>\d+) adrift_end=(?P<adrift_end>\d+))?)?$"
 )
 
+# The BAZAAR line (rung A, scenario_bazaar; config-gated — absent from
+# trophic/frontier stdout). Regex lands in the SAME commit as the Rust println!
+# (lockstep rule). Optional in ANCHORED: pre-bazaar banked outputs parse as None.
+BAZAAR_RE = re.compile(
+    r"^BAZAAR seed=(?P<seed>\d+) scenario=(?P<scenario>\w+) "
+    r"exchange_treasury_micros=(?P<exchange_treasury>-?\d+) "
+    r"trade_buys=(?P<trade_buys>\d+) trade_sells=(?P<trade_sells>\d+) "
+    r"arb_posts=(?P<arb_posts>\d+) arb_withdrawals=(?P<arb_withdrawals>\d+)$"
+)
+
 ANCHORED = {
     "result": (True, RESULT_RE),
     "media": (True, MEDIA_RE),
     "meta": (False, META_RE),
     "fuel": (False, FUEL_RE),
+    "bazaar": (False, BAZAAR_RE),   # rung A, scenario_bazaar; config-gated
 }
 
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli
