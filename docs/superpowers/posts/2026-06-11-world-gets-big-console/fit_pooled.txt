@@ -1,0 +1,53 @@
+fit_heterogeneity (labeled-run method; PDR-0006: a ruler check, not a gate)
+  clumped            /tmp/wgb-fit/trophic-fit/baseline_s23.jsonl: mean_norm_hhi_milli=1553 hot_change_excess=6
+  clumped            /tmp/wgb-fit/trophic-fit/baseline_s42.jsonl: mean_norm_hhi_milli=910 hot_change_excess=2
+  clumped            /tmp/wgb-fit/trophic-fit/baseline_s7.jsonl: mean_norm_hhi_milli=1712 hot_change_excess=5
+  clumped            /tmp/wgb-fit/trophic-fit/baseline_s99.jsonl: mean_norm_hhi_milli=3715 hot_change_excess=1
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s23.jsonl: mean_norm_hhi_milli=5630 hot_change_excess=5
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s42.jsonl: mean_norm_hhi_milli=5939 hot_change_excess=5
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s7.jsonl: mean_norm_hhi_milli=4512 hot_change_excess=7
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s99.jsonl: mean_norm_hhi_milli=7646 hot_change_excess=-1
+  equalized          /tmp/wgb-fit/trophic-fit/control_s23.jsonl: mean_norm_hhi_milli=1182 hot_change_excess=3
+  equalized          /tmp/wgb-fit/trophic-fit/control_s42.jsonl: mean_norm_hhi_milli=1068 hot_change_excess=4
+  equalized          /tmp/wgb-fit/trophic-fit/control_s7.jsonl: mean_norm_hhi_milli=1206 hot_change_excess=4
+  equalized          /tmp/wgb-fit/trophic-fit/control_s99.jsonl: mean_norm_hhi_milli=1009 hot_change_excess=3
+  equalized          /tmp/wgb-fit/frontier-fit/control_s23.jsonl: mean_norm_hhi_milli=3311 hot_change_excess=10
+  equalized          /tmp/wgb-fit/frontier-fit/control_s42.jsonl: mean_norm_hhi_milli=2864 hot_change_excess=4
+  equalized          /tmp/wgb-fit/frontier-fit/control_s7.jsonl: mean_norm_hhi_milli=3012 hot_change_excess=5
+  equalized          /tmp/wgb-fit/frontier-fit/control_s99.jsonl: mean_norm_hhi_milli=2732 hot_change_excess=9
+  heldout-clumped    /tmp/wgb-fit/trophic-held/baseline_s101.jsonl: mean_norm_hhi_milli=1975 hot_change_excess=4
+  heldout-clumped    /tmp/wgb-fit/trophic-held/baseline_s11.jsonl: mean_norm_hhi_milli=1076 hot_change_excess=11
+  heldout-clumped    /tmp/wgb-fit/trophic-held/baseline_s31.jsonl: mean_norm_hhi_milli=1153 hot_change_excess=4
+  heldout-clumped    /tmp/wgb-fit/trophic-held/baseline_s57.jsonl: mean_norm_hhi_milli=1167 hot_change_excess=8
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s101.jsonl: mean_norm_hhi_milli=6033 hot_change_excess=2
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s11.jsonl: mean_norm_hhi_milli=6362 hot_change_excess=3
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s31.jsonl: mean_norm_hhi_milli=6840 hot_change_excess=1
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s57.jsonl: mean_norm_hhi_milli=4885 hot_change_excess=0
+  heldout-equalized  /tmp/wgb-fit/trophic-held/control_s101.jsonl: mean_norm_hhi_milli=930 hot_change_excess=7
+  heldout-equalized  /tmp/wgb-fit/trophic-held/control_s11.jsonl: mean_norm_hhi_milli=978 hot_change_excess=-3
+  heldout-equalized  /tmp/wgb-fit/trophic-held/control_s31.jsonl: mean_norm_hhi_milli=1048 hot_change_excess=9
+  heldout-equalized  /tmp/wgb-fit/trophic-held/control_s57.jsonl: mean_norm_hhi_milli=863 hot_change_excess=2
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s101.jsonl: mean_norm_hhi_milli=3339 hot_change_excess=-2
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s11.jsonl: mean_norm_hhi_milli=2551 hot_change_excess=6
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s31.jsonl: mean_norm_hhi_milli=3132 hot_change_excess=12
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s57.jsonl: mean_norm_hhi_milli=3014 hot_change_excess=6
+
+FIT threshold: {'threshold': 2110, 'clumped_min': 910, 'equalized_max': 3311, 'margin_open': False}
+FIT slack:     {'slack': 5, 'clumped_max': 7, 'equalized_min': 3, 'margin_open': False}
+MARGIN CLOSED on this set; do NOT move the constants from this fit. Record the overlap, keep the current literals, and register scenario-conditional thresholds as the named deferred trigger.
+HELD-OUT heldout-clumped /tmp/wgb-fit/trophic-held/baseline_s101.jsonl: hhi=1975 -> boundary side=equalized excess=4 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/trophic-held/baseline_s11.jsonl: hhi=1076 -> boundary side=equalized excess=11 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/trophic-held/baseline_s31.jsonl: hhi=1153 -> boundary side=equalized excess=4 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/trophic-held/baseline_s57.jsonl: hhi=1167 -> boundary side=equalized excess=8 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s101.jsonl: hhi=6033 -> boundary side=clumped excess=2 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s11.jsonl: hhi=6362 -> boundary side=clumped excess=3 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s31.jsonl: hhi=6840 -> boundary side=clumped excess=1 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s57.jsonl: hhi=4885 -> boundary side=clumped excess=0 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/trophic-held/control_s101.jsonl: hhi=930 -> boundary side=equalized excess=7 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/trophic-held/control_s11.jsonl: hhi=978 -> boundary side=equalized excess=-3 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/trophic-held/control_s31.jsonl: hhi=1048 -> boundary side=equalized excess=9 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/trophic-held/control_s57.jsonl: hhi=863 -> boundary side=equalized excess=2 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s101.jsonl: hhi=3339 -> boundary side=clumped excess=-2 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s11.jsonl: hhi=2551 -> boundary side=clumped excess=6 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s31.jsonl: hhi=3132 -> boundary side=clumped excess=12 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s57.jsonl: hhi=3014 -> boundary side=clumped excess=6 (RECORDED, never gated)

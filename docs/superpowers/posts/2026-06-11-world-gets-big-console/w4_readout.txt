@@ -1,0 +1,30 @@
+w4_grid (PDR-0006: REPORTED, NEVER GATED) - 6 arms x 20 seeds
+A/A twins (blind, ring): born-vs-rob RESULT identical on every seed
+
+clean seeds (blind-born != PermanentPeace): 18/20; dirty=[31, 99]
+
+-- per-arm value table (CLEAN: 18 seeds) --
+  arm          med(median_credits)  med(cr/trip_milli)  flips/decisions(pooled)  readings
+  blind-born              17389800            16883300  0/0                      {'Alive': 6, 'RiskEqualized': 12}
+  blind-rob               17389800            16883300  0/0                      {'Alive': 6, 'RiskEqualized': 12}
+  ring-born               18174725            17803813  0/20678                  {'RiskEqualized': 10, 'Alive': 8}
+  ring-rob                18174725            17803813  0/20678                  {'RiskEqualized': 10, 'Alive': 8}
+  gossip-born             18888225            17559024  1418/20715                  {'Alive': 6, 'RiskEqualized': 12}
+  gossip-rob              18797000            17453110  667/20773                  {'RiskEqualized': 13, 'Alive': 5}
+  W4 VALUE delta (born-anchor): gossip-ring = 713500 micros median final hauler credits (-244789 milli per laden trip) - REPORTED, NEVER GATED; registered alternative: mixing persists -> deferred dispatch-locality lever
+  W4 VALUE delta (rob-anchor): gossip-ring = 622275 micros median final hauler credits (-350703 milli per laden trip) - REPORTED, NEVER GATED; registered alternative: mixing persists -> deferred dispatch-locality lever
+
+-- per-arm value table (ALL (context): 20 seeds) --
+  arm          med(median_credits)  med(cr/trip_milli)  flips/decisions(pooled)  readings
+  blind-born              17484850            16975582  0/0                      {'Alive': 6, 'RiskEqualized': 12, 'PermanentPeace': 2}
+  blind-rob               17484850            16975582  0/0                      {'Alive': 6, 'RiskEqualized': 12, 'PermanentPeace': 2}
+  ring-born               18392150            18008325  0/22943                  {'RiskEqualized': 10, 'Alive': 8, 'PermanentPeace': 2}
+  ring-rob                18392150            18008325  0/22943                  {'RiskEqualized': 10, 'Alive': 8, 'PermanentPeace': 2}
+  gossip-born             18999000            18722972  1545/22993                  {'Alive': 6, 'RiskEqualized': 12, 'PermanentPeace': 2}
+  gossip-rob              18983950            17530838  668/23055                  {'RiskEqualized': 13, 'Alive': 5, 'PermanentPeace': 2}
+  W4 VALUE delta (born-anchor): gossip-ring = 606850 micros median final hauler credits (714647 milli per laden trip) - REPORTED, NEVER GATED; registered alternative: mixing persists -> deferred dispatch-locality lever
+  W4 VALUE delta (rob-anchor): gossip-ring = 591800 micros median final hauler credits (-477487 milli per laden trip) - REPORTED, NEVER GATED; registered alternative: mixing persists -> deferred dispatch-locality lever
+
+-- cross-map (rate-normalized, distribution-vs-distribution; never same-seed paired - GEO-C3) --
+  frontier gossip-born: credits/trip milli quartiles=(15654127, 18722972, 23941932) robs/1000trips quartiles=(46, 59, 73)
+  trophic  baseline:    credits/trip milli quartiles=(12805755, 19716312, 51759530) robs/1000trips quartiles=(116, 198, 227)

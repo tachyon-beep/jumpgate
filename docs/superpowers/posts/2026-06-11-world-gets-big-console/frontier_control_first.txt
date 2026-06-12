@@ -1,0 +1,36 @@
+sweep_trophic (PDR-0006: windows, not gates) — seeds=[7, 23, 42, 99] ticks=50000 sets=['control:pirate_max_reach_au=999,stay_milli=0,upkeep_per_tick=200,grubstake_micros=2000000000,engage_radius_au=0.05']
+  ran control seed=7: verdict=RiskEqualized robs=204 fuel_empty=0 media=NoMedia
+  ran control seed=23: verdict=RiskEqualized robs=176 fuel_empty=0 media=NoMedia
+  ran control seed=42: verdict=RiskEqualized robs=195 fuel_empty=0 media=NoMedia
+  ran control seed=99: verdict=RiskEqualized robs=209 fuel_empty=0 media=NoMedia
+
+=== knob set: control (4 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            4
+endurance: fuel_empty per run = [0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[478, 506, 546, 545] burn_total_milli=[2802, 2965, 3208, 3200] median_leg_burn_permille=[2, 2, 2, 2] min_tank_permille=[941, 943, 938, 942]
+endpoint-ambush: 1052 engagements; trip-phase histogram (0..1000):
+  [   0-  99]   610 ########################################
+  [ 100- 199]     1 
+  [ 200- 299]     4 
+  [ 300- 399]     1 
+  [ 400- 499]     2 
+  [ 500- 599]     0 
+  [ 600- 699]     1 
+  [ 700- 799]     1 
+  [ 800- 899]     6 
+  [ 900- 999]   426 ############################
+  endpoint share (first+last bin): 1036/1052
+purchase-desync: escort-purchase window spread per run = [22, 22, 22, 21]
+yard treasury (seed 7): first=0 max=385000000 final=385000000 monotone=True
+seed 7: verdict=RiskEqualized active-alternations=13 robs=204 trips=889 purchases=53 per-window-HHI(milli)=394 RUN-AGGREGATE-HHI(milli)=270 routes-robbed=6
+seed 23: verdict=RiskEqualized active-alternations=12 robs=176 trips=898 purchases=50 per-window-HHI(milli)=387 RUN-AGGREGATE-HHI(milli)=234 routes-robbed=6
+seed 42: verdict=RiskEqualized active-alternations=8 robs=195 trips=991 purchases=61 per-window-HHI(milli)=360 RUN-AGGREGATE-HHI(milli)=241 routes-robbed=8
+seed 99: verdict=RiskEqualized active-alternations=14 robs=209 trips=1032 purchases=61 per-window-HHI(milli)=362 RUN-AGGREGATE-HHI(milli)=214 routes-robbed=9
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  4
+media escaped_milli per run = [0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+positive control (hungry roamers, reach=inf): 4/4 runs read RiskEqualized (expected ALL — anything else means the instrument is broken)

@@ -1,0 +1,30 @@
+haves_havenots (PDR-0006: windows, not gates) - scenario=frontier seed=7 stations=10 haulers=20
+
+-- per-hauler knowledge horizon --
+  row  accepts  workplace_milli_au  heard_n  median_lag  end_credits
+    0       65                 620       63        1052  16997000
+    1       56                 680       61        1008  23783950
+    2       60                 647       61        1039  16297000
+    3       65                 532       62        1183  4000000
+    4       52                 646       64         889  17998000
+    5       51                 765       63         928  23390350
+    6       60                 609       63        1031  23797000
+    7       52                 670       65        1089  21290475
+    8       58                 663       63        1076  18889800
+    9       66                 624       64        1079  16797000
+   10       58                 646       61        1136  27988900
+   11       52                 868       63        1666  10890250
+   12       52                 681       61         906  42190700
+   13       60                 549       63        1140  21597000
+   14       52                 816       63        1245  31891375
+   15       58                 714       66        1174  6290025
+   16       56                 661       64        1100  10085750
+   17       51                 599       64         910  24098000
+   18       51                 620       66         888  8391250
+   19       47                 627       65        1107  12198000
+  never-heard haulers: []
+
+spearman(workplace radius, median hearing lag)  = 0.166 over 20 haulers
+spearman(workplace radius, end credits)        = 0.152 over 20 haulers
+
+PRE-REGISTERED CONFOUND (PLAY-C3 / W5): ASSIGN is position-blind; workplace radius is an artifact of dispatch order and the per-tier capacity ladder, not a chosen home. A radius x outcome correlation may be a capacity-ladder read, not a locality read. Compare against the 6-station control. REPORTED, never gated - PDR-0006.

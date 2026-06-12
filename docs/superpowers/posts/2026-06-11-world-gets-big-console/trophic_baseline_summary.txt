@@ -1,0 +1,14 @@
+trophic_baseline_summary - derived from same-day 20-seed trophic baseline/control bank
+All values are RECORDED, never gated.
+
+-- baseline --
+verdicts={'RiskEqualized': 18, 'Alive': 2}
+fuel_empty_counts={0: 20}
+robs_q=(84, 139, 153) trips_q=(664, 699, 714) purchases_q=(39, 41, 45)
+hauler_duty_milli_q=(664, 671, 672) hauler_burn_total_milli_q=(4979, 5029, 5039) hauler_min_tank_permille_q=(574, 575, 577)
+
+-- control --
+verdicts={'RiskEqualized': 20}
+fuel_empty_counts={0: 20}
+robs_q=(158, 163, 166) trips_q=(678, 693, 711) purchases_q=(34, 36, 38)
+hauler_duty_milli_q=(672, 673, 674) hauler_burn_total_milli_q=(5037, 5045, 5050) hauler_min_tank_permille_q=(575, 576, 577)

@@ -1,0 +1,17 @@
+grid_aux_summary - derived from same-day per-cell stdout and JSONL before packet banking
+All values are RECORDED, never gated. W6 is a snapshot/proxy summary, not a LurkMoved chronicle event panel.
+
+-- W2 MEDIA lag summary (per-cell MEDIA lines) --
+gossip-born: readings={'Localized': 12, 'CommonKnowledge': 8} escaped_milli_q=(875, 934, 962) median_lag_q=(5694, 6963, 9228) p90_lag_q=(15309, 19932, 24136)
+gossip-rob: readings={'CommonKnowledge': 9, 'Localized': 11} escaped_milli_q=(857, 937, 972) median_lag_q=(5714, 6332, 9087) p90_lag_q=(15329, 19625, 22682)
+
+-- W6 lurk snapshot proxy (final window per cell; not LurkMoved chronicle) --
+final_lurker_zone_totals={'core_0_2': 194, 'mid_3_5': 265, 'haven_6': 0, 'frontier_7_9': 357}
+frontier_lurker_share_permille_q=(166, 400, 600) final_pirates_at_haven_q=(1, 1, 3) final_pirates_commuting_q=(1, 1, 2)
+
+-- W9 liveness / fuel_empty --
+fuel_empty_counts={0: 120} max_open_contract_age_q=(1077, 1257, 1439) open_contracts_q=(20, 20, 20)
+
+-- W11 per-role fuel rows (tail rows from each cell JSONL) --
+hauler: duty_milli_q=(546, 557, 565) burn_total_milli_q=(3206, 3269, 3318) median_leg_burn_permille_q=(2, 2, 2) min_tank_permille_q=(936, 942, 944)
+pirate: duty_milli_q=(107, 117, 124) burn_total_milli_q=(664, 730, 773) median_leg_burn_permille_q=(0, 0, 0) min_tank_permille_q=(877, 897, 911)

@@ -1,0 +1,467 @@
+sweep_trophic (PDR-0006: windows, not gates) — seeds=[7, 11, 13, 23, 29, 31, 37, 41, 42, 43, 47, 53, 57, 59, 61, 67, 71, 73, 99, 101] ticks=50000 sets=['blind-born:hauler_belief_scoring=false,station_gossip_slots=0,craft_gossip_slots=0,staleness_from_rob_tick=false', 'blind-rob:hauler_belief_scoring=false,station_gossip_slots=0,craft_gossip_slots=0,staleness_from_rob_tick=true', 'ring-born:hauler_belief_scoring=true,station_gossip_slots=0,craft_gossip_slots=0,staleness_from_rob_tick=false', 'ring-rob:hauler_belief_scoring=true,station_gossip_slots=0,craft_gossip_slots=0,staleness_from_rob_tick=true', 'gossip-born:hauler_belief_scoring=true,station_gossip_slots=16,craft_gossip_slots=8,staleness_from_rob_tick=false', 'gossip-rob:hauler_belief_scoring=true,station_gossip_slots=16,craft_gossip_slots=8,staleness_from_rob_tick=true']
+  ran blind-born seed=7: verdict=Alive robs=81 fuel_empty=0 media=NoMedia
+  ran blind-born seed=11: verdict=RiskEqualized robs=59 fuel_empty=0 media=NoMedia
+  ran blind-born seed=13: verdict=RiskEqualized robs=78 fuel_empty=0 media=NoMedia
+  ran blind-born seed=23: verdict=Alive robs=49 fuel_empty=0 media=NoMedia
+  ran blind-born seed=29: verdict=RiskEqualized robs=65 fuel_empty=0 media=NoMedia
+  ran blind-born seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=NoMedia
+  ran blind-born seed=37: verdict=Alive robs=78 fuel_empty=0 media=NoMedia
+  ran blind-born seed=41: verdict=Alive robs=79 fuel_empty=0 media=NoMedia
+  ran blind-born seed=42: verdict=RiskEqualized robs=55 fuel_empty=0 media=NoMedia
+  ran blind-born seed=43: verdict=RiskEqualized robs=119 fuel_empty=0 media=NoMedia
+  ran blind-born seed=47: verdict=RiskEqualized robs=56 fuel_empty=0 media=NoMedia
+  ran blind-born seed=53: verdict=Alive robs=55 fuel_empty=0 media=NoMedia
+  ran blind-born seed=57: verdict=RiskEqualized robs=68 fuel_empty=0 media=NoMedia
+  ran blind-born seed=59: verdict=RiskEqualized robs=64 fuel_empty=0 media=NoMedia
+  ran blind-born seed=61: verdict=RiskEqualized robs=127 fuel_empty=0 media=NoMedia
+  ran blind-born seed=67: verdict=RiskEqualized robs=73 fuel_empty=0 media=NoMedia
+  ran blind-born seed=71: verdict=RiskEqualized robs=55 fuel_empty=0 media=NoMedia
+  ran blind-born seed=73: verdict=RiskEqualized robs=62 fuel_empty=0 media=NoMedia
+  ran blind-born seed=99: verdict=PermanentPeace robs=19 fuel_empty=0 media=NoMedia
+  ran blind-born seed=101: verdict=Alive robs=25 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=7: verdict=Alive robs=81 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=11: verdict=RiskEqualized robs=59 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=13: verdict=RiskEqualized robs=78 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=23: verdict=Alive robs=49 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=29: verdict=RiskEqualized robs=65 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=37: verdict=Alive robs=78 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=41: verdict=Alive robs=79 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=42: verdict=RiskEqualized robs=55 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=43: verdict=RiskEqualized robs=119 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=47: verdict=RiskEqualized robs=56 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=53: verdict=Alive robs=55 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=57: verdict=RiskEqualized robs=68 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=59: verdict=RiskEqualized robs=64 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=61: verdict=RiskEqualized robs=127 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=67: verdict=RiskEqualized robs=73 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=71: verdict=RiskEqualized robs=55 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=73: verdict=RiskEqualized robs=62 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=99: verdict=PermanentPeace robs=19 fuel_empty=0 media=NoMedia
+  ran blind-rob seed=101: verdict=Alive robs=25 fuel_empty=0 media=NoMedia
+  ran ring-born seed=7: verdict=RiskEqualized robs=96 fuel_empty=0 media=NoMedia
+  ran ring-born seed=11: verdict=Alive robs=44 fuel_empty=0 media=NoMedia
+  ran ring-born seed=13: verdict=RiskEqualized robs=74 fuel_empty=0 media=NoMedia
+  ran ring-born seed=23: verdict=RiskEqualized robs=49 fuel_empty=0 media=NoMedia
+  ran ring-born seed=29: verdict=Alive robs=72 fuel_empty=0 media=NoMedia
+  ran ring-born seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=NoMedia
+  ran ring-born seed=37: verdict=RiskEqualized robs=84 fuel_empty=0 media=NoMedia
+  ran ring-born seed=41: verdict=RiskEqualized robs=72 fuel_empty=0 media=NoMedia
+  ran ring-born seed=42: verdict=RiskEqualized robs=39 fuel_empty=0 media=NoMedia
+  ran ring-born seed=43: verdict=RiskEqualized robs=104 fuel_empty=0 media=NoMedia
+  ran ring-born seed=47: verdict=Alive robs=58 fuel_empty=0 media=NoMedia
+  ran ring-born seed=53: verdict=Alive robs=94 fuel_empty=0 media=NoMedia
+  ran ring-born seed=57: verdict=Alive robs=59 fuel_empty=0 media=NoMedia
+  ran ring-born seed=59: verdict=RiskEqualized robs=85 fuel_empty=0 media=NoMedia
+  ran ring-born seed=61: verdict=RiskEqualized robs=96 fuel_empty=0 media=NoMedia
+  ran ring-born seed=67: verdict=Alive robs=102 fuel_empty=0 media=NoMedia
+  ran ring-born seed=71: verdict=Alive robs=59 fuel_empty=0 media=NoMedia
+  ran ring-born seed=73: verdict=RiskEqualized robs=60 fuel_empty=0 media=NoMedia
+  ran ring-born seed=99: verdict=PermanentPeace robs=20 fuel_empty=0 media=NoMedia
+  ran ring-born seed=101: verdict=Alive robs=46 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=7: verdict=RiskEqualized robs=96 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=11: verdict=Alive robs=44 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=13: verdict=RiskEqualized robs=74 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=23: verdict=RiskEqualized robs=49 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=29: verdict=Alive robs=72 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=37: verdict=RiskEqualized robs=84 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=41: verdict=RiskEqualized robs=72 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=42: verdict=RiskEqualized robs=39 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=43: verdict=RiskEqualized robs=104 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=47: verdict=Alive robs=58 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=53: verdict=Alive robs=94 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=57: verdict=Alive robs=59 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=59: verdict=RiskEqualized robs=85 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=61: verdict=RiskEqualized robs=96 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=67: verdict=Alive robs=102 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=71: verdict=Alive robs=59 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=73: verdict=RiskEqualized robs=60 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=99: verdict=PermanentPeace robs=20 fuel_empty=0 media=NoMedia
+  ran ring-rob seed=101: verdict=Alive robs=46 fuel_empty=0 media=NoMedia
+  ran gossip-born seed=7: verdict=Alive robs=78 fuel_empty=0 media=Localized
+  ran gossip-born seed=11: verdict=Alive robs=49 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=13: verdict=RiskEqualized robs=104 fuel_empty=0 media=Localized
+  ran gossip-born seed=23: verdict=RiskEqualized robs=49 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=29: verdict=Alive robs=76 fuel_empty=0 media=Localized
+  ran gossip-born seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=37: verdict=RiskEqualized robs=70 fuel_empty=0 media=Localized
+  ran gossip-born seed=41: verdict=RiskEqualized robs=76 fuel_empty=0 media=Localized
+  ran gossip-born seed=42: verdict=RiskEqualized robs=57 fuel_empty=0 media=Localized
+  ran gossip-born seed=43: verdict=RiskEqualized robs=88 fuel_empty=0 media=Localized
+  ran gossip-born seed=47: verdict=Alive robs=54 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=53: verdict=Alive robs=102 fuel_empty=0 media=Localized
+  ran gossip-born seed=57: verdict=RiskEqualized robs=75 fuel_empty=0 media=Localized
+  ran gossip-born seed=59: verdict=Alive robs=43 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=61: verdict=RiskEqualized robs=140 fuel_empty=0 media=Localized
+  ran gossip-born seed=67: verdict=RiskEqualized robs=66 fuel_empty=0 media=Localized
+  ran gossip-born seed=71: verdict=RiskEqualized robs=65 fuel_empty=0 media=Localized
+  ran gossip-born seed=73: verdict=RiskEqualized robs=59 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=99: verdict=PermanentPeace robs=19 fuel_empty=0 media=CommonKnowledge
+  ran gossip-born seed=101: verdict=RiskEqualized robs=41 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=7: verdict=RiskEqualized robs=58 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=11: verdict=Alive robs=39 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=13: verdict=RiskEqualized robs=92 fuel_empty=0 media=Localized
+  ran gossip-rob seed=23: verdict=RiskEqualized robs=50 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=29: verdict=Alive robs=80 fuel_empty=0 media=Localized
+  ran gossip-rob seed=31: verdict=PermanentPeace robs=7 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=37: verdict=RiskEqualized robs=51 fuel_empty=0 media=Localized
+  ran gossip-rob seed=41: verdict=RiskEqualized robs=70 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=42: verdict=RiskEqualized robs=63 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=43: verdict=RiskEqualized robs=111 fuel_empty=0 media=Localized
+  ran gossip-rob seed=47: verdict=Alive robs=53 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=53: verdict=Alive robs=77 fuel_empty=0 media=Localized
+  ran gossip-rob seed=57: verdict=RiskEqualized robs=90 fuel_empty=0 media=Localized
+  ran gossip-rob seed=59: verdict=RiskEqualized robs=72 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=61: verdict=RiskEqualized robs=141 fuel_empty=0 media=Localized
+  ran gossip-rob seed=67: verdict=RiskEqualized robs=90 fuel_empty=0 media=Localized
+  ran gossip-rob seed=71: verdict=RiskEqualized robs=59 fuel_empty=0 media=Localized
+  ran gossip-rob seed=73: verdict=Alive robs=62 fuel_empty=0 media=Localized
+  ran gossip-rob seed=99: verdict=PermanentPeace robs=19 fuel_empty=0 media=CommonKnowledge
+  ran gossip-rob seed=101: verdict=RiskEqualized robs=50 fuel_empty=0 media=Localized
+
+=== knob set: blind-born (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            12
+  Alive                    6
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[543, 549, 545, 550, 551, 560, 562, 524, 568, 543, 551, 567, 542, 563, 556, 556, 575, 562, 564, 572] burn_total_milli=[3187, 3219, 3200, 3227, 3232, 3286, 3299, 3076, 3337, 3191, 3233, 3329, 3181, 3305, 3266, 3269, 3373, 3302, 3312, 3358] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[930, 942, 932, 940, 943, 942, 944, 938, 920, 945, 943, 935, 942, 940, 934, 934, 938, 928, 944, 945]
+endpoint-ambush: 1852 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1036 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   816 ################################
+  endpoint share (first+last bin): 1852/1852
+purchase-desync: escort-purchase window spread per run = [20, 20, 21, 19, 18, 14, 20, 21, 21, 20, 22, 17, 20, 20, 23, 23, 14, 18, 17, 14]
+yard treasury (seed 7): first=0 max=831000000 final=831000000 monotone=True
+seed 7: verdict=Alive active-alternations=13 robs=81 trips=1030 purchases=79 per-window-HHI(milli)=593 RUN-AGGREGATE-HHI(milli)=205 routes-robbed=9
+seed 11: verdict=RiskEqualized active-alternations=11 robs=59 trips=1043 purchases=81 per-window-HHI(milli)=595 RUN-AGGREGATE-HHI(milli)=201 routes-robbed=8
+seed 13: verdict=RiskEqualized active-alternations=9 robs=78 trips=1043 purchases=82 per-window-HHI(milli)=568 RUN-AGGREGATE-HHI(milli)=151 routes-robbed=8
+seed 23: verdict=Alive active-alternations=7 robs=49 trips=1028 purchases=82 per-window-HHI(milli)=768 RUN-AGGREGATE-HHI(milli)=167 routes-robbed=8
+seed 29: verdict=RiskEqualized active-alternations=9 robs=65 trips=1096 purchases=84 per-window-HHI(milli)=548 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1060 purchases=80 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=Alive active-alternations=11 robs=78 trips=1090 purchases=82 per-window-HHI(milli)=532 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=9
+seed 41: verdict=Alive active-alternations=9 robs=79 trips=1014 purchases=76 per-window-HHI(milli)=609 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=9 robs=55 trips=1080 purchases=85 per-window-HHI(milli)=747 RUN-AGGREGATE-HHI(milli)=150 routes-robbed=9
+seed 43: verdict=RiskEqualized active-alternations=13 robs=119 trips=1065 purchases=72 per-window-HHI(milli)=483 RUN-AGGREGATE-HHI(milli)=173 routes-robbed=7
+seed 47: verdict=RiskEqualized active-alternations=11 robs=56 trips=1030 purchases=75 per-window-HHI(milli)=646 RUN-AGGREGATE-HHI(milli)=147 routes-robbed=8
+seed 53: verdict=Alive active-alternations=10 robs=55 trips=1090 purchases=78 per-window-HHI(milli)=590 RUN-AGGREGATE-HHI(milli)=383 routes-robbed=4
+seed 57: verdict=RiskEqualized active-alternations=11 robs=68 trips=1064 purchases=82 per-window-HHI(milli)=756 RUN-AGGREGATE-HHI(milli)=151 routes-robbed=9
+seed 59: verdict=RiskEqualized active-alternations=9 robs=64 trips=1030 purchases=79 per-window-HHI(milli)=700 RUN-AGGREGATE-HHI(milli)=229 routes-robbed=8
+seed 61: verdict=RiskEqualized active-alternations=13 robs=127 trips=1046 purchases=70 per-window-HHI(milli)=504 RUN-AGGREGATE-HHI(milli)=159 routes-robbed=8
+seed 67: verdict=RiskEqualized active-alternations=9 robs=73 trips=1022 purchases=77 per-window-HHI(milli)=523 RUN-AGGREGATE-HHI(milli)=204 routes-robbed=9
+seed 71: verdict=RiskEqualized active-alternations=11 robs=55 trips=1104 purchases=78 per-window-HHI(milli)=727 RUN-AGGREGATE-HHI(milli)=350 routes-robbed=3
+seed 73: verdict=RiskEqualized active-alternations=11 robs=62 trips=1093 purchases=84 per-window-HHI(milli)=711 RUN-AGGREGATE-HHI(milli)=180 routes-robbed=8
+seed 99: verdict=PermanentPeace active-alternations=9 robs=19 trips=1144 purchases=81 per-window-HHI(milli)=934 RUN-AGGREGATE-HHI(milli)=900 routes-robbed=2
+seed 101: verdict=Alive active-alternations=11 robs=25 trips=1193 purchases=82 per-window-HHI(milli)=894 RUN-AGGREGATE-HHI(milli)=283 routes-robbed=6
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+=== knob set: blind-rob (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            12
+  Alive                    6
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[543, 549, 545, 550, 551, 560, 562, 524, 568, 543, 551, 567, 542, 563, 556, 556, 575, 562, 564, 572] burn_total_milli=[3187, 3219, 3200, 3227, 3232, 3286, 3299, 3076, 3337, 3191, 3233, 3329, 3181, 3305, 3266, 3269, 3373, 3302, 3312, 3358] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[930, 942, 932, 940, 943, 942, 944, 938, 920, 945, 943, 935, 942, 940, 934, 934, 938, 928, 944, 945]
+endpoint-ambush: 1852 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1036 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   816 ################################
+  endpoint share (first+last bin): 1852/1852
+purchase-desync: escort-purchase window spread per run = [20, 20, 21, 19, 18, 14, 20, 21, 21, 20, 22, 17, 20, 20, 23, 23, 14, 18, 17, 14]
+yard treasury (seed 7): first=0 max=831000000 final=831000000 monotone=True
+seed 7: verdict=Alive active-alternations=13 robs=81 trips=1030 purchases=79 per-window-HHI(milli)=593 RUN-AGGREGATE-HHI(milli)=205 routes-robbed=9
+seed 11: verdict=RiskEqualized active-alternations=11 robs=59 trips=1043 purchases=81 per-window-HHI(milli)=595 RUN-AGGREGATE-HHI(milli)=201 routes-robbed=8
+seed 13: verdict=RiskEqualized active-alternations=9 robs=78 trips=1043 purchases=82 per-window-HHI(milli)=568 RUN-AGGREGATE-HHI(milli)=151 routes-robbed=8
+seed 23: verdict=Alive active-alternations=7 robs=49 trips=1028 purchases=82 per-window-HHI(milli)=768 RUN-AGGREGATE-HHI(milli)=167 routes-robbed=8
+seed 29: verdict=RiskEqualized active-alternations=9 robs=65 trips=1096 purchases=84 per-window-HHI(milli)=548 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1060 purchases=80 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=Alive active-alternations=11 robs=78 trips=1090 purchases=82 per-window-HHI(milli)=532 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=9
+seed 41: verdict=Alive active-alternations=9 robs=79 trips=1014 purchases=76 per-window-HHI(milli)=609 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=9 robs=55 trips=1080 purchases=85 per-window-HHI(milli)=747 RUN-AGGREGATE-HHI(milli)=150 routes-robbed=9
+seed 43: verdict=RiskEqualized active-alternations=13 robs=119 trips=1065 purchases=72 per-window-HHI(milli)=483 RUN-AGGREGATE-HHI(milli)=173 routes-robbed=7
+seed 47: verdict=RiskEqualized active-alternations=11 robs=56 trips=1030 purchases=75 per-window-HHI(milli)=646 RUN-AGGREGATE-HHI(milli)=147 routes-robbed=8
+seed 53: verdict=Alive active-alternations=10 robs=55 trips=1090 purchases=78 per-window-HHI(milli)=590 RUN-AGGREGATE-HHI(milli)=383 routes-robbed=4
+seed 57: verdict=RiskEqualized active-alternations=11 robs=68 trips=1064 purchases=82 per-window-HHI(milli)=756 RUN-AGGREGATE-HHI(milli)=151 routes-robbed=9
+seed 59: verdict=RiskEqualized active-alternations=9 robs=64 trips=1030 purchases=79 per-window-HHI(milli)=700 RUN-AGGREGATE-HHI(milli)=229 routes-robbed=8
+seed 61: verdict=RiskEqualized active-alternations=13 robs=127 trips=1046 purchases=70 per-window-HHI(milli)=504 RUN-AGGREGATE-HHI(milli)=159 routes-robbed=8
+seed 67: verdict=RiskEqualized active-alternations=9 robs=73 trips=1022 purchases=77 per-window-HHI(milli)=523 RUN-AGGREGATE-HHI(milli)=204 routes-robbed=9
+seed 71: verdict=RiskEqualized active-alternations=11 robs=55 trips=1104 purchases=78 per-window-HHI(milli)=727 RUN-AGGREGATE-HHI(milli)=350 routes-robbed=3
+seed 73: verdict=RiskEqualized active-alternations=11 robs=62 trips=1093 purchases=84 per-window-HHI(milli)=711 RUN-AGGREGATE-HHI(milli)=180 routes-robbed=8
+seed 99: verdict=PermanentPeace active-alternations=9 robs=19 trips=1144 purchases=81 per-window-HHI(milli)=934 RUN-AGGREGATE-HHI(milli)=900 routes-robbed=2
+seed 101: verdict=Alive active-alternations=11 robs=25 trips=1193 purchases=82 per-window-HHI(milli)=894 RUN-AGGREGATE-HHI(milli)=283 routes-robbed=6
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+=== knob set: ring-born (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            10
+  Alive                    8
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[537, 559, 542, 551, 555, 560, 558, 536, 577, 542, 553, 573, 547, 569, 543, 559, 574, 555, 565, 567] burn_total_milli=[3149, 3279, 3183, 3235, 3259, 3289, 3277, 3143, 3384, 3184, 3247, 3366, 3208, 3337, 3184, 3284, 3368, 3258, 3318, 3327] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[745, 946, 939, 944, 943, 923, 945, 943, 945, 945, 933, 937, 945, 940, 944, 937, 937, 942, 943, 943]
+endpoint-ambush: 1877 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1040 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   837 ################################
+  endpoint share (first+last bin): 1877/1877
+purchase-desync: escort-purchase window spread per run = [21, 18, 21, 16, 18, 14, 21, 19, 20, 22, 21, 21, 19, 20, 22, 22, 17, 18, 15, 22]
+yard treasury (seed 7): first=0 max=612000000 final=612000000 monotone=True
+seed 7: verdict=RiskEqualized active-alternations=9 robs=96 trips=954 purchases=67 per-window-HHI(milli)=555 RUN-AGGREGATE-HHI(milli)=173 routes-robbed=8
+seed 11: verdict=Alive active-alternations=11 robs=44 trips=1062 purchases=82 per-window-HHI(milli)=813 RUN-AGGREGATE-HHI(milli)=260 routes-robbed=6
+seed 13: verdict=RiskEqualized active-alternations=10 robs=74 trips=1039 purchases=84 per-window-HHI(milli)=567 RUN-AGGREGATE-HHI(milli)=158 routes-robbed=9
+seed 23: verdict=RiskEqualized active-alternations=7 robs=49 trips=1034 purchases=83 per-window-HHI(milli)=712 RUN-AGGREGATE-HHI(milli)=168 routes-robbed=8
+seed 29: verdict=Alive active-alternations=11 robs=72 trips=1112 purchases=87 per-window-HHI(milli)=676 RUN-AGGREGATE-HHI(milli)=202 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1067 purchases=79 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=RiskEqualized active-alternations=11 robs=84 trips=1070 purchases=78 per-window-HHI(milli)=560 RUN-AGGREGATE-HHI(milli)=182 routes-robbed=9
+seed 41: verdict=RiskEqualized active-alternations=9 robs=72 trips=1033 purchases=70 per-window-HHI(milli)=661 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=9 robs=39 trips=1101 purchases=82 per-window-HHI(milli)=843 RUN-AGGREGATE-HHI(milli)=212 routes-robbed=7
+seed 43: verdict=RiskEqualized active-alternations=13 robs=104 trips=1057 purchases=74 per-window-HHI(milli)=519 RUN-AGGREGATE-HHI(milli)=181 routes-robbed=8
+seed 47: verdict=Alive active-alternations=9 robs=58 trips=1027 purchases=76 per-window-HHI(milli)=694 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=9
+seed 53: verdict=Alive active-alternations=11 robs=94 trips=1061 purchases=78 per-window-HHI(milli)=481 RUN-AGGREGATE-HHI(milli)=246 routes-robbed=7
+seed 57: verdict=Alive active-alternations=9 robs=59 trips=1082 purchases=83 per-window-HHI(milli)=588 RUN-AGGREGATE-HHI(milli)=158 routes-robbed=9
+seed 59: verdict=RiskEqualized active-alternations=13 robs=85 trips=999 purchases=75 per-window-HHI(milli)=577 RUN-AGGREGATE-HHI(milli)=251 routes-robbed=9
+seed 61: verdict=RiskEqualized active-alternations=10 robs=96 trips=1016 purchases=76 per-window-HHI(milli)=556 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 67: verdict=Alive active-alternations=10 robs=102 trips=1016 purchases=78 per-window-HHI(milli)=403 RUN-AGGREGATE-HHI(milli)=227 routes-robbed=9
+seed 71: verdict=Alive active-alternations=10 robs=59 trips=1087 purchases=78 per-window-HHI(milli)=652 RUN-AGGREGATE-HHI(milli)=351 routes-robbed=3
+seed 73: verdict=RiskEqualized active-alternations=11 robs=60 trips=1099 purchases=83 per-window-HHI(milli)=705 RUN-AGGREGATE-HHI(milli)=207 routes-robbed=6
+seed 99: verdict=PermanentPeace active-alternations=9 robs=20 trips=1132 purchases=79 per-window-HHI(milli)=874 RUN-AGGREGATE-HHI(milli)=815 routes-robbed=3
+seed 101: verdict=Alive active-alternations=9 robs=46 trips=1180 purchases=80 per-window-HHI(milli)=757 RUN-AGGREGATE-HHI(milli)=228 routes-robbed=8
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+=== knob set: ring-rob (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            10
+  Alive                    8
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[537, 559, 542, 551, 555, 560, 558, 536, 577, 542, 553, 573, 547, 569, 543, 559, 574, 555, 565, 567] burn_total_milli=[3149, 3279, 3183, 3235, 3259, 3289, 3277, 3143, 3384, 3184, 3247, 3366, 3208, 3337, 3184, 3284, 3368, 3258, 3318, 3327] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[745, 946, 939, 944, 943, 923, 945, 943, 945, 945, 933, 937, 945, 940, 944, 937, 937, 942, 943, 943]
+endpoint-ambush: 1877 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1040 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   837 ################################
+  endpoint share (first+last bin): 1877/1877
+purchase-desync: escort-purchase window spread per run = [21, 18, 21, 16, 18, 14, 21, 19, 20, 22, 21, 21, 19, 20, 22, 22, 17, 18, 15, 22]
+yard treasury (seed 7): first=0 max=612000000 final=612000000 monotone=True
+seed 7: verdict=RiskEqualized active-alternations=9 robs=96 trips=954 purchases=67 per-window-HHI(milli)=555 RUN-AGGREGATE-HHI(milli)=173 routes-robbed=8
+seed 11: verdict=Alive active-alternations=11 robs=44 trips=1062 purchases=82 per-window-HHI(milli)=813 RUN-AGGREGATE-HHI(milli)=260 routes-robbed=6
+seed 13: verdict=RiskEqualized active-alternations=10 robs=74 trips=1039 purchases=84 per-window-HHI(milli)=567 RUN-AGGREGATE-HHI(milli)=158 routes-robbed=9
+seed 23: verdict=RiskEqualized active-alternations=7 robs=49 trips=1034 purchases=83 per-window-HHI(milli)=712 RUN-AGGREGATE-HHI(milli)=168 routes-robbed=8
+seed 29: verdict=Alive active-alternations=11 robs=72 trips=1112 purchases=87 per-window-HHI(milli)=676 RUN-AGGREGATE-HHI(milli)=202 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1067 purchases=79 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=RiskEqualized active-alternations=11 robs=84 trips=1070 purchases=78 per-window-HHI(milli)=560 RUN-AGGREGATE-HHI(milli)=182 routes-robbed=9
+seed 41: verdict=RiskEqualized active-alternations=9 robs=72 trips=1033 purchases=70 per-window-HHI(milli)=661 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=9 robs=39 trips=1101 purchases=82 per-window-HHI(milli)=843 RUN-AGGREGATE-HHI(milli)=212 routes-robbed=7
+seed 43: verdict=RiskEqualized active-alternations=13 robs=104 trips=1057 purchases=74 per-window-HHI(milli)=519 RUN-AGGREGATE-HHI(milli)=181 routes-robbed=8
+seed 47: verdict=Alive active-alternations=9 robs=58 trips=1027 purchases=76 per-window-HHI(milli)=694 RUN-AGGREGATE-HHI(milli)=161 routes-robbed=9
+seed 53: verdict=Alive active-alternations=11 robs=94 trips=1061 purchases=78 per-window-HHI(milli)=481 RUN-AGGREGATE-HHI(milli)=246 routes-robbed=7
+seed 57: verdict=Alive active-alternations=9 robs=59 trips=1082 purchases=83 per-window-HHI(milli)=588 RUN-AGGREGATE-HHI(milli)=158 routes-robbed=9
+seed 59: verdict=RiskEqualized active-alternations=13 robs=85 trips=999 purchases=75 per-window-HHI(milli)=577 RUN-AGGREGATE-HHI(milli)=251 routes-robbed=9
+seed 61: verdict=RiskEqualized active-alternations=10 robs=96 trips=1016 purchases=76 per-window-HHI(milli)=556 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 67: verdict=Alive active-alternations=10 robs=102 trips=1016 purchases=78 per-window-HHI(milli)=403 RUN-AGGREGATE-HHI(milli)=227 routes-robbed=9
+seed 71: verdict=Alive active-alternations=10 robs=59 trips=1087 purchases=78 per-window-HHI(milli)=652 RUN-AGGREGATE-HHI(milli)=351 routes-robbed=3
+seed 73: verdict=RiskEqualized active-alternations=11 robs=60 trips=1099 purchases=83 per-window-HHI(milli)=705 RUN-AGGREGATE-HHI(milli)=207 routes-robbed=6
+seed 99: verdict=PermanentPeace active-alternations=9 robs=20 trips=1132 purchases=79 per-window-HHI(milli)=874 RUN-AGGREGATE-HHI(milli)=815 routes-robbed=3
+seed 101: verdict=Alive active-alternations=9 robs=46 trips=1180 purchases=80 per-window-HHI(milli)=757 RUN-AGGREGATE-HHI(milli)=228 routes-robbed=8
+media readings (windows, not gates — PDR-0006):
+  NoMedia                  20
+media escaped_milli per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+knowledge front: 0 craft hearings; lag histogram (ticks):
+
+=== knob set: gossip-born (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            12
+  Alive                    6
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[533, 559, 550, 547, 557, 560, 568, 531, 559, 545, 546, 576, 542, 563, 538, 562, 576, 562, 568, 572] burn_total_milli=[3129, 3283, 3232, 3215, 3269, 3289, 3337, 3117, 3282, 3198, 3206, 3379, 3185, 3304, 3155, 3302, 3381, 3298, 3333, 3357] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[926, 943, 942, 941, 933, 923, 944, 937, 935, 947, 937, 938, 944, 945, 933, 944, 943, 946, 945, 946]
+endpoint-ambush: 1879 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1021 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   858 ##################################
+  endpoint share (first+last bin): 1879/1879
+purchase-desync: escort-purchase window spread per run = [21, 18, 22, 19, 20, 14, 15, 20, 17, 19, 18, 19, 19, 17, 21, 21, 18, 16, 15, 17]
+yard treasury (seed 7): first=0 max=736000000 final=736000000 monotone=True
+seed 7: verdict=Alive active-alternations=10 robs=78 trips=1025 purchases=75 per-window-HHI(milli)=574 RUN-AGGREGATE-HHI(milli)=193 routes-robbed=8
+seed 11: verdict=Alive active-alternations=11 robs=49 trips=1059 purchases=84 per-window-HHI(milli)=734 RUN-AGGREGATE-HHI(milli)=216 routes-robbed=6
+seed 13: verdict=RiskEqualized active-alternations=13 robs=104 trips=1037 purchases=78 per-window-HHI(milli)=413 RUN-AGGREGATE-HHI(milli)=179 routes-robbed=8
+seed 23: verdict=RiskEqualized active-alternations=7 robs=49 trips=1026 purchases=80 per-window-HHI(milli)=692 RUN-AGGREGATE-HHI(milli)=177 routes-robbed=8
+seed 29: verdict=Alive active-alternations=10 robs=76 trips=1103 purchases=84 per-window-HHI(milli)=575 RUN-AGGREGATE-HHI(milli)=182 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1067 purchases=79 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=RiskEqualized active-alternations=9 robs=70 trips=1075 purchases=74 per-window-HHI(milli)=576 RUN-AGGREGATE-HHI(milli)=266 routes-robbed=8
+seed 41: verdict=RiskEqualized active-alternations=9 robs=76 trips=1036 purchases=68 per-window-HHI(milli)=552 RUN-AGGREGATE-HHI(milli)=164 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=9 robs=57 trips=1063 purchases=84 per-window-HHI(milli)=605 RUN-AGGREGATE-HHI(milli)=163 routes-robbed=8
+seed 43: verdict=RiskEqualized active-alternations=11 robs=88 trips=1060 purchases=79 per-window-HHI(milli)=608 RUN-AGGREGATE-HHI(milli)=207 routes-robbed=9
+seed 47: verdict=Alive active-alternations=9 robs=54 trips=1007 purchases=75 per-window-HHI(milli)=619 RUN-AGGREGATE-HHI(milli)=150 routes-robbed=9
+seed 53: verdict=Alive active-alternations=11 robs=102 trips=1063 purchases=73 per-window-HHI(milli)=446 RUN-AGGREGATE-HHI(milli)=260 routes-robbed=9
+seed 57: verdict=RiskEqualized active-alternations=11 robs=75 trips=1066 purchases=73 per-window-HHI(milli)=618 RUN-AGGREGATE-HHI(milli)=174 routes-robbed=6
+seed 59: verdict=Alive active-alternations=11 robs=43 trips=1035 purchases=80 per-window-HHI(milli)=707 RUN-AGGREGATE-HHI(milli)=293 routes-robbed=5
+seed 61: verdict=RiskEqualized active-alternations=12 robs=140 trips=987 purchases=66 per-window-HHI(milli)=465 RUN-AGGREGATE-HHI(milli)=171 routes-robbed=7
+seed 67: verdict=RiskEqualized active-alternations=11 robs=66 trips=1016 purchases=76 per-window-HHI(milli)=571 RUN-AGGREGATE-HHI(milli)=238 routes-robbed=6
+seed 71: verdict=RiskEqualized active-alternations=11 robs=65 trips=1093 purchases=77 per-window-HHI(milli)=659 RUN-AGGREGATE-HHI(milli)=277 routes-robbed=9
+seed 73: verdict=RiskEqualized active-alternations=13 robs=59 trips=1118 purchases=84 per-window-HHI(milli)=791 RUN-AGGREGATE-HHI(milli)=207 routes-robbed=7
+seed 99: verdict=PermanentPeace active-alternations=9 robs=19 trips=1145 purchases=81 per-window-HHI(milli)=934 RUN-AGGREGATE-HHI(milli)=900 routes-robbed=2
+seed 101: verdict=RiskEqualized active-alternations=9 robs=41 trips=1200 purchases=84 per-window-HHI(milli)=791 RUN-AGGREGATE-HHI(milli)=209 routes-robbed=7
+media readings (windows, not gates — PDR-0006):
+  Localized                12
+  CommonKnowledge          8
+media escaped_milli per run = [935, 959, 711, 959, 934, 1000, 885, 881, 947, 875, 962, 617, 906, 1000, 635, 863, 907, 966, 1000, 975]
+knowledge front: 70904 craft hearings; lag histogram (ticks):
+  [     0-  4898] 24340 ########################################
+  [  4899-  9797] 18354 ##############################
+  [  9798- 14696] 11635 ###################
+  [ 14697- 19595]  6956 ###########
+  [ 19596- 24494]  4441 #######
+  [ 24495- 29393]  2608 ####
+  [ 29394- 34292]  1441 ##
+  [ 34293- 39191]   641 #
+  [ 39192- 44090]   314 #
+  [ 44091- 48989]   174 
+news geography (seed 7): per-station summed alerts=[380, 376, 392, 390, 213, 226, 0, 59, 59, 69] contacts=[284, 283, 7637, 4764, 196, 657, 0, 7, 18, 243] hub/backwater ratio=6.6
+news geography (seed 11): per-station summed alerts=[388, 384, 390, 388, 228, 232, 0, 103, 99, 108] contacts=[280, 274, 6945, 3390, 345, 618, 0, 20, 32, 321] hub/backwater ratio=3.9
+news geography (seed 13): per-station summed alerts=[347, 352, 361, 360, 266, 278, 0, 42, 32, 29] contacts=[274, 285, 7327, 4010, 333, 923, 0, 9, 12, 55] hub/backwater ratio=12.4
+news geography (seed 23): per-station summed alerts=[372, 360, 376, 370, 274, 266, 0, 29, 22, 52] contacts=[285, 281, 7573, 3960, 438, 846, 0, 9, 13, 392] hub/backwater ratio=17.1
+news geography (seed 29): per-station summed alerts=[387, 384, 393, 389, 282, 281, 0, 77, 95, 114] contacts=[286, 280, 6303, 4171, 305, 529, 0, 16, 31, 512] hub/backwater ratio=5.1
+news geography (seed 31): per-station summed alerts=[171, 164, 169, 169, 121, 122, 0, 28, 35, 40] contacts=[265, 268, 6386, 4221, 288, 763, 0, 17, 30, 63] hub/backwater ratio=6.1
+news geography (seed 37): per-station summed alerts=[331, 342, 340, 338, 270, 275, 0, 99, 110, 125] contacts=[284, 254, 5999, 3971, 248, 599, 0, 17, 37, 63] hub/backwater ratio=3.5
+news geography (seed 41): per-station summed alerts=[364, 364, 375, 377, 238, 259, 0, 4, 2, 21] contacts=[280, 284, 8281, 4252, 275, 971, 0, 1, 1, 206] hub/backwater ratio=188.5
+news geography (seed 42): per-station summed alerts=[381, 380, 391, 390, 304, 312, 0, 89, 71, 99] contacts=[273, 280, 5610, 4166, 334, 947, 0, 14, 25, 709] hub/backwater ratio=5.5
+news geography (seed 43): per-station summed alerts=[379, 378, 389, 385, 250, 259, 0, 78, 80, 87] contacts=[271, 274, 6988, 4490, 345, 829, 0, 17, 27, 339] hub/backwater ratio=5.0
+news geography (seed 47): per-station summed alerts=[379, 388, 393, 390, 267, 273, 0, 34, 32, 38] contacts=[270, 281, 7093, 4122, 324, 982, 0, 9, 14, 154] hub/backwater ratio=12.3
+news geography (seed 53): per-station summed alerts=[305, 306, 309, 307, 272, 278, 0, 114, 107, 116] contacts=[287, 274, 5407, 4113, 264, 683, 0, 24, 39, 72] hub/backwater ratio=2.9
+news geography (seed 57): per-station summed alerts=[381, 384, 387, 382, 249, 248, 0, 11, 14, 24] contacts=[278, 287, 7483, 4514, 338, 712, 0, 5, 10, 22] hub/backwater ratio=35.2
+news geography (seed 59): per-station summed alerts=[377, 380, 384, 382, 228, 236, 0, 78, 81, 103] contacts=[278, 273, 6824, 2648, 340, 565, 0, 14, 30, 628] hub/backwater ratio=4.9
+news geography (seed 61): per-station summed alerts=[391, 390, 392, 390, 283, 282, 0, 0, 0, 2] contacts=[270, 304, 7421, 4356, 408, 1331, 0, 1, 0, 1] hub/backwater ratio=inf
+news geography (seed 67): per-station summed alerts=[343, 370, 379, 377, 271, 276, 0, 77, 79, 85] contacts=[277, 265, 5984, 3911, 322, 829, 0, 15, 32, 62] hub/backwater ratio=4.9
+news geography (seed 71): per-station summed alerts=[381, 352, 386, 386, 285, 290, 0, 111, 121, 134] contacts=[273, 271, 5304, 4140, 271, 563, 0, 24, 36, 81] hub/backwater ratio=3.5
+news geography (seed 73): per-station summed alerts=[384, 386, 393, 385, 243, 270, 0, 102, 107, 102] contacts=[279, 280, 6465, 4177, 317, 695, 0, 14, 44, 114] hub/backwater ratio=3.9
+news geography (seed 99): per-station summed alerts=[349, 389, 387, 380, 213, 245, 0, 77, 116, 114] contacts=[279, 241, 5710, 4164, 279, 580, 0, 19, 54, 103] hub/backwater ratio=5.1
+news geography (seed 101): per-station summed alerts=[364, 347, 361, 357, 287, 289, 0, 131, 134, 137] contacts=[269, 264, 5724, 3149, 412, 855, 0, 30, 61, 96] hub/backwater ratio=2.8
+
+=== knob set: gossip-rob (20 runs) ===
+map: scenario=frontier stations=10 haulers=20 pirates_initial=10 radii_milli_au=[350, 444, 564, 716, 909, 1154, 1465, 1861, 2362, 3000]
+diagnosis-matrix rows (windows, not gates — PDR-0006):
+  RiskEqualized            13
+  Alive                    5
+  PermanentPeace           2
+endurance: fuel_empty per run = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] (window expects all 0)
+fuel (hauler): duty_milli=[539, 564, 545, 552, 557, 560, 566, 538, 553, 539, 548, 574, 548, 571, 553, 561, 572, 557, 568, 570] burn_total_milli=[3165, 3307, 3200, 3239, 3270, 3289, 3322, 3155, 3247, 3164, 3215, 3371, 3214, 3352, 3246, 3296, 3361, 3269, 3337, 3346] median_leg_burn_permille=[2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2] min_tank_permille=[944, 946, 936, 941, 943, 923, 943, 936, 940, 943, 937, 922, 945, 944, 932, 938, 924, 946, 944, 945]
+endpoint-ambush: 1880 engagements; trip-phase histogram (0..1000):
+  [   0-  99]  1056 ########################################
+  [ 100- 199]     0 
+  [ 200- 299]     0 
+  [ 300- 399]     0 
+  [ 400- 499]     0 
+  [ 500- 599]     0 
+  [ 600- 699]     0 
+  [ 700- 799]     0 
+  [ 800- 899]     0 
+  [ 900- 999]   824 ###############################
+  endpoint share (first+last bin): 1880/1880
+purchase-desync: escort-purchase window spread per run = [22, 22, 22, 18, 19, 14, 22, 21, 19, 20, 19, 19, 20, 21, 22, 22, 11, 18, 15, 13]
+yard treasury (seed 7): first=0 max=839000000 final=839000000 monotone=True
+seed 7: verdict=RiskEqualized active-alternations=11 robs=58 trips=1040 purchases=80 per-window-HHI(milli)=652 RUN-AGGREGATE-HHI(milli)=207 routes-robbed=9
+seed 11: verdict=Alive active-alternations=11 robs=39 trips=1063 purchases=82 per-window-HHI(milli)=752 RUN-AGGREGATE-HHI(milli)=264 routes-robbed=6
+seed 13: verdict=RiskEqualized active-alternations=13 robs=92 trips=1030 purchases=85 per-window-HHI(milli)=576 RUN-AGGREGATE-HHI(milli)=159 routes-robbed=9
+seed 23: verdict=RiskEqualized active-alternations=7 robs=50 trips=1034 purchases=77 per-window-HHI(milli)=732 RUN-AGGREGATE-HHI(milli)=165 routes-robbed=8
+seed 29: verdict=Alive active-alternations=12 robs=80 trips=1115 purchases=84 per-window-HHI(milli)=557 RUN-AGGREGATE-HHI(milli)=184 routes-robbed=9
+seed 31: verdict=PermanentPeace active-alternations=8 robs=7 trips=1067 purchases=79 per-window-HHI(milli)=760 RUN-AGGREGATE-HHI(milli)=510 routes-robbed=2
+seed 37: verdict=RiskEqualized active-alternations=10 robs=51 trips=1101 purchases=77 per-window-HHI(milli)=720 RUN-AGGREGATE-HHI(milli)=371 routes-robbed=3
+seed 41: verdict=RiskEqualized active-alternations=11 robs=70 trips=1038 purchases=74 per-window-HHI(milli)=588 RUN-AGGREGATE-HHI(milli)=146 routes-robbed=8
+seed 42: verdict=RiskEqualized active-alternations=11 robs=63 trips=1062 purchases=83 per-window-HHI(milli)=668 RUN-AGGREGATE-HHI(milli)=152 routes-robbed=8
+seed 43: verdict=RiskEqualized active-alternations=10 robs=111 trips=1059 purchases=77 per-window-HHI(milli)=484 RUN-AGGREGATE-HHI(milli)=175 routes-robbed=9
+seed 47: verdict=Alive active-alternations=9 robs=53 trips=1009 purchases=78 per-window-HHI(milli)=703 RUN-AGGREGATE-HHI(milli)=154 routes-robbed=8
+seed 53: verdict=Alive active-alternations=11 robs=77 trips=1077 purchases=81 per-window-HHI(milli)=559 RUN-AGGREGATE-HHI(milli)=216 routes-robbed=8
+seed 57: verdict=RiskEqualized active-alternations=13 robs=90 trips=1065 purchases=68 per-window-HHI(milli)=579 RUN-AGGREGATE-HHI(milli)=184 routes-robbed=6
+seed 59: verdict=RiskEqualized active-alternations=9 robs=72 trips=1018 purchases=74 per-window-HHI(milli)=694 RUN-AGGREGATE-HHI(milli)=362 routes-robbed=6
+seed 61: verdict=RiskEqualized active-alternations=14 robs=141 trips=1015 purchases=70 per-window-HHI(milli)=425 RUN-AGGREGATE-HHI(milli)=159 routes-robbed=9
+seed 67: verdict=RiskEqualized active-alternations=12 robs=90 trips=1032 purchases=75 per-window-HHI(milli)=531 RUN-AGGREGATE-HHI(milli)=250 routes-robbed=8
+seed 71: verdict=RiskEqualized active-alternations=9 robs=59 trips=1075 purchases=76 per-window-HHI(milli)=682 RUN-AGGREGATE-HHI(milli)=352 routes-robbed=3
+seed 73: verdict=Alive active-alternations=11 robs=62 trips=1096 purchases=82 per-window-HHI(milli)=747 RUN-AGGREGATE-HHI(milli)=209 routes-robbed=7
+seed 99: verdict=PermanentPeace active-alternations=9 robs=19 trips=1149 purchases=81 per-window-HHI(milli)=934 RUN-AGGREGATE-HHI(milli)=900 routes-robbed=2
+seed 101: verdict=RiskEqualized active-alternations=9 robs=50 trips=1179 purchases=78 per-window-HHI(milli)=698 RUN-AGGREGATE-HHI(milli)=261 routes-robbed=6
+media readings (windows, not gates — PDR-0006):
+  Localized                11
+  CommonKnowledge          9
+media escaped_milli per run = [1000, 1000, 804, 960, 937, 1000, 882, 971, 952, 801, 1000, 857, 777, 972, 645, 888, 949, 935, 1000, 900]
+knowledge front: 70123 craft hearings; lag histogram (ticks):
+  [     0-  4904] 24557 ########################################
+  [  4905-  9809] 18445 ##############################
+  [  9810- 14714] 11608 ###################
+  [ 14715- 19619]  6972 ###########
+  [ 19620- 24524]  3993 #######
+  [ 24525- 29429]  2103 ###
+  [ 29430- 34334]  1151 ##
+  [ 34335- 39239]   669 #
+  [ 39240- 44144]   416 #
+  [ 44145- 49049]   209 
+news geography (seed 7): per-station summed alerts=[380, 376, 392, 390, 231, 236, 0, 66, 79, 86] contacts=[276, 281, 7492, 4608, 205, 682, 0, 14, 31, 109] hub/backwater ratio=5.9
+news geography (seed 11): per-station summed alerts=[388, 384, 390, 388, 267, 267, 0, 77, 78, 95] contacts=[278, 278, 6699, 3380, 343, 636, 0, 18, 31, 68] hub/backwater ratio=5.1
+news geography (seed 13): per-station summed alerts=[350, 354, 362, 360, 264, 269, 0, 54, 27, 68] contacts=[274, 282, 7045, 3921, 319, 746, 0, 13, 8, 594] hub/backwater ratio=13.4
+news geography (seed 23): per-station summed alerts=[372, 360, 376, 370, 272, 267, 0, 37, 53, 55] contacts=[281, 279, 7480, 3888, 317, 892, 0, 11, 22, 106] hub/backwater ratio=10.2
+news geography (seed 29): per-station summed alerts=[387, 384, 393, 389, 279, 278, 0, 93, 90, 97] contacts=[290, 282, 6240, 4114, 284, 547, 0, 17, 25, 465] hub/backwater ratio=4.4
+news geography (seed 31): per-station summed alerts=[171, 164, 169, 169, 121, 122, 0, 28, 35, 40] contacts=[265, 268, 6386, 4221, 288, 763, 0, 17, 30, 63] hub/backwater ratio=6.1
+news geography (seed 37): per-station summed alerts=[329, 340, 340, 340, 268, 273, 0, 107, 105, 104] contacts=[273, 282, 6165, 3993, 302, 649, 0, 19, 41, 68] hub/backwater ratio=3.3
+news geography (seed 41): per-station summed alerts=[364, 364, 375, 377, 235, 258, 0, 29, 25, 52] contacts=[278, 282, 8003, 4120, 224, 801, 0, 7, 6, 360] hub/backwater ratio=15.1
+news geography (seed 42): per-station summed alerts=[381, 380, 391, 390, 297, 308, 0, 58, 45, 66] contacts=[274, 284, 6005, 4121, 376, 1075, 0, 10, 18, 372] hub/backwater ratio=8.7
+news geography (seed 43): per-station summed alerts=[379, 378, 389, 385, 248, 251, 0, 77, 52, 90] contacts=[278, 291, 6952, 4513, 322, 790, 0, 9, 17, 344] hub/backwater ratio=7.5
+news geography (seed 47): per-station summed alerts=[379, 388, 393, 390, 266, 273, 0, 35, 41, 40] contacts=[272, 284, 7153, 3986, 310, 1022, 0, 6, 16, 301] hub/backwater ratio=11.2
+news geography (seed 53): per-station summed alerts=[299, 307, 310, 308, 276, 280, 0, 99, 109, 97] contacts=[281, 275, 5558, 3949, 241, 756, 0, 22, 34, 99] hub/backwater ratio=3.2
+news geography (seed 57): per-station summed alerts=[381, 384, 387, 382, 254, 246, 0, 33, 53, 52] contacts=[280, 287, 7283, 4317, 332, 661, 0, 10, 25, 44] hub/backwater ratio=11.7
+news geography (seed 59): per-station summed alerts=[377, 380, 384, 382, 275, 277, 0, 83, 108, 102] contacts=[287, 280, 7097, 2600, 261, 460, 0, 14, 29, 57] hub/backwater ratio=4.6
+news geography (seed 61): per-station summed alerts=[391, 390, 392, 390, 284, 284, 0, 26, 26, 34] contacts=[281, 300, 7440, 3990, 305, 858, 0, 6, 11, 69] hub/backwater ratio=15.1
+news geography (seed 67): per-station summed alerts=[346, 371, 380, 377, 278, 279, 0, 51, 57, 73] contacts=[275, 290, 5954, 4293, 384, 865, 0, 15, 22, 81] hub/backwater ratio=7.5
+news geography (seed 71): per-station summed alerts=[381, 351, 386, 386, 290, 281, 0, 82, 84, 105] contacts=[269, 279, 5501, 3983, 450, 924, 0, 22, 41, 73] hub/backwater ratio=4.7
+news geography (seed 73): per-station summed alerts=[384, 386, 393, 385, 237, 251, 0, 94, 94, 95] contacts=[277, 272, 6275, 4786, 347, 577, 0, 20, 35, 72] hub/backwater ratio=4.2
+news geography (seed 99): per-station summed alerts=[342, 389, 387, 380, 226, 249, 0, 81, 106, 125] contacts=[266, 262, 5505, 4321, 364, 652, 0, 19, 68, 97] hub/backwater ratio=4.8
+news geography (seed 101): per-station summed alerts=[364, 348, 360, 358, 275, 278, 0, 132, 123, 126] contacts=[266, 270, 5534, 3416, 478, 697, 0, 29, 52, 79] hub/backwater ratio=3.0
+
+value-of-information (REPORTED, NEVER GATED — PDR-0006): median final hauler credits media-on(gossip-born+gossip-rob)=21098000 media-off(blind-born+blind-rob+ring-born+ring-rob)=20785975

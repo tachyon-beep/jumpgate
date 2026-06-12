@@ -1,0 +1,22 @@
+haves_havenots (PDR-0006: windows, not gates) - scenario=trophic seed=7 stations=6 haulers=12
+
+-- per-hauler knowledge horizon --
+  row  accepts  workplace_milli_au  heard_n  median_lag  end_credits
+    0       71                 738       64        1287  25300000
+    1       71                 833       66        1264  46700000
+    2       62                 832       61        1353  25500000
+    3       73                 752       64        1345  25100000
+    4       67                 782       60        1403  36700000
+    5       64                 820       63        1649  34200000
+    6       69                 815       63        1237  34600000
+    7       67                 779       65        1338  8300000
+    8       57                 860       62        1201  59100000
+    9       67                 799       64         949  25800000
+   10       61                 830       61        1585  39800000
+   11       72                 733       60        1352  8000000
+  never-heard haulers: []
+
+spearman(workplace radius, median hearing lag)  = -0.098 over 12 haulers
+spearman(workplace radius, end credits)        = 0.818 over 12 haulers
+
+PRE-REGISTERED CONFOUND (PLAY-C3 / W5): ASSIGN is position-blind; workplace radius is an artifact of dispatch order and the per-tier capacity ladder, not a chosen home. A radius x outcome correlation may be a capacity-ladder read, not a locality read. Compare against the 6-station control. REPORTED, never gated - PDR-0006.

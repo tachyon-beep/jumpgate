@@ -1,0 +1,29 @@
+fit_heterogeneity (labeled-run method; PDR-0006: a ruler check, not a gate)
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s23.jsonl: mean_norm_hhi_milli=5630 hot_change_excess=5
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s42.jsonl: mean_norm_hhi_milli=5939 hot_change_excess=5
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s7.jsonl: mean_norm_hhi_milli=4512 hot_change_excess=7
+  clumped            /tmp/wgb-fit/frontier-fit/baseline_s99.jsonl: mean_norm_hhi_milli=7646 hot_change_excess=-1
+  equalized          /tmp/wgb-fit/frontier-fit/control_s23.jsonl: mean_norm_hhi_milli=3311 hot_change_excess=10
+  equalized          /tmp/wgb-fit/frontier-fit/control_s42.jsonl: mean_norm_hhi_milli=2864 hot_change_excess=4
+  equalized          /tmp/wgb-fit/frontier-fit/control_s7.jsonl: mean_norm_hhi_milli=3012 hot_change_excess=5
+  equalized          /tmp/wgb-fit/frontier-fit/control_s99.jsonl: mean_norm_hhi_milli=2732 hot_change_excess=9
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s101.jsonl: mean_norm_hhi_milli=6033 hot_change_excess=2
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s11.jsonl: mean_norm_hhi_milli=6362 hot_change_excess=3
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s31.jsonl: mean_norm_hhi_milli=6840 hot_change_excess=1
+  heldout-clumped    /tmp/wgb-fit/frontier-held/baseline_s57.jsonl: mean_norm_hhi_milli=4885 hot_change_excess=0
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s101.jsonl: mean_norm_hhi_milli=3339 hot_change_excess=-2
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s11.jsonl: mean_norm_hhi_milli=2551 hot_change_excess=6
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s31.jsonl: mean_norm_hhi_milli=3132 hot_change_excess=12
+  heldout-equalized  /tmp/wgb-fit/frontier-held/control_s57.jsonl: mean_norm_hhi_milli=3014 hot_change_excess=6
+
+FIT threshold: {'threshold': 3911, 'clumped_min': 4512, 'equalized_max': 3311, 'margin_open': True}
+FIT slack:     {'slack': 5, 'clumped_max': 7, 'equalized_min': 4, 'margin_open': False}
+MARGIN CLOSED on this set; do NOT move the constants from this fit. Record the overlap, keep the current literals, and register scenario-conditional thresholds as the named deferred trigger.
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s101.jsonl: hhi=6033 -> boundary side=clumped excess=2 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s11.jsonl: hhi=6362 -> boundary side=clumped excess=3 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s31.jsonl: hhi=6840 -> boundary side=clumped excess=1 (RECORDED, never gated)
+HELD-OUT heldout-clumped /tmp/wgb-fit/frontier-held/baseline_s57.jsonl: hhi=4885 -> boundary side=clumped excess=0 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s101.jsonl: hhi=3339 -> boundary side=equalized excess=-2 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s11.jsonl: hhi=2551 -> boundary side=equalized excess=6 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s31.jsonl: hhi=3132 -> boundary side=equalized excess=12 (RECORDED, never gated)
+HELD-OUT heldout-equalized /tmp/wgb-fit/frontier-held/control_s57.jsonl: hhi=3014 -> boundary side=equalized excess=6 (RECORDED, never gated)
