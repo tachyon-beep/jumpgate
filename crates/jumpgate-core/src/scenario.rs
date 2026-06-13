@@ -545,6 +545,58 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     }
 }
 
+/// Bazaar scenario — the goods-rung world (spec §3). MINIMAL A2.4 stub: the
+/// full own-trade bazaar factory lands in A5.2. For now this scaffolds the
+/// Food good (Good(2)) and its consumption sinks on top of the frontier
+/// geometry so the rung-A behaviour can be exercised incrementally.
+///
+/// The stub starts from `scenario_frontier` (the 10-station tier band, rows
+/// 3/4/8 already host Fuel sinks), promotes the goods table to three goods
+/// (Ore/Fuel/Food), resizes every per-good station array to length 3, and adds
+/// three input-only Food consumption producers (qty 5, interval 80) at the
+/// tier-sink rows. Food has NO producer here yet (A5.2 supplies WA1); the
+/// sinks keep the Food spread re-opening once supply exists (recommended cut
+/// §1.3).
+pub fn scenario_bazaar(seed: u64) -> RunConfig {
+    use crate::config::{GoodSpec, GoodsCfg};
+    let mut cfg = scenario_frontier(seed);
+
+    // Promote the goods table to three goods: Ore(0), Fuel(1), Food(2).
+    cfg.goods = GoodsCfg {
+        goods: vec![
+            GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
+            GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
+            GoodSpec { name: "Food".to_string(), unit_mass_milli: 1000 },
+        ],
+    };
+    // Every per-good station array must be sized to the new n_goods (3). The
+    // frontier stations seed only Ore/Fuel; Food starts empty everywhere.
+    let n_goods = cfg.goods.goods.len();
+    for s in cfg.stations.iter_mut() {
+        s.initial_stock.resize(n_goods, 0);
+        s.initial_price_micros.resize(n_goods, 0);
+    }
+    // The price curve cfg is also per-good; extend with a structural-off Food
+    // row (base 0 / cap 0 -> update_prices skips it until A5.2 prices Food).
+    cfg.price_cfg.base_micros.resize(n_goods, 0);
+    cfg.price_cfg.cap.resize(n_goods, 0);
+
+    // Food consumption sinks (input-only, fuel-sink shape): qty 5, interval 80
+    // at station rows 3, 4, 8 (the same tier-sink geometry as Fuel sinks in
+    // scenario_frontier). Keeps the Food spread open after deliveries arrive.
+    for sink_row in [3usize, 4, 8] {
+        cfg.producers.push(ProducerInit {
+            station_index: sink_row,
+            recipe: Recipe {
+                input: Some((Good::FOOD, 5)),
+                output: None,
+                interval: 80,
+            },
+        });
+    }
+    cfg
+}
+
 /// Apply one `--set knob=value` override to a built config — the sweep lab's
 /// whole tuning surface (spec §9 matrix knobs; PDR-0006: tuning levers, not
 /// gates). Unknown knobs and malformed values are ERRORS (a silent typo in a
@@ -642,6 +694,32 @@ mod tests {
     use crate::diagnostics::WINDOW_TICKS;
     use crate::time::Tick;
     use crate::world::World;
+
+    #[test]
+    fn scenario_bazaar_has_food_consumption_recipe() {
+        // Food (Good(2)) must appear as input to at least one producer in the
+        // bazaar scenario (the fuel-sink shape: input-only, no output). This
+        // verifies WA1's supply is non-trivially demanded.
+        use crate::economy::Good;
+        let cfg = scenario_bazaar(7);
+        let food_consumers = cfg
+            .producers
+            .iter()
+            .filter(|p| matches!(p.recipe.input, Some((g, _)) if g == Good::FOOD))
+            .filter(|p| p.recipe.output.is_none())
+            .count();
+        assert!(
+            food_consumers >= 1,
+            "scenario_bazaar must have at least one Food consumption sink (input-only recipe)"
+        );
+    }
+
+    #[test]
+    fn good_food_has_index_2() {
+        // Good::FOOD must be Good(2) — the globally pinned index.
+        use crate::economy::Good;
+        assert_eq!(Good::FOOD.0, 2, "Food must be index 2 in the Good ordering");
+    }
 
     #[test]
     fn scenario_trophic_shape() {

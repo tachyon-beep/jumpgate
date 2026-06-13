@@ -34,6 +34,9 @@ impl Good {
     /// v1 pinned goods.  Indices are VERIFIED by `good_ore_and_fuel_pinned_indices`.
     pub const ORE:  Good = Good(0);
     pub const FUEL: Good = Good(1);
+    /// Food: Good(2). Exists globally; consumed at bazaar sink stations.
+    /// No production recipe on trophic/frontier — those scenarios leave it at zero.
+    pub const FOOD: Good = Good(2);
 
     /// All v1 base goods in canonical index order.  Used only by `update_prices`
     /// to build PriceUpdate events; code that needs a runtime count should read
