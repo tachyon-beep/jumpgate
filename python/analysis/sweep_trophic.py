@@ -438,7 +438,7 @@ def main():
     ap.add_argument(
         "--scenario",
         default="trophic",
-        help="runner scenario factory (phase-2 flag): trophic | frontier",
+        help="runner scenario factory (phase-2 flag): trophic | frontier | bazaar",
     )
     ap.add_argument(
         "--knobset",

@@ -31,8 +31,8 @@ use std::process::ExitCode;
 use jumpgate_core::diagnostics::{self, TrophicSample};
 use jumpgate_core::{
     Command, ContractId, CraftId, CraftRole, EntityRef, Event, EventKind, FUEL_EMPTY_EPS,
-    GossipNode, NavDest, RunConfig, StateView, Tick, World, apply_knob, scenario_frontier,
-    scenario_trophic, state_hash,
+    GossipNode, NavDest, RunConfig, StateView, Tick, World, apply_knob, scenario_bazaar,
+    scenario_frontier, scenario_trophic, state_hash,
 };
 
 /// Replay-check / hash-stream sampling stride (ticks).
@@ -160,9 +160,10 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
     let (scenario_name, mut cfg): (&'static str, RunConfig) = match args.scenario.as_str() {
         "trophic" => ("trophic", scenario_trophic(args.seed)),
         "frontier" => ("frontier", scenario_frontier(args.seed)),
+        "bazaar" => ("bazaar", scenario_bazaar(args.seed)),
         other => {
             return Err(format!(
-                "--scenario {other}: unknown scenario (trophic|frontier)"
+                "--scenario {other}: unknown scenario (trophic|frontier|bazaar)"
             ));
         }
     };
@@ -196,8 +197,10 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .iter()
             .map(|s| diagnostics::permille_floor(cfg.bodies[s.body_index].elements.a, 1.0))
             .collect(),
-        bazaar_mode: false, // set true when simulate() builds MetaFacts for scenario_bazaar (A5); trophic/frontier stay silent
-        n_goods: jumpgate_core::economy::N_GOODS_V1,
+        // A5.2: the bazaar scenario emits the goods= META tail + BAZAAR anchored
+        // line; trophic/frontier stay silent (their goods table is the v1 default).
+        bazaar_mode: scenario_name == "bazaar",
+        n_goods: cfg.goods.goods.len(),
         // A4.6: Exchange battery facts captured from cfg before reset consumes it.
         exchange_active: cfg.exchange.active,
         initial_exchange_treasury_micros: cfg
@@ -953,6 +956,10 @@ fn main() -> ExitCode {
         );
     }
 
+    // Last-sample Exchange treasury read (shared by the anchored BAZAAR line and
+    // the EXCHANGE/BAZAAR-drain reads below).
+    let exchange_treasury = samples.last().map_or(0, |s| s.exchange_treasury_micros);
+
     // BAZAAR anchored line (rung A, scenario_bazaar; lockstep: regex in same commit).
     // Config-gated: silent for trophic/frontier so banked baseline stays byte-identical.
     if meta.bazaar_mode {
@@ -961,7 +968,9 @@ fn main() -> ExitCode {
              trade_buys={} trade_sells={} arb_posts={} arb_withdrawals={}",
             args.seed,
             meta.scenario,
-            0i64, // placeholder; scenario_bazaar populates via world accessor in A3
+            // Live treasury read from the last sample (the Exchange standing read);
+            // the trade/arb counters remain forward-hooked for console calibration.
+            exchange_treasury,
             0u64, // trade_buys
             0u64, // trade_sells
             0u64, // arb_posts
@@ -974,7 +983,6 @@ fn main() -> ExitCode {
     // this println!, sweep_trophic's EXCHANGE_RE, and the V6 fixture land together.
     // drain_per_100k=0 placeholder: full drain tracking (treasury_at_start baseline)
     // is forward-hooked for console calibration.
-    let exchange_treasury = samples.last().map_or(0, |s| s.exchange_treasury_micros);
     println!("EXCHANGE treasury_micros={exchange_treasury} drain_per_100k=0");
 
     // BAZAAR drain read (OD-2 solvency honesty, goods-as-goods A4.6). Printed

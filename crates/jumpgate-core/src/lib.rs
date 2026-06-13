@@ -70,7 +70,7 @@ pub use pirate::{
 pub use provenance::{PROVENANCE, Provenance};
 pub use replay::{Recording, record_run, replay_run};
 pub use rng::{RngStream, RngStreams};
-pub use scenario::{apply_knob, scenario_frontier, scenario_trophic};
+pub use scenario::{apply_knob, scenario_bazaar, scenario_frontier, scenario_trophic};
 pub use ship::thrust_accel_and_burn;
 pub use stores::{
     BodyStore, CraftRole, CraftStore, Effective, EffectiveMods, NavState, PirateState, UpgradeKind,

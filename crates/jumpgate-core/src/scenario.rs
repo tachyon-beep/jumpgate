@@ -81,6 +81,47 @@ pub const FRONTIER_HAULER_EXHAUST_VELOCITY: f64 = 42.5;
 /// vendor at the hideout dock), hosting NO producer and NO contract endpoint.
 pub const FRONTIER_HAVEN_STATION: usize = 6;
 
+// --- Bazaar (goods-as-goods rung A, A5.2) ------------------------------------
+
+/// Bazaar goods set (10 goods: Ore at 0, Fuel at 1, Food at 2, then 7 trade
+/// goods). Indices are STABLE (append-only) — the first three must match
+/// `Good::ORE` / `Good::FUEL` / `Good::FOOD`. Value is `(name, unit_mass_milli)`.
+pub const BAZAAR_GOODS: &[(&str, u32)] = &[
+    ("Ore", 1000),
+    ("Fuel", 1000),
+    ("Food", 1000),
+    ("Alloys", 1000),
+    ("Medicine", 1000),
+    ("Machinery", 1000),
+    ("Luxuries", 1000),
+    ("Electronics", 1000),
+    ("Chemicals", 1000),
+    ("Textiles", 1000),
+];
+
+/// Haulers in the bazaar (frontier headcount: 2 per station body).
+pub const BAZAAR_NUM_HAULERS: usize = FRONTIER_NUM_HAULERS; // 20
+/// Pirates in the bazaar (frontier 2:1 predator:prey pool).
+pub const BAZAAR_NUM_PIRATES: usize = FRONTIER_NUM_PIRATES; // 10
+
+/// Haven station row in the bazaar (same seam law as frontier: NOT outermost).
+pub const BAZAAR_HAVEN_STATION: usize = FRONTIER_HAVEN_STATION; // 6
+
+/// Sources / sinks per good (clumped topology — enough for independent Schmitt
+/// triggers, few enough to prevent self-averaging; panel L1-C2/L4-C3/L5-C3).
+pub const BAZAAR_SOURCES_PER_GOOD: usize = 2;
+pub const BAZAAR_SINKS_PER_GOOD: usize = 2;
+
+/// Fuel base_micros re-baked for WA4 reachability (OD-3a): a 5-unit package at
+/// spread ~10x base clears the ~100k transport floor.
+pub const BAZAAR_FUEL_BASE_MICROS: i64 = 50_000;
+/// Trade good base_micros (wage scale, consensus #12).
+pub const BAZAAR_TRADE_BASE_MICROS: i64 = 200_000;
+/// Exchange treasury battery budget (OD-2 solvency battery, sized to worst drain).
+pub const BAZAAR_EXCHANGE_TREASURY_MICROS: i64 = 5_400_000_000;
+/// Price cap per good (controls update_prices slope + own-trade demand filter).
+pub const BAZAAR_GOOD_CAP: i64 = 40;
+
 /// Partitioned tier loops (spec §3, OD-2 — the self-averaging fix):
 /// `(source_a, source_b, dest, fuel_sink)` station rows per tier. Dests and
 /// sinks are per-tier disjoint (independent Schmitt triggers); every loop
@@ -809,140 +850,325 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     }
 }
 
-/// Bazaar scenario — the goods-rung world (spec §3). MINIMAL A2.4 stub: the
-/// full own-trade bazaar factory lands in A5.2. For now this scaffolds the
-/// Food good (Good(2)) and its consumption sinks on top of the frontier
-/// geometry so the rung-A behaviour can be exercised incrementally.
+/// Bazaar scenario — the goods-as-goods rung-A world (spec §3, A5.2). The full
+/// 10-good own-trade bazaar on the frontier 10-station band geometry.
 ///
-/// The stub starts from `scenario_frontier` (the 10-station tier band, rows
-/// 3/4/8 already host Fuel sinks), promotes the goods table to three goods
-/// (Ore/Fuel/Food), resizes every per-good station array to length 3, and adds
-/// three input-only Food consumption producers (qty 5, interval 80) at the
-/// tier-sink rows. Food has NO producer here yet (A5.2 supplies WA1); the
-/// sinks keep the Food spread re-opening once supply exists (recommended cut
-/// §1.3).
+/// Key differences from `scenario_frontier`: zero pre-seeded `ContractInit`
+/// rows (arbitrage replaces restock, D4); REPOST structurally off
+/// (`demand_low == demand_high == 0`); 240k ephemeris window (spec §1.3); ten
+/// goods (Ore/Fuel/Food + 7 trade goods) with clumped per-good source/sink
+/// topology drawn from partitioned `mix(seed, k)` k-ranges (2 sources + 2 sinks
+/// per good, haven excluded, source/sink disjoint per good); a single Exchange
+/// corp (merged Yard+Port+Exchange, OD-2) sized as a solvency battery; Fuel
+/// re-baked to 50k (OD-3a WA4 reachability), all other goods at the 200k wage
+/// scale; per-role-block craft layout (haulers first, then pirates — panel
+/// L5-C2 headcount-safe replication); hauler capacity 15 (3x pirate, toll grid
+/// live in rung B). Pure config: same seed => identical RunConfig / config_hash.
 pub fn scenario_bazaar(seed: u64) -> RunConfig {
-    use crate::config::{GoodSpec, GoodsCfg};
-    let mut cfg = scenario_frontier(seed);
-
-    // Promote the goods table to three goods: Ore(0), Fuel(1), Food(2).
-    cfg.goods = GoodsCfg {
-        goods: vec![
-            GoodSpec {
-                name: "Ore".to_string(),
-                unit_mass_milli: 1000,
-            },
-            GoodSpec {
-                name: "Fuel".to_string(),
-                unit_mass_milli: 1000,
-            },
-            GoodSpec {
-                name: "Food".to_string(),
-                unit_mass_milli: 1000,
-            },
-        ],
+    use crate::config::{
+        ArbitrageCfg, CorporationInit, ExchangeCfg, GoodSpec, GoodsCfg, RefuelCfg,
     };
-    // Every per-good station array must be sized to the new n_goods (3). The
-    // frontier stations seed only Ore/Fuel; Food starts empty everywhere.
-    let n_goods = cfg.goods.goods.len();
-    for s in cfg.stations.iter_mut() {
-        s.initial_stock.resize(n_goods, 0);
-        s.initial_price_micros.resize(n_goods, 0);
-    }
-    // The price curve cfg is also per-good; extend with a structural-off Food
-    // row (base 0 / cap 0 -> update_prices skips it until A5.2 prices Food).
-    cfg.price_cfg.base_micros.resize(n_goods, 0);
-    cfg.price_cfg.cap.resize(n_goods, 0);
+    const STAR_MASS: f64 = 1.0e-3;
+    const BODY_MASS: f64 = 1.0e-12;
+    let n_goods = BAZAAR_GOODS.len(); // 10
+    let n_stations = FRONTIER_ORBIT_AU.len(); // 10
 
-    // Food consumption sinks (input-only, fuel-sink shape): qty 5, interval 80
-    // at station rows 3, 4, 8 (the same tier-sink geometry as Fuel sinks in
-    // scenario_frontier). Keeps the Food spread open after deliveries arrive.
-    for sink_row in [3usize, 4, 8] {
-        cfg.producers.push(ProducerInit {
-            station_index: sink_row,
-            recipe: Recipe {
-                input: Some((Good::FOOD, 5)),
-                output: None,
-                interval: 80,
+    // --- bodies: identical band to scenario_frontier (star + 10 stations) ----
+    let mut bodies = vec![BodyInit {
+        mass: STAR_MASS,
+        elements: OrbitalElements {
+            a: 0.0,
+            e: 0.0,
+            i: 0.0,
+            raan: 0.0,
+            argp: 0.0,
+            m0: 0.0,
+        },
+    }];
+    for (k, &a) in FRONTIER_ORBIT_AU.iter().enumerate() {
+        let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
+        bodies.push(BodyInit {
+            mass: BODY_MASS,
+            elements: OrbitalElements {
+                a,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0,
             },
         });
     }
 
-    // --- Exchange battery sizing note (A4.6, OD-2) --------------------------
-    // The Exchange corp (wired with its corp_index by ExchangeCfg in A5) is
-    // seeded as a SIZED BATTERY, not a self-sustaining economy. Worst drain
-    // measured at ~5.4e9 micros/100k ticks (synthesis solvency arithmetic, OD-2);
-    // refuel recapture <= 0.3e9/100k. Seed the battery from a calibration run's
-    // measured drain window (the BAZAAR drain= anchored line in trophic_run.rs
-    // records the consumed window for that calibration — never a gate, PDR-0006).
-    // PDR-0007: the battery models "laying the tubes," not a closed economy;
-    // consumption-minted money is the NAMED trigger if the console shows
-    // universal late-game heat death. The seeded value lives in the corp init
-    // (A5 wires the Exchange corp + ExchangeCfg.corp_index/active).
+    // --- craft: per-role blocks (panel L5-C2 headcount-safe replication) -----
+    // Haulers first (rows 0..BAZAAR_NUM_HAULERS), then pirates. Hauler capacity
+    // 15 (3x pirate capacity 5; toll grid live in rung B). Pirate capacity 5.
+    let hauler_spec = BaseSpec {
+        base_dry_mass: 1.0e-9,
+        base_max_thrust: 1.0e-12,
+        base_exhaust_velocity: FRONTIER_HAULER_EXHAUST_VELOCITY,
+        base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 15,
+    };
+    let pirate_spec = BaseSpec {
+        base_dry_mass: 1.0e-9,
+        base_max_thrust: 1.0e-12,
+        base_exhaust_velocity: 20.0,
+        base_fuel_capacity: 1.0e-9,
+        base_cargo_capacity: 5,
+    };
+    let co_orbit = |body_index: usize| -> (Vec3, Vec3) {
+        let el = &bodies[body_index].elements;
+        let mu = G_CANONICAL * (STAR_MASS + BODY_MASS);
+        let v_circ = (mu / el.a).sqrt();
+        let pos = Vec3::new(el.a * el.m0.cos(), el.a * el.m0.sin(), 0.0);
+        let vel = Vec3::new(-v_circ * el.m0.sin(), v_circ * el.m0.cos(), 0.0);
+        (pos, vel)
+    };
+    let mut craft = Vec::with_capacity(BAZAAR_NUM_HAULERS + BAZAAR_NUM_PIRATES);
+    for k in 0..BAZAAR_NUM_HAULERS {
+        let (pos, vel) = co_orbit(1 + (k % n_stations));
+        craft.push(CraftInit {
+            spec: hauler_spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: CraftRole::Idle,
+            scripted: true,
+            trade_reserve_micros: 0,
+        });
+    }
+    for _ in 0..BAZAAR_NUM_PIRATES {
+        let (pos, vel) = co_orbit(1 + BAZAAR_HAVEN_STATION);
+        craft.push(CraftInit {
+            spec: pirate_spec.clone(),
+            pos,
+            vel,
+            fuel_mass: 1.0e-9,
+            role: CraftRole::Pirate,
+            scripted: true,
+            trade_reserve_micros: 0,
+        });
+    }
 
-    // --- Arbitrage transport table (A4.2, PDR-0007) -------------------------
-    // The per-route transport floor is a FACTORY-TIME integer table from the
-    // phase-independent ring-radius geometry (the tier-reward precedent,
-    // scenario_frontier's reward ladder). For a directed pair (from_row,
-    // to_row) the impulsive Hohmann approximation is
-    //   dv ≈ √(GM/a_from) · |1 − √(a_from/a_to)|
-    // where a_row is the semi-major axis of the body hosting that station row
-    // (FRONTIER_ORBIT_AU[body_index − 1]) and GM = G_CANONICAL · STAR_MASS.
-    // The raw dv is normalized by the band's worst directed dv and scaled to
-    // the PER_UNIT_BASE_MICROS cost calibration. NOT runtime ephemeris (PDR-0007):
-    // this is phase-independent ring geometry, folded count-first into config_hash.
-    const STAR_MASS: f64 = 1.0e-3; // matches scenario_frontier
-    let n_stations = cfg.stations.len();
-    let axis_of = |srow: usize| -> f64 {
-        // station row -> hosting body -> band semi-major axis (AU).
-        let body_index = cfg.stations[srow].body_index;
-        FRONTIER_ORBIT_AU[(body_index - 1).min(FRONTIER_ORBIT_AU.len() - 1)]
-    };
-    let mu = G_CANONICAL * STAR_MASS;
-    // First pass: raw directed dv for every (from, to) pair (0 on the diagonal).
-    let axes: Vec<f64> = (0..n_stations).map(axis_of).collect();
-    let mut raw = vec![vec![0.0f64; n_stations]; n_stations];
-    let mut max_dv = 0.0f64;
-    for (from, raw_row) in raw.iter_mut().enumerate() {
-        let a_from = axes[from];
-        for (to, slot) in raw_row.iter_mut().enumerate() {
-            if from == to {
-                continue;
+    // --- clumped per-good topology (panel L1-C2/L4-C3/L5-C3) -----------------
+    // Each good draws a disjoint set of source and sink station rows from
+    // partitioned mix(seed, k) k-ranges; the haven is excluded from all
+    // assignments. Good g uses source k-base g*100 and sink k-base g*100+50.
+    let eligible_stations: Vec<usize> = (0..n_stations)
+        .filter(|&s| s != BAZAAR_HAVEN_STATION)
+        .collect();
+    let n_elig = eligible_stations.len() as u64; // 9
+
+    let pick_stations = |k_base: u64, count: usize| -> Vec<usize> {
+        let mut result = Vec::with_capacity(count);
+        let mut k = k_base;
+        while result.len() < count {
+            let station = eligible_stations[(mix(seed, k) % n_elig) as usize];
+            if !result.contains(&station) {
+                result.push(station);
             }
-            let dv = (mu / a_from).sqrt() * (1.0 - (a_from / axes[to]).sqrt()).abs();
-            *slot = dv;
-            if dv > max_dv {
-                max_dv = dv;
-            }
+            k += 1;
         }
-    }
-    // Second pass: normalize by the band's worst directed dv and scale to the
-    // PER_UNIT_BASE_MICROS calibration (integer micros, FLOOR via round).
-    let mut transport_micros = vec![vec![0i64; n_stations]; n_stations];
-    if max_dv > 0.0 {
-        for (from, t_row) in transport_micros.iter_mut().enumerate() {
-            for (to, slot) in t_row.iter_mut().enumerate() {
-                if from == to {
-                    continue;
+        result
+    };
+
+    let mut good_sources: Vec<Vec<usize>> = Vec::with_capacity(n_goods);
+    let mut good_sinks: Vec<Vec<usize>> = Vec::with_capacity(n_goods);
+    for g in 0..n_goods {
+        let src = pick_stations(g as u64 * 100, BAZAAR_SOURCES_PER_GOOD);
+        // Sinks use a different k-range base and exclude the sources.
+        let mut sinks = pick_stations(g as u64 * 100 + 50, BAZAAR_SINKS_PER_GOOD + 2);
+        sinks.retain(|s| !src.contains(s));
+        sinks.truncate(BAZAAR_SINKS_PER_GOOD);
+        if sinks.len() < BAZAAR_SINKS_PER_GOOD {
+            for &s in &eligible_stations {
+                if !src.contains(&s) && !sinks.contains(&s) {
+                    sinks.push(s);
                 }
-                let dv_norm = raw[from][to] / max_dv;
-                *slot = (dv_norm * PER_UNIT_BASE_MICROS as f64).round() as i64;
+                if sinks.len() >= BAZAAR_SINKS_PER_GOOD {
+                    break;
+                }
             }
         }
+        good_sources.push(src);
+        good_sinks.push(sinks);
     }
-    cfg.arbitrage = crate::config::ArbitrageCfg {
-        // scan_interval stays 0 here: A5.2 arms the poster. The transport table,
-        // ladder, and wage shares are populated now so the geometry is auditable
-        // (the inert-gate discipline: data present, machinery off).
-        scan_interval: 0,
-        wage_flat_micros: 0,
-        wage_share_milli: 200,
-        transport_micros,
-        qty_ladder: vec![5],
-        max_posts_per_scan: 64,
-        arb_premium_micros: vec![0; cfg.corporations.len()],
+
+    // --- stations: sources near cap, sinks (and everything else) at 0 --------
+    // price seeded from the same demand-deflation curve update_prices walks.
+    let good_price = |good_idx: usize, stock: i64| -> i64 {
+        let base = if good_idx == Good::FUEL.index() {
+            BAZAAR_FUEL_BASE_MICROS
+        } else {
+            BAZAAR_TRADE_BASE_MICROS
+        };
+        let s = stock.clamp(0, BAZAAR_GOOD_CAP);
+        (base * (2000 - s * 1800 / BAZAAR_GOOD_CAP) / 1000).max(0)
     };
-    cfg
+    let mut station_inits: Vec<StationInit> = Vec::with_capacity(n_stations);
+    for srow in 0..n_stations {
+        let mut initial_stock = vec![0i64; n_goods];
+        let mut initial_price = vec![0i64; n_goods];
+        for g in 0..n_goods {
+            let stock = if good_sources[g].contains(&srow) {
+                (BAZAAR_GOOD_CAP * 4 / 5).max(1) // source: 80% of cap
+            } else {
+                0
+            };
+            initial_stock[g] = stock;
+            initial_price[g] = good_price(g, stock);
+        }
+        // Vendors: the tier dests (2/5/9) and the haven (6), matching frontier.
+        let sells_upgrades = matches!(srow, 2 | 5 | 9) || srow == BAZAAR_HAVEN_STATION;
+        station_inits.push(StationInit {
+            body_index: srow + 1, // body k+1 hosts station row k
+            initial_stock,
+            initial_price_micros: initial_price,
+            sells_upgrades,
+        });
+    }
+
+    // --- producers: sources output-only, sinks input-only --------------------
+    let mut producers = Vec::new();
+    for g in 0..n_goods {
+        let good = Good(g as u16);
+        let src_interval = if g == Good::FUEL.index() { 60u32 } else { 40 };
+        for &srow in &good_sources[g] {
+            producers.push(ProducerInit {
+                station_index: srow,
+                recipe: Recipe {
+                    input: None,
+                    output: Some((good, 5)),
+                    interval: src_interval,
+                },
+            });
+        }
+        for &srow in &good_sinks[g] {
+            producers.push(ProducerInit {
+                station_index: srow,
+                recipe: Recipe {
+                    input: Some((good, 5)),
+                    output: None,
+                    interval: 80,
+                },
+            });
+        }
+    }
+
+    // --- corporations: the Exchange (merged Yard+Port+Exchange, OD-2) is the
+    // ONLY corp (corp 0), sized as a solvency battery. There is no separate
+    // Yard/Port: upgrade + refuel revenue fold into the Exchange battery.
+    let corporations = vec![CorporationInit {
+        treasury_micros: BAZAAR_EXCHANGE_TREASURY_MICROS,
+        home_station_index: 2,
+        arb_premium_micros: 0,
+    }];
+
+    // --- transport cost table (ring geometry, factory-time integers) ---------
+    // Arc distance between station rows: a same-row-distance leg costs 50k/hop;
+    // the max arc (0<->9) costs 450k. Symmetric, all non-negative, f64-free.
+    let mut transport_micros = vec![vec![0i64; n_stations]; n_stations];
+    for (i, row) in transport_micros.iter_mut().enumerate() {
+        for (j, slot) in row.iter_mut().enumerate() {
+            let arc = (i as i64 - j as i64).unsigned_abs() as i64;
+            *slot = arc * 50_000;
+        }
+    }
+
+    let arbitrage = ArbitrageCfg {
+        scan_interval: 16,
+        wage_flat_micros: 200_000,
+        wage_share_milli: 500,
+        transport_micros,
+        qty_ladder: vec![5, 10, 15],
+        max_posts_per_scan: 9,
+        arb_premium_micros: vec![0; corporations.len()],
+    };
+
+    let goods = GoodsCfg {
+        goods: BAZAAR_GOODS
+            .iter()
+            .map(|&(name, mass_milli)| GoodSpec {
+                name: name.to_string(),
+                unit_mass_milli: mass_milli,
+            })
+            .collect(),
+    };
+
+    // PriceCfg: every good live (cap > 0). Fuel re-baked, the rest at wage scale.
+    let base_micros: Vec<i64> = (0..n_goods)
+        .map(|g| {
+            if g == Good::FUEL.index() {
+                BAZAAR_FUEL_BASE_MICROS
+            } else {
+                BAZAAR_TRADE_BASE_MICROS
+            }
+        })
+        .collect();
+    let caps: Vec<i64> = vec![BAZAAR_GOOD_CAP; n_goods];
+
+    // trophic: the frontier band constants (the same band, same seam at body 7).
+    let trophic = TrophicCfg {
+        engage_radius_au: 5.0e-4,
+        upkeep_per_tick: 12,
+        food_per_unit_micros: 15_000,
+        grubstake_micros: 100_000,
+        ransom_cap_micros: 6_000_000,
+        starve_lie_low_ticks: 4_000,
+        hideout_body_index: 7, // the seam (same as frontier)
+        pirate_max_reach_au: 0.6,
+        hauler_belief_scoring: true,
+        hauler_buy_policy: BuyPolicy::EscortFirst,
+        ..TrophicCfg::default()
+    };
+
+    RunConfig {
+        master_seed: seed,
+        dt: Dt::new(0.25),
+        softening: 1.0e-4,
+        substep_cfg: SubstepCfg {
+            accel_ref: 3.0e-4,
+            max_substeps: 64,
+        },
+        ephemeris_window: 240_000,
+        bodies,
+        craft,
+        guidance: GuidanceParams::default(),
+        stations: station_inits,
+        producers,
+        corporations,
+        contracts: vec![], // D4: arbitrage replaces repost
+        price_cfg: PriceCfg {
+            base_micros,
+            cap: caps,
+            slope_milli: 1800,
+            reprice_interval: 1,
+        },
+        dispatch_cfg: DispatchCfg {
+            demand_low: 0,  // REPOST structural off
+            demand_high: 0, // REPOST structural off
+            stagger_period: 16,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        },
+        trophic,
+        shipyard: ShipyardCfg {
+            corp_index: 0,
+            ..ShipyardCfg::default()
+        },
+        media: MediaCfg::default(),
+        refuel: RefuelCfg {
+            lot_mass: 5.0e-11,
+            corp_index: 0, // Exchange = merged Yard+Port
+        },
+        goods,
+        exchange: ExchangeCfg {
+            corp_index: 0,
+            active: true,
+        },
+        arbitrage,
+    }
 }
 
 /// Apply one `--set knob=value` override to a built config — the sweep lab's
@@ -1075,6 +1301,79 @@ mod tests {
         // Good::FOOD must be Good(2) — the globally pinned index.
         use crate::economy::Good;
         assert_eq!(Good::FOOD.0, 2, "Food must be index 2 in the Good ordering");
+    }
+
+    #[test]
+    fn scenario_bazaar_shape() {
+        use crate::economy::Good;
+        let cfg = scenario_bazaar(7);
+
+        // Frontier band geometry: 1 star + 10 station bodies on FRONTIER_ORBIT_AU.
+        assert_eq!(cfg.bodies.len(), 11, "star + 10 station bodies");
+        let axes: Vec<f64> = cfg.bodies[1..].iter().map(|b| b.elements.a).collect();
+        assert_eq!(axes, FRONTIER_ORBIT_AU.to_vec(), "bodies ride FRONTIER_ORBIT_AU");
+
+        // 10 stations.
+        assert_eq!(cfg.stations.len(), 10);
+
+        // REPOST disabled, zero pre-seeded contracts (arbitrage replaces restock).
+        assert_eq!(cfg.dispatch_cfg.demand_low, 0);
+        assert_eq!(cfg.dispatch_cfg.demand_high, 0);
+        assert_eq!(
+            cfg.contracts.len(),
+            0,
+            "no pre-seeded contracts: arbitrage replaces repost"
+        );
+
+        // 240k ephemeris window.
+        assert_eq!(cfg.ephemeris_window, 240_000);
+
+        // hideout at the seam (body 7), NOT outermost.
+        assert_eq!(cfg.trophic.hideout_body_index, 7);
+
+        // Pirate capacity = 5 (unchanged); hauler capacity > 5 (toll grid live).
+        for c in cfg.craft.iter().filter(|c| c.role == CraftRole::Pirate) {
+            assert_eq!(
+                c.spec.base_cargo_capacity, 5,
+                "pirate cargo capacity unchanged"
+            );
+        }
+        for c in cfg.craft.iter().filter(|c| c.role == CraftRole::Idle) {
+            assert!(
+                c.spec.base_cargo_capacity > 5,
+                "hauler capacity > 5 so toll grid is live in rung B"
+            );
+        }
+
+        // Exchange corp registered and active, battery sized to worst-drain.
+        assert!(cfg.exchange.active, "Exchange active in bazaar");
+        let ecorp = cfg.exchange.corp_index as usize;
+        assert!(ecorp < cfg.corporations.len(), "exchange corp_index in range");
+        assert!(
+            cfg.corporations[ecorp].treasury_micros >= BAZAAR_EXCHANGE_TREASURY_MICROS,
+            "Exchange battery sized >= worst-drain budget"
+        );
+
+        // Fuel base re-baked to 50_000; all other goods at the 200_000 wage scale.
+        let fuel_idx = Good::FUEL.index();
+        assert_eq!(
+            cfg.price_cfg.base_micros[fuel_idx], BAZAAR_FUEL_BASE_MICROS,
+            "fuel base_micros re-baked for WA4 reachability"
+        );
+        for (i, base) in cfg.price_cfg.base_micros.iter().enumerate() {
+            if i == fuel_idx {
+                continue;
+            }
+            assert_eq!(*base, BAZAAR_TRADE_BASE_MICROS, "good {i} base_micros at wage scale");
+        }
+
+        // World resolves and the pirate pool is minted at full strength.
+        let (w, _h) = World::reset(cfg).expect("scenario_bazaar must resolve");
+        assert_eq!(
+            w.ships.pirate.iter().filter(|p| p.is_some()).count(),
+            FRONTIER_NUM_PIRATES,
+            "pirate pool minted correctly"
+        );
     }
 
     #[test]
