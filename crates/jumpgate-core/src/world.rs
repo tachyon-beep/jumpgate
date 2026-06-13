@@ -867,7 +867,7 @@ impl World {
             &self.config.shipyard,
             &self.config.trophic,
             &self.config.arbitrage,
-            &self.corporations,
+            &mut self.corporations,
             next,
             &mut self.events,
         );

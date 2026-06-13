@@ -452,7 +452,7 @@ pub fn run_scripted_dispatch(
     shipyard: &crate::config::ShipyardCfg,
     trophic: &crate::config::TrophicCfg,
     arbitrage: &crate::config::ArbitrageCfg,
-    corporations: &CorporationStore,
+    corporations: &mut CorporationStore,
     tick: Tick,
     events: &mut EventStream,
 ) {
@@ -679,6 +679,153 @@ pub fn run_scripted_dispatch(
                     posts_this_scan += 1;
                 }
                 route_index += 1;
+            }
+        }
+    }
+
+    // WITHDRAWAL SWEEP (goods-as-goods A4, L1-C1): two passes, both gated on
+    // scan_interval > 0 (part of the arbitrage machinery — inert for
+    // trophic/frontier/default).
+    //   (a) Offered price-recheck: an Offered row whose spread no longer clears
+    //       transport fails (status -> Failed, OfferWithdrawn) and any craft-side
+    //       accept-intent is cleared (the resolve_contracts REVERT mirror).
+    //   (b) Accepted-never-loaded solvency recheck: an Accepted row whose corp can
+    //       no longer fund the buy (treasury < price[from]*qty) fails — escrow
+    //       refund -> treasury, hauler released (Idle), OfferWithdrawn. Prevents
+    //       the permanent fleet attrition documented in grounding extract §11(b).
+    if arbitrage.scan_interval > 0 && tick.0.is_multiple_of(arbitrage.scan_interval as u64) {
+        // Pass (a): Offered rows whose spread no longer clears transport.
+        for kidx in 0..contracts.ids.len() {
+            if contracts.status[kidx] != ContractStatus::Offered {
+                continue;
+            }
+            // Skip rows a craft has intent-claimed but not yet resolved.
+            if contracts.hauler[kidx].is_some() {
+                continue;
+            }
+            let from = contracts.from_station[kidx];
+            let to = contracts.to_station[kidx];
+            let cid = contract_id(contracts, kidx);
+            let corp = contracts.corp[kidx];
+            // A helper closure cannot borrow contracts mutably while we read it, so
+            // the withdraw legs are inlined per branch.
+            let from_srow = stations.ids.dense_index(from.slot, from.generation);
+            let to_srow = stations.ids.dense_index(to.slot, to.generation);
+            let withdraw = match (from_srow, to_srow) {
+                (Some(fs), Some(ts)) => {
+                    let transport = arbitrage
+                        .transport_micros
+                        .get(fs)
+                        .and_then(|row| row.get(ts))
+                        .copied()
+                        .unwrap_or(0);
+                    let good_idx = contracts.resource[kidx].index();
+                    let price_from = stations
+                        .price_micros
+                        .get(fs)
+                        .and_then(|p| p.get(good_idx))
+                        .copied()
+                        .unwrap_or(0);
+                    let price_to = stations
+                        .price_micros
+                        .get(ts)
+                        .and_then(|p| p.get(good_idx))
+                        .copied()
+                        .unwrap_or(0);
+                    let qty = contracts.qty[kidx];
+                    // L2-C3 price guard, zero-qty guard, and spread recheck.
+                    if price_from < 1 || price_to < 1 || qty == 0 {
+                        true
+                    } else {
+                        let spread = price_to.saturating_sub(price_from);
+                        let gross = spread.saturating_mul(qty as i64);
+                        let surplus = gross.saturating_sub(transport);
+                        surplus <= 0
+                    }
+                }
+                // A dead station endpoint always withdraws the stale row.
+                _ => true,
+            };
+            if withdraw {
+                contracts.status[kidx] = ContractStatus::Failed;
+                // Clear any craft-side accept intent (resolve_contracts REVERT mirror).
+                for crow in 0..ships.ids.len() {
+                    if ships.contract[crow] == Some(cid) {
+                        ships.contract[crow] = None;
+                        ships.role[crow] = CraftRole::Idle;
+                    }
+                }
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::OfferWithdrawn { contract: cid, corp },
+                });
+            }
+        }
+        // Pass (b): Accepted-never-loaded rows — corp solvency check.
+        for kidx in 0..contracts.ids.len() {
+            if contracts.status[kidx] != ContractStatus::Accepted {
+                continue;
+            }
+            let Some(hauler_id) = contracts.hauler[kidx] else {
+                continue;
+            };
+            let Some(crow) = ships.index_of(hauler_id) else {
+                continue;
+            };
+            // Never-loaded gate: a loaded craft is in CargoLoaded status, not
+            // Accepted; the cargo column being Some is the defensive backstop.
+            if ships.cargo[crow].is_some() {
+                continue;
+            }
+            let from = contracts.from_station[kidx];
+            let Some(from_srow) = stations.ids.dense_index(from.slot, from.generation) else {
+                continue;
+            };
+            let good_idx = contracts.resource[kidx].index();
+            let price_from = stations
+                .price_micros
+                .get(from_srow)
+                .and_then(|p| p.get(good_idx))
+                .copied()
+                .unwrap_or(0);
+            if price_from < 1 {
+                continue; // L2-C3 price guard
+            }
+            let qty = contracts.qty[kidx];
+            let buy_cost = price_from.saturating_mul(qty as i64);
+            let corp = contracts.corp[kidx];
+            let cid = contract_id(contracts, kidx);
+            let corp_row = corporations.ids.dense_index(corp.slot, corp.generation);
+            match corp_row {
+                // Live corp that can still fund: leave Accepted.
+                Some(r) if corporations.treasury_micros[r] >= buy_cost => {}
+                // Live but insolvent corp: refund escrow to its treasury, release.
+                Some(r) => {
+                    let refund = contracts.escrow_micros[kidx];
+                    corporations.treasury_micros[r] =
+                        corporations.treasury_micros[r].saturating_add(refund);
+                    contracts.escrow_micros[kidx] = 0;
+                    ships.contract[crow] = None;
+                    ships.role[crow] = CraftRole::Idle;
+                    contracts.hauler[kidx] = None;
+                    contracts.status[kidx] = ContractStatus::Failed;
+                    events.emit(Event {
+                        tick,
+                        kind: EventKind::OfferWithdrawn { contract: cid, corp },
+                    });
+                }
+                // Stale corp row: refund into the void, release hauler.
+                None => {
+                    contracts.escrow_micros[kidx] = 0;
+                    ships.contract[crow] = None;
+                    ships.role[crow] = CraftRole::Idle;
+                    contracts.hauler[kidx] = None;
+                    contracts.status[kidx] = ContractStatus::Failed;
+                    events.emit(Event {
+                        tick,
+                        kind: EventKind::OfferWithdrawn { contract: cid, corp },
+                    });
+                }
             }
         }
     }
@@ -2200,7 +2347,7 @@ mod tests {
             &shipyard,
             &trophic,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -2270,7 +2417,7 @@ mod tests {
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
             &arb,
-            &corporations,
+            &mut corporations,
             Tick(1),
             &mut events,
         );
@@ -2331,7 +2478,7 @@ mod tests {
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
             &arb,
-            &corporations,
+            &mut corporations,
             Tick(1),
             &mut events,
         );
@@ -2387,7 +2534,7 @@ mod tests {
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
             &arb,
-            &corporations,
+            &mut corporations,
             Tick(1),
             &mut events,
         );
@@ -2396,6 +2543,270 @@ mod tests {
             first_post,
             Some(corp1),
             "route_index=0 scan_index=1 -> corp (0+1)%2=1"
+        );
+    }
+
+    /// A minimal hauler craft spec for withdrawal-sweep tests.
+    fn test_hauler_spec() -> crate::config::BaseSpec {
+        crate::config::BaseSpec {
+            base_dry_mass: 1.0e-9,
+            base_max_thrust: 1.0e-12,
+            base_exhaust_velocity: 20.0,
+            base_fuel_capacity: 1.0e-9,
+            base_cargo_capacity: 5,
+        }
+    }
+
+    #[test]
+    fn withdrawal_sweep_offered_recheck_clears_stale_post() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        // An Offered row posted by the Exchange corp. After prices move so the
+        // spread no longer clears transport, the sweep marks it Failed +
+        // OfferWithdrawn (no escrow motion; escrow is 0 at Offered).
+        let mut contracts = ContractStore::empty();
+        let mut corporations = CorporationStore::empty();
+        let corp_id =
+            corporations.push(1_000_000_000i64, StationId { slot: 0, generation: 0 });
+        let from_id = StationId { slot: 0, generation: 0 };
+        let to_id = StationId { slot: 1, generation: 0 };
+        let cid = contracts.push(corp_id, Good::ORE, 5, from_id, to_id, 400_000);
+        let kidx = contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        assert_eq!(contracts.status[kidx], ContractStatus::Offered);
+        // Spread has collapsed (from 499k vs to 500k -> 1k spread, *5 = 5k << transport 100k).
+        let stations = stations_with_prices(&[vec![499_000i64, 0], vec![500_000i64, 0]]);
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 200,
+            transport_micros: vec![vec![0, 100_000], vec![100_000, 0]],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0],
+        };
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut ships = CraftStore::empty();
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &mut corporations,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(
+            contracts.status[kidx],
+            ContractStatus::Failed,
+            "Offered row with collapsed spread must be Failed"
+        );
+        assert_eq!(
+            contracts.escrow_micros[kidx], 0,
+            "escrow stays 0 (posting was free)"
+        );
+        let withdrawn = events
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::OfferWithdrawn { .. }));
+        assert!(withdrawn, "OfferWithdrawn must be emitted");
+    }
+
+    #[test]
+    fn withdrawal_sweep_accepted_never_loaded_releases_hauler() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        use crate::math::Vec3;
+        // An Accepted row where the corp treasury has drained below buy_cost.
+        // The sweep must: escrow refund -> treasury, release hauler, Failed.
+        let mut contracts = ContractStore::empty();
+        let mut corporations = CorporationStore::empty();
+        let corp_id = corporations.push(50_000i64, StationId { slot: 0, generation: 0 });
+        // Hauler craft (Idle->Hauler via direct column writes after push).
+        let mut ships = CraftStore::empty();
+        let hauler_id =
+            ships.push(test_hauler_spec(), Vec3::ZERO, Vec3::ZERO, 1.0e-9);
+        ships.role[0] = CraftRole::Hauler;
+        // Accepted contract (escrow already debited from the corp at accept time).
+        let from_id = StationId { slot: 0, generation: 0 };
+        let to_id = StationId { slot: 1, generation: 0 };
+        let escrow = 800_000i64;
+        let cid = contracts.push(corp_id, Good::ORE, 5, from_id, to_id, escrow);
+        let kidx = contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        contracts.status[kidx] = ContractStatus::Accepted;
+        contracts.hauler[kidx] = Some(hauler_id);
+        contracts.escrow_micros[kidx] = escrow;
+        ships.contract[0] = Some(cid);
+        // from price = 100_000, qty 5 -> buy_cost = 500_000 > treasury 50_000.
+        let stations = stations_with_prices(&[vec![100_000i64, 0], vec![800_000i64, 0]]);
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 200,
+            transport_micros: vec![vec![0, 50_000], vec![50_000, 0]],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0],
+        };
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        let initial_credit = corporations.treasury_micros[0]
+            + ships.credits_micros.iter().sum::<i64>()
+            + contracts.escrow_micros.iter().sum::<i64>();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &mut corporations,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(
+            contracts.status[kidx],
+            ContractStatus::Failed,
+            "Accepted-never-loaded with insolvent corp must be Failed"
+        );
+        assert_eq!(ships.role[0], CraftRole::Idle, "hauler must be released");
+        assert!(ships.contract[0].is_none(), "hauler contract cleared");
+        assert_eq!(contracts.escrow_micros[kidx], 0, "escrow refunded");
+        // The escrow lands back in the corp treasury (the refund leg).
+        assert_eq!(
+            corporations.treasury_micros[0], 850_000,
+            "escrow refunded into corp treasury (50_000 + 800_000)"
+        );
+        // Credit identity is CONSERVATION: escrow -> treasury is a pure transfer
+        // within the tracked total (escrow was already summed into initial_credit),
+        // so the total is unchanged. (The plan draft's `initial + escrow` double-
+        // counted the escrow leg; the no-zombie test pins the same conservation.)
+        let final_credit = corporations.treasury_micros[0]
+            + ships.credits_micros.iter().sum::<i64>()
+            + contracts.escrow_micros.iter().sum::<i64>();
+        assert_eq!(
+            final_credit, initial_credit,
+            "escrow refund preserves credit identity (escrow -> treasury, conserved)"
+        );
+        let withdrawn = events
+            .events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::OfferWithdrawn { .. }));
+        assert!(withdrawn, "OfferWithdrawn emitted for insolvent accepted row");
+    }
+
+    #[test]
+    fn no_zombie_claimed_then_insolvent_corp_releases_fleet() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        use crate::math::Vec3;
+        // Accepted row, corp treasury drained -> sweep fires. After: hauler Idle,
+        // escrow 0, contract Failed, credit identity preserved.
+        let mut contracts = ContractStore::empty();
+        let mut corporations = CorporationStore::empty();
+        let escrow_amount = 500_000i64;
+        let corp_id = corporations.push(1_000i64, StationId { slot: 0, generation: 0 });
+        let mut ships = CraftStore::empty();
+        let hauler_id =
+            ships.push(test_hauler_spec(), Vec3::ZERO, Vec3::ZERO, 1.0e-9);
+        ships.role[0] = CraftRole::Hauler;
+        let from_id = StationId { slot: 0, generation: 0 };
+        let to_id = StationId { slot: 1, generation: 0 };
+        let cid = contracts.push(corp_id, Good::ORE, 5, from_id, to_id, 800_000);
+        let kidx = contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        contracts.status[kidx] = ContractStatus::Accepted;
+        contracts.hauler[kidx] = Some(hauler_id);
+        contracts.escrow_micros[kidx] = escrow_amount;
+        ships.contract[0] = Some(cid);
+        // buy_cost = 100_000 * 5 = 500_000 > treasury 1_000.
+        let stations = stations_with_prices(&[vec![100_000i64, 0], vec![800_000i64, 0]]);
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 200,
+            transport_micros: vec![vec![0, 50_000], vec![50_000, 0]],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0],
+        };
+        let initial_credit = corporations.treasury_micros[0]
+            + ships.credits_micros.iter().sum::<i64>()
+            + contracts.escrow_micros.iter().sum::<i64>();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &mut corporations,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(
+            contracts.status[kidx],
+            ContractStatus::Failed,
+            "insolvent accepted row -> Failed"
+        );
+        assert_eq!(
+            ships.role[0],
+            CraftRole::Idle,
+            "hauler released — no zombie"
+        );
+        assert!(ships.contract[0].is_none(), "hauler contract cleared");
+        assert_eq!(
+            contracts.escrow_micros[kidx], 0,
+            "escrow returned to treasury"
+        );
+        let final_credit = corporations.treasury_micros[0]
+            + ships.credits_micros.iter().sum::<i64>()
+            + contracts.escrow_micros.iter().sum::<i64>();
+        assert_eq!(
+            final_credit, initial_credit,
+            "no-zombie: credit identity preserved through escrow refund"
         );
     }
 
@@ -3542,7 +3953,7 @@ mod tests {
             &shipyard,
             &crate::config::TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -3564,7 +3975,7 @@ mod tests {
             &shipyard,
             &crate::config::TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(2),
             &mut events,
         );
@@ -3731,7 +4142,7 @@ mod tests {
             &shipyard,
             &TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3758,7 +4169,7 @@ mod tests {
             &shipyard,
             &scoring,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3787,7 +4198,7 @@ mod tests {
             &shipyard,
             &scoring,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3847,7 +4258,7 @@ mod tests {
             &shipyard,
             &scoring,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3876,7 +4287,7 @@ mod tests {
             &shipyard,
             &scoring,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3928,7 +4339,7 @@ mod tests {
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -4150,7 +4561,7 @@ mod tests {
             &crate::config::ShipyardCfg::default(),
             &crate::config::TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -4652,7 +5063,7 @@ mod tests {
             &ShipyardCfg::default(),
             &trophic,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(100),
             &mut events,
         );
@@ -4698,7 +5109,7 @@ mod tests {
             &ShipyardCfg::default(),
             &trophic,
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(100),
             &mut events,
         );
@@ -5058,7 +5469,7 @@ mod tests {
             &shipyard,
             &crate::config::TrophicCfg::default(),
             &crate::config::ArbitrageCfg::default(),
-            &CorporationStore::empty(),
+            &mut CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
