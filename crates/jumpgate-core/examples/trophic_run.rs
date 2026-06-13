@@ -642,7 +642,61 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
 /// noise, seed-7 lesson) collapse into one line with a repeat count.
 /// `gossip_min_micros` skips `GossipHeard` lines below the claimed-value
 /// threshold (printer-side only; 0 = print all — the owner tunes at console).
-fn print_chronicle(world: &World, gossip_min_micros: i64) {
+/// Per-station summary epilogue in the chronicle (synthesis cut Part 3).
+/// Threaded `&[TrophicSample]` for the WA1 protagonist (station starvation map).
+/// Printer-side only (PDR-0006: windows, never gates).
+///
+/// `n_stations` and `n_goods` are derived from the samples (the example crate
+/// cannot reach `world.stations`, which is `pub(crate)`): the
+/// `per_station_lurking_pirates` vector is sized n_stations, and each
+/// `per_station_stock` row is sized N_RESOURCES (the per-good width).
+fn print_station_epilogue(samples: &[TrophicSample]) {
+    let Some(last) = samples.last() else {
+        return;
+    };
+    let n_stations = last.per_station_lurking_pirates.len();
+    if n_stations == 0 {
+        return;
+    }
+    let n_goods = last.per_station_stock.first().map_or(0, Vec::len);
+    println!("=== per-station epilogue (PDR-0006: recorded, never gated) ===");
+
+    for s in 0..n_stations {
+        // Final stock + price snapshot from the last sample window.
+        let final_stock: Vec<i64> = last
+            .per_station_stock
+            .get(s)
+            .map_or_else(Vec::new, Clone::clone);
+        let final_price: Vec<i64> = last
+            .per_station_price
+            .get(s)
+            .map_or_else(Vec::new, Clone::clone);
+        // Count zero-stock windows per good (WA1 starvation map).
+        let zero_stock_windows: Vec<u32> = (0..n_goods)
+            .map(|g| {
+                samples
+                    .iter()
+                    .filter(|w| {
+                        w.per_station_stock
+                            .get(s)
+                            .and_then(|row| row.get(g))
+                            .copied()
+                            .unwrap_or(0)
+                            == 0
+                    })
+                    .count() as u32
+            })
+            .collect();
+        // Lurking pirates at this station in the final window.
+        let lurking = last.per_station_lurking_pirates.get(s).copied().unwrap_or(0);
+        println!(
+            "  station {s}: final_stock={final_stock:?} final_price={final_price:?} \
+             zero_stock_windows={zero_stock_windows:?} lurking_pirates={lurking}"
+        );
+    }
+}
+
+fn print_chronicle(world: &World, samples: &[TrophicSample], gossip_min_micros: i64) {
     println!("--- chronicle ---");
     for id in world.craft_ids() {
         println!("craft {}/{}:", id.slot, id.generation);
@@ -734,6 +788,7 @@ fn print_chronicle(world: &World, gossip_min_micros: i64) {
             println!("{line}");
         }
     }
+    print_station_epilogue(samples);
 }
 
 fn main() -> ExitCode {
@@ -1002,7 +1057,7 @@ fn main() -> ExitCode {
     }
 
     if args.chronicle {
-        print_chronicle(&world, args.chronicle_gossip_min_micros);
+        print_chronicle(&world, &samples, args.chronicle_gossip_min_micros);
     }
 
     if args.assert_no_fuel_empty && fuel_empty > 0 {
