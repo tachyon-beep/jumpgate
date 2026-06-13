@@ -122,3 +122,16 @@ def test_meta_goods_tail_is_none_for_trophic_frontier():
         assert parsed["meta"] is not None
         assert parsed["meta"]["goods"] is None, \
             "goods= must be None for pre-bazaar META lines"
+
+
+def test_meta_goods_tail_parses_when_present():
+    # The positive arm of the A0.5 optional tail (a bazaar-mode META line).
+    # Pinned against a synthetic single line, NOT a V6 fixture — V6_STDOUT
+    # is reserved for the A3.7 BAZAAR-live ladder step.
+    line = (
+        "META seed=7 scenario=bazaar stations=10 haulers=20 "
+        "pirates_initial=10 station_radii_milli_au=[350, 560] goods=10"
+    )
+    m = sweep.META_RE.match(line)
+    assert m is not None, "bazaar META line with goods= tail must match META_RE"
+    assert m.group("goods") == "10"
