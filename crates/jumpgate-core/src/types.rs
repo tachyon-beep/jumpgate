@@ -79,6 +79,19 @@ pub enum CommandKind {
     /// lives in `resolve_refuels` (stage 1d2), which consumes the intent the
     /// same tick. Top-to-full, threshold-free: the verb carries no quantity.
     Refuel,
+    /// Intent to buy goods from the docked station (goods-as-goods rung A):
+    /// ingestion writes the transient `pending_trade_buy` column only; the settle
+    /// lives in `resolve_trade_buys` (stage 1dx), which consumes the intent the
+    /// same tick. Payload: (good, qty, source station).
+    TradeBuy {
+        good: crate::economy::Good,
+        qty: u32,
+        station: crate::ids::StationId,
+    },
+    /// Intent to sell the held goods at the docked station (goods-as-goods rung A):
+    /// ingestion writes the transient `pending_trade_sell` column only; the settle
+    /// lives in `resolve_trade_sells` (stage 1dx). Payload: destination station.
+    TradeSell { station: crate::ids::StationId },
 }
 
 #[cfg(test)]

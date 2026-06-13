@@ -87,13 +87,16 @@ pub struct World {
     /// burn, low-water, and contract-leg burn brackets. Read only by
     /// `sample_window`; no behavior stage reads this field.
     pub(crate) fuel_diag: crate::diagnostics::FuelDiag,
-    eph: Ephemeris,
+    // `eph`/`config` are pub(crate) so in-crate settle/policy stage tests can
+    // drive `run_trade_policies` / `resolve_trade_*` directly with the same
+    // inputs `World::step` passes (the ships/bodies/stores pub(crate) precedent).
+    pub(crate) eph: Ephemeris,
     rng: RngStreams,
     log: ActionLog,
-    events: EventStream,
+    pub(crate) events: EventStream,
     tick: Tick,
     dt: Dt,
-    config: RunConfig,
+    pub(crate) config: RunConfig,
 }
 
 /// Read filter applied at the single projection seam (`project`). v1: all-visible.
@@ -875,6 +878,23 @@ impl World {
             &self.bodies,
             &self.eph,
             &self.config.refuel,
+            next,
+        );
+
+        // (1c3x) scripted trade policies (goods-as-goods rung A): write
+        //        pending_trade_buy or pending_trade_sell for scripted non-pirate
+        //        craft based on the two-mode policy decision. Consumed by
+        //        stages 1dx (resolve_trade_buys, resolve_trade_sells) this tick.
+        //        exchange.active==false is the structural inert gate.
+        crate::economy::run_trade_policies(
+            &mut self.ships,
+            &self.config.craft,
+            &self.stations,
+            &self.bodies,
+            &self.eph,
+            &self.config.exchange,
+            &self.config.arbitrage,
+            &self.config.goods,
             next,
         );
 

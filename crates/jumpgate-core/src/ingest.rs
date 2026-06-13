@@ -211,6 +211,20 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
                         world.ships.pending_refuel[i] = Some(());
                     }
                 }
+                CommandKind::TradeBuy { good, qty, station } => {
+                    // Record INTENT only (the Refuel template): write the transient
+                    // `pending_trade_buy` column. The settle lives in
+                    // `resolve_trade_buys` (stage 1dx), which consumes the intent
+                    // the same tick (including the exchange-inactive no-op).
+                    if let Some(i) = world.ships.index_of(id) {
+                        world.ships.pending_trade_buy[i] = Some((good, qty, station));
+                    }
+                }
+                CommandKind::TradeSell { station } => {
+                    if let Some(i) = world.ships.index_of(id) {
+                        world.ships.pending_trade_sell[i] = Some(station);
+                    }
+                }
             }
         }
         world.events_mut().emit(Event {

@@ -576,6 +576,14 @@ pub fn run_scripted_dispatch(
         if ships.fuel_mass[crow] <= crate::events::FUEL_EMPTY_EPS {
             continue;
         }
+        // ASSIGN empty-hold gate (M5, panel L3-M3): a craft with a non-empty hold
+        // is in own-trade mode (carrying bought goods). Assigning a package
+        // contract would mix channels — skip it. Structural predicate, checked
+        // before the cargo-capacity read (the refuel-gate precedent: structural
+        // predicates before monetary ones).
+        if !ships.hold[crow].is_empty() {
+            continue;
+        }
         let capacity = cargo_capacity(&ships.spec[crow], ships.upgrades[crow], shipyard);
         // One pass, ascending dense row == ascending ContractId: with scoring
         // OFF the FIRST eligible row wins (lowest ContractId, the original
@@ -1343,6 +1351,130 @@ pub fn run_refuel_policies(
             continue;
         }
         ships.pending_refuel[crow] = Some(());
+    }
+}
+
+/// Two-mode scripted trade policy intent stage — stage 1c3x, goods-as-goods rung A.
+/// Writes `pending_trade_buy` or `pending_trade_sell` for scripted non-pirate craft.
+/// Pirates and !scripted craft are always skipped (the run_refuel_policies precedent).
+///
+/// SELL path: if the craft has a non-empty hold AND is docked, write pending_trade_sell
+/// for the current dock station. Sell always wins over buy (deliver before restocking).
+///
+/// BUY path: if wallet >= buy_cost + trade_reserve AND spread > 0, write pending_trade_buy
+/// for the best (good, qty, station) triple by net = spread * qty.
+///
+/// Day-0 wallets are 0 → all craft start in wage-hauling mode (WA3 story intent).
+/// `exchange.active == false` is the structural inert gate (trophic/frontier unaffected).
+/// Never clobbers an existing ingest intent (the BuyUpgrade/Refuel precedent).
+#[allow(clippy::too_many_arguments)]
+pub fn run_trade_policies(
+    ships: &mut CraftStore,
+    craft_cfg: &[crate::config::CraftInit],
+    stations: &StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    exchange: &crate::config::ExchangeCfg,
+    arbitrage: &crate::config::ArbitrageCfg,
+    goods_cfg: &crate::config::GoodsCfg,
+    tick: Tick,
+) {
+    // Structural off: if Exchange is inactive, no intent is ever written.
+    if !exchange.active {
+        return;
+    }
+    let n_goods = goods_cfg.goods.len();
+    let prev = Tick(tick.0.saturating_sub(1));
+    for crow in 0..ships.ids.len() {
+        // Skip !scripted craft (gym-exclusion gate — the refuel precedent).
+        if craft_cfg.get(crow).is_some_and(|c| !c.scripted) {
+            continue;
+        }
+        // Skip pirates — rung-A pirates are never own-traders (D7 channel split).
+        if ships.role[crow] == CraftRole::Pirate {
+            continue;
+        }
+        // Never clobber an existing ingest intent.
+        if ships.pending_trade_buy[crow].is_some() || ships.pending_trade_sell[crow].is_some() {
+            continue;
+        }
+        // Only Idle craft make policy decisions (Haulers are already committed).
+        if ships.role[crow] != CraftRole::Idle {
+            continue;
+        }
+        let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
+            continue;
+        };
+
+        // SELL PATH: if hold is non-empty, deliver goods at this station.
+        if !ships.hold[crow].is_empty() {
+            if let Some(sid) = stations
+                .ids
+                .id_at(srow)
+                .map(|(s, g)| StationId { slot: s, generation: g })
+            {
+                ships.pending_trade_sell[crow] = Some(sid);
+            }
+            continue; // sell intent written; do not also write a buy intent
+        }
+
+        // BUY PATH: find the best (good, qty) at this dock by net = spread * qty.
+        // v1 simplification: gate on spread > 0 (full transport-table comparison in
+        // the poster). Hold capacity uses spec.base_cargo_capacity (uniform
+        // unit_mass_milli == 1000 in v1; one unit == one milli-mass).
+        let mut best_good: Option<(Good, u32, i64)> = None; // (good, qty, net)
+        for r in 0..n_goods {
+            let src_price = stations.price_micros[srow][r];
+            if src_price < 1 {
+                continue; // L2-C3: price<1 guard on every buy path
+            }
+            let stock = stations.stock[srow][r];
+            if stock <= 0 {
+                continue;
+            }
+            let hold_used: i64 = ships.hold[crow].iter().map(|(_, q)| *q as i64).sum();
+            let cap = ships.spec[crow].base_cargo_capacity as i64; // units
+            if hold_used >= cap {
+                continue;
+            }
+            let free_units = cap - hold_used;
+            let afford_units = ships.credits_micros[crow].max(0) / src_price;
+            if afford_units < 1 {
+                continue;
+            }
+            let qty = free_units.min(stock).min(afford_units);
+            if qty < 1 {
+                continue;
+            }
+            // Best destination price across all OTHER stations.
+            let best_dest_price: i64 = (0..stations.ids.len())
+                .filter(|&dr| dr != srow)
+                .map(|dr| stations.price_micros[dr][r])
+                .max()
+                .unwrap_or(0);
+            let spread = best_dest_price - src_price;
+            if spread <= 0 {
+                continue;
+            }
+            let net = spread * qty;
+            // Wallet headroom: must cover buy_cost + trade_reserve.
+            let buy_cost = qty * src_price;
+            let trade_reserve = arbitrage.wage_flat_micros; // reuse as reserve proxy v1
+            if ships.credits_micros[crow] < buy_cost + trade_reserve {
+                continue;
+            }
+            if best_good.is_none_or(|(_, _, prev_net)| net > prev_net) {
+                best_good = Some((Good(r as u16), qty as u32, net));
+            }
+        }
+        if let Some((good, qty, _)) = best_good
+            && let Some(sid) = stations
+                .ids
+                .id_at(srow)
+                .map(|(s, g)| StationId { slot: s, generation: g })
+        {
+            ships.pending_trade_buy[crow] = Some((good, qty, sid));
+        }
     }
 }
 
@@ -3505,5 +3637,263 @@ mod tests {
             .filter(|e| matches!(e.kind, EventKind::PriceUpdate { .. }))
             .collect();
         assert_eq!(price_updates.len(), 2, "only live-priced goods emit PriceUpdate");
+    }
+
+    // --- A3.5: run_trade_policies (stage 1c3x) ---
+
+    /// Build a World with one scripted Idle hauler docked at station 0 (body 0 at
+    /// the origin) and a second station 1 at a far body. station 0 holds `stock`
+    /// of Good(0) at `s0_price`; station 1 prices Good(0) at `s1_price` (the
+    /// spread destination). Exchange is ACTIVE; arbitrage.wage_flat_micros carries
+    /// the trade reserve. reprice_interval == 0 freezes the seeded prices.
+    fn trade_policy_fixture(
+        wallet_micros: i64,
+        s0_stock: i64,
+        s0_price: i64,
+        s1_price: i64,
+        trade_reserve: i64,
+    ) -> crate::world::World {
+        use crate::config::{
+            BaseSpec, BodyInit, CorporationInit, CraftInit, GoodSpec, GoodsCfg, GuidanceParams,
+            OrbitalElements, PriceCfg, RunConfig, StationInit, SubstepCfg,
+        };
+        use crate::math::Vec3;
+        use crate::time::Dt;
+        use crate::world::World;
+        let cfg = RunConfig {
+            master_seed: 7,
+            dt: Dt::new(0.25),
+            softening: 1e-3,
+            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            ephemeris_window: 256,
+            bodies: vec![
+                BodyInit {
+                    mass: 1e-9,
+                    elements: OrbitalElements {
+                        a: 0.0,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                },
+                // Body 1: far away so the craft never docks here (a == 5 AU radius).
+                BodyInit {
+                    mass: 1e-9,
+                    elements: OrbitalElements {
+                        a: 5.0,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
+                },
+            ],
+            craft: vec![CraftInit {
+                spec: BaseSpec {
+                    base_dry_mass: 1e-9,
+                    base_max_thrust: 1e-12,
+                    base_exhaust_velocity: 1e-2,
+                    base_fuel_capacity: 1e-9,
+                    base_cargo_capacity: 5,
+                },
+                pos: Vec3::ZERO, // docked at body 0 (station 0)
+                vel: Vec3::ZERO,
+                fuel_mass: 1e-9,
+                role: crate::stores::CraftRole::Idle,
+                scripted: true,
+            }],
+            guidance: GuidanceParams::default(),
+            stations: vec![
+                StationInit {
+                    body_index: 0,
+                    initial_stock: vec![s0_stock, 0i64, 0i64],
+                    initial_price_micros: vec![s0_price, 0i64, 0i64],
+                    sells_upgrades: false,
+                },
+                StationInit {
+                    body_index: 1,
+                    initial_stock: vec![0i64, 0i64, 0i64],
+                    initial_price_micros: vec![s1_price, 0i64, 0i64],
+                    sells_upgrades: false,
+                },
+            ],
+            producers: vec![],
+            corporations: vec![CorporationInit {
+                treasury_micros: 0,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }],
+            contracts: vec![],
+            price_cfg: PriceCfg {
+                base_micros: vec![0i64, 0i64, 0i64],
+                cap: vec![0i64, 0i64, 0i64], // all cap==0 → pricer never overwrites
+                slope_milli: 1800,
+                reprice_interval: 0, // frozen prices
+            },
+            dispatch_cfg: crate::config::DispatchCfg::default(),
+            trophic: crate::config::TrophicCfg::default(),
+            shipyard: crate::config::ShipyardCfg::default(),
+            media: crate::config::MediaCfg::default(),
+            refuel: crate::config::RefuelCfg::default(),
+            goods: GoodsCfg {
+                goods: vec![
+                    GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
+                    GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
+                    GoodSpec { name: "Food".to_string(), unit_mass_milli: 1000 },
+                ],
+            },
+            exchange: crate::config::ExchangeCfg { corp_index: 0, active: true },
+            arbitrage: crate::config::ArbitrageCfg {
+                wage_flat_micros: trade_reserve,
+                ..crate::config::ArbitrageCfg::default()
+            },
+        };
+        let (mut world, _h) = World::reset(cfg).expect("trade fixture resolvable");
+        world.ships.credits_micros[0] = wallet_micros;
+        world
+    }
+
+    #[test]
+    fn trade_policy_writes_buy_intent_for_capitalized_docked_craft() {
+        use crate::time::Tick;
+        let mut w = trade_policy_fixture(10_000_000, 50, 200_000, 400_000, 1_000_000);
+        assert!(w.ships.pending_trade_buy[0].is_none(), "precondition: no intent yet");
+        run_trade_policies(
+            &mut w.ships,
+            &w.config.craft,
+            &w.stations,
+            &w.bodies,
+            &w.eph,
+            &w.config.exchange,
+            &w.config.arbitrage,
+            &w.config.goods,
+            Tick(1),
+        );
+        assert!(
+            w.ships.pending_trade_buy[0].is_some(),
+            "capitalized docked craft with positive spread must write buy intent"
+        );
+        assert!(w.ships.pending_trade_sell[0].is_none(), "empty hold → no sell intent");
+    }
+
+    #[test]
+    fn trade_policy_skips_pirate() {
+        use crate::stores::CraftRole;
+        use crate::time::Tick;
+        let mut w = trade_policy_fixture(10_000_000, 50, 200_000, 400_000, 1_000_000);
+        w.ships.role[0] = CraftRole::Pirate;
+        run_trade_policies(
+            &mut w.ships,
+            &w.config.craft,
+            &w.stations,
+            &w.bodies,
+            &w.eph,
+            &w.config.exchange,
+            &w.config.arbitrage,
+            &w.config.goods,
+            Tick(1),
+        );
+        assert!(w.ships.pending_trade_buy[0].is_none(), "pirate must be skipped");
+    }
+
+    #[test]
+    fn trade_policy_skips_when_broke() {
+        use crate::time::Tick;
+        // wallet=0 → cannot afford a buy.
+        let mut w = trade_policy_fixture(0, 50, 200_000, 400_000, 1_000_000);
+        run_trade_policies(
+            &mut w.ships,
+            &w.config.craft,
+            &w.stations,
+            &w.bodies,
+            &w.eph,
+            &w.config.exchange,
+            &w.config.arbitrage,
+            &w.config.goods,
+            Tick(1),
+        );
+        assert!(w.ships.pending_trade_buy[0].is_none(), "broke craft must not buy");
+    }
+
+    // M5: ASSIGN empty-hold gate (L3-M3). A craft carrying own-trade goods in its
+    // hold must NOT receive a package contract — the two channels stay separate.
+    #[test]
+    fn scripted_assign_skips_craft_with_nonempty_hold() {
+        use crate::config::{BaseSpec, DispatchCfg, ShipyardCfg};
+        use crate::math::Vec3;
+
+        let mut stations = StationStore::empty();
+        let from = stations.push(
+            BodyId { slot: 0, generation: 0 },
+            vec![0i64, 100i64],
+            vec![0i64; N_GOODS_V1],
+        );
+        let to = stations.push(
+            BodyId { slot: 1, generation: 0 },
+            vec![0i64, 0i64],
+            vec![0i64; N_GOODS_V1],
+        );
+        let mut corporations = CorporationStore::empty();
+        let corp = corporations.push(1_000_000, from);
+        let mut contracts = ContractStore::empty();
+        // qty 5 == capacity 5: a FITTING lot (so only the hold gate can block it).
+        let cid = contracts.push(corp, Good::FUEL, 5, from, to, 1_000);
+        let mut ships = CraftStore::empty();
+        ships.push(
+            BaseSpec {
+                base_dry_mass: 1.0,
+                base_max_thrust: 0.0,
+                base_exhaust_velocity: 1.0,
+                base_fuel_capacity: 1.0,
+                base_cargo_capacity: 5,
+            },
+            Vec3::ZERO,
+            Vec3::ZERO,
+            1.0,
+        );
+        // Non-empty hold: 5 units of Good(0) — the craft is in own-trade mode.
+        ships.hold[0] = vec![(Good(0), 5u32)];
+
+        let dispatch = DispatchCfg {
+            demand_low: 5,
+            demand_high: 5,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let shipyard = ShipyardCfg::default();
+        let mut events = EventStream::new();
+        let no_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &no_evidence,
+            false,
+            false,
+            &mut AssignDiag::default(),
+            &dispatch,
+            &shipyard,
+            &crate::config::TrophicCfg::default(),
+            Tick(1),
+            &mut events,
+        );
+
+        assert!(
+            ships.contract[0].is_none(),
+            "ASSIGN must skip craft with non-empty hold (L3-M3: package contract requires empty hold)"
+        );
+        assert_eq!(ships.role[0], CraftRole::Idle, "craft stays Idle");
+        assert_eq!(
+            contracts.status[0],
+            ContractStatus::Offered,
+            "Offered contract must remain Offered when the only candidate has a non-empty hold"
+        );
+        let _ = cid;
     }
 }
