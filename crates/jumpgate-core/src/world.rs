@@ -935,6 +935,38 @@ impl World {
             &mut self.events,
         );
 
+        // (1dx-a) own-trade buy settle (goods-as-goods rung A): consume every
+        //         pending_trade_buy written by this tick's ingest or scripted
+        //         trade policy. AFTER resolve_refuels, PRE-physics.
+        //         Goods leg: stock->hold TRANSFER (no consumed[] counter).
+        //         Money leg: wallet->Exchange treasury.
+        crate::economy::resolve_trade_buys(
+            &mut self.ships,
+            &mut self.stations,
+            &self.bodies,
+            &self.eph,
+            &mut self.corporations,
+            &self.config.exchange,
+            &self.config.goods,
+            next,
+            &mut self.events,
+        );
+
+        // (1dx-b) own-trade sell settle (goods-as-goods rung A): consume every
+        //         pending_trade_sell. Goods leg: hold->stock TRANSFER.
+        //         Money leg: Exchange treasury->wallet (saturating).
+        crate::economy::resolve_trade_sells(
+            &mut self.ships,
+            &mut self.stations,
+            &self.bodies,
+            &self.eph,
+            &mut self.corporations,
+            &self.config.exchange,
+            &self.config.goods,
+            next,
+            &mut self.events,
+        );
+
         // Snapshot body eph_index + mass to avoid borrowing self inside the closure.
         let body_indices: Vec<(usize, f64)> = (0..self.bodies.mass.len())
             .map(|i| (self.bodies.eph_index[i], self.bodies.mass[i]))

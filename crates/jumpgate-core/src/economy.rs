@@ -1478,6 +1478,232 @@ pub fn run_trade_policies(
     }
 }
 
+/// Own-trade BUY settle stage — stage 1dx, goods-as-goods rung A.
+/// Consumes EVERY `pending_trade_buy` intent this tick (always-consume-then-gate).
+/// Goods leg: stock ↔ hold TRANSFER. NO `consumed[]` counter (not a trophic sink,
+/// the `try_load` precedent). Money leg: wallet -> Exchange treasury (pure transfer).
+/// Six deterministic skip arms: undocked, zero stock, wallet short, hold full,
+/// price<1 (L2-C3), stale Exchange corp.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_trade_buys(
+    ships: &mut CraftStore,
+    stations: &mut StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    corporations: &mut CorporationStore,
+    exchange: &crate::config::ExchangeCfg,
+    goods_cfg: &crate::config::GoodsCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    // Structural off: if Exchange is inactive, consume all intents and return.
+    if !exchange.active {
+        for intent in ships.pending_trade_buy.iter_mut() {
+            *intent = None;
+        }
+        return;
+    }
+    let ex_row = exchange.corp_index as usize;
+    let prev = Tick(tick.0.saturating_sub(1));
+
+    for crow in 0..ships.ids.len() {
+        let Some((good, qty, src_sid)) = ships.pending_trade_buy[crow] else {
+            continue;
+        };
+        // ALWAYS consume the intent unconditionally first (always-consume-then-gate).
+        ships.pending_trade_buy[crow] = None;
+
+        // (1) Undocked skip.
+        let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
+            continue;
+        };
+        // Verify the dock matches the intended source station.
+        let Some(dock_sid) = stations
+            .ids
+            .id_at(srow)
+            .map(|(s, g)| StationId { slot: s, generation: g })
+        else {
+            continue;
+        };
+        if dock_sid != src_sid {
+            continue; // station moved between policy write and settle (guard it)
+        }
+
+        let good_r = good.0 as usize;
+        if good_r >= goods_cfg.goods.len() {
+            continue;
+        }
+        let unit_mass_milli = goods_cfg.goods[good_r].unit_mass_milli as i64;
+
+        // (2) Price < 1 guard (L2-C3 — before any integer division).
+        let unit_price = stations.price_micros[srow][good_r];
+        if unit_price < 1 {
+            continue;
+        }
+        // (3) Zero stock skip.
+        let stock = stations.stock[srow][good_r];
+        if stock <= 0 {
+            continue;
+        }
+        // (4) Stale Exchange corp skip.
+        if corporations.ids.id_at(ex_row).is_none() {
+            continue;
+        }
+        // (5) Integer capacity and afford calculation. Hold capacity uses
+        // spec.base_cargo_capacity (uniform unit_mass_milli == 1000 in v1).
+        let hold_used_milli: i64 = ships.hold[crow]
+            .iter()
+            .map(|(g, q)| *q as i64 * goods_cfg.goods[g.0 as usize].unit_mass_milli as i64)
+            .sum();
+        let cap_milli = ships.spec[crow].base_cargo_capacity as i64 * 1000;
+        let free_milli = cap_milli - hold_used_milli;
+        if free_milli < unit_mass_milli {
+            // (6) Hold full skip.
+            continue;
+        }
+        let max_by_cap = free_milli / unit_mass_milli;
+        let afford = ships.credits_micros[crow].max(0) / unit_price;
+        if afford < 1 {
+            // (7) Wallet short skip.
+            continue;
+        }
+        let units = (qty as i64).min(stock).min(max_by_cap).min(afford);
+        if units < 1 {
+            continue;
+        }
+        let cost = units.saturating_mul(unit_price);
+
+        // GOODS LEG (TRANSFER — no consumed[] counter, the try_load precedent):
+        stations.stock[srow][good_r] -= units;
+        // Merge into hold (canonical: ascending Good, no zero qty).
+        if let Some(entry) = ships.hold[crow].iter_mut().find(|(g, _)| *g == good) {
+            entry.1 = entry.1.saturating_add(units as u32);
+        } else {
+            ships.hold[crow].push((good, units as u32));
+            ships.hold[crow].sort_unstable_by_key(|(g, _)| g.0);
+        }
+
+        // MONEY LEG (pure wallet -> Exchange treasury transfer):
+        ships.credits_micros[crow] = ships.credits_micros[crow].saturating_sub(cost);
+        corporations.treasury_micros[ex_row] =
+            corporations.treasury_micros[ex_row].saturating_add(cost);
+
+        // EVENT (single-emit site):
+        let craft = ships.ids_at(crow);
+        events.emit(Event {
+            tick,
+            kind: EventKind::TradeBought {
+                craft,
+                station: dock_sid,
+                good,
+                qty: units as u32,
+                price_micros: unit_price,
+            },
+        });
+    }
+}
+
+/// Own-trade SELL settle stage — stage 1dx, goods-as-goods rung A.
+/// Consumes EVERY `pending_trade_sell` intent this tick (always-consume-then-gate).
+/// Goods leg: hold ↔ stock TRANSFER. NO `consumed[]` counter.
+/// Money leg: Exchange treasury -> wallet (saturating — Exchange may be broke;
+/// goods still transfer per spec §1.2 "saturating at the Exchange").
+/// Four skip arms: undocked, empty hold, price<1 (L2-C3), stale Exchange corp.
+#[allow(clippy::too_many_arguments)]
+pub fn resolve_trade_sells(
+    ships: &mut CraftStore,
+    stations: &mut StationStore,
+    bodies: &BodyStore,
+    eph: &Ephemeris,
+    corporations: &mut CorporationStore,
+    exchange: &crate::config::ExchangeCfg,
+    goods_cfg: &crate::config::GoodsCfg,
+    tick: Tick,
+    events: &mut EventStream,
+) {
+    if !exchange.active {
+        for intent in ships.pending_trade_sell.iter_mut() {
+            *intent = None;
+        }
+        return;
+    }
+    let ex_row = exchange.corp_index as usize;
+    let prev = Tick(tick.0.saturating_sub(1));
+
+    for crow in 0..ships.ids.len() {
+        let Some(dest_sid) = ships.pending_trade_sell[crow] else {
+            continue;
+        };
+        ships.pending_trade_sell[crow] = None; // always consume
+
+        // (1) Undocked skip.
+        let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
+            continue;
+        };
+        let Some(dock_sid) = stations
+            .ids
+            .id_at(srow)
+            .map(|(s, g)| StationId { slot: s, generation: g })
+        else {
+            continue;
+        };
+        if dock_sid != dest_sid {
+            continue;
+        }
+        // (2) Empty hold skip.
+        if ships.hold[crow].is_empty() {
+            continue;
+        }
+        // (4) Stale Exchange corp skip.
+        if corporations.ids.id_at(ex_row).is_none() {
+            continue;
+        }
+
+        // Sell each good in the hold at this station's price. Drain the hold,
+        // putting back any good we cannot sell (price<1).
+        let hold_snapshot: Vec<(Good, u32)> = ships.hold[crow].drain(..).collect();
+        for (good, qty) in hold_snapshot {
+            let good_r = good.0 as usize;
+            if good_r >= goods_cfg.goods.len() {
+                continue;
+            }
+            // (3) Price < 1 guard (L2-C3).
+            let unit_price = stations.price_micros[srow][good_r];
+            if unit_price < 1 {
+                // Put back (can't sell at zero price — keep the goods).
+                ships.hold[crow].push((good, qty));
+                continue;
+            }
+            let revenue = (qty as i64).saturating_mul(unit_price);
+
+            // GOODS LEG (TRANSFER — no consumed[] counter):
+            stations.stock[srow][good_r] =
+                stations.stock[srow][good_r].saturating_add(qty as i64);
+
+            // MONEY LEG (saturating — Exchange may be broke):
+            let pay = revenue.min(corporations.treasury_micros[ex_row].max(0));
+            corporations.treasury_micros[ex_row] =
+                corporations.treasury_micros[ex_row].saturating_sub(pay);
+            ships.credits_micros[crow] = ships.credits_micros[crow].saturating_add(pay);
+
+            // EVENT (single-emit site — one per good lot sold):
+            let craft = ships.ids_at(crow);
+            events.emit(Event {
+                tick,
+                kind: EventKind::TradeSold {
+                    craft,
+                    station: dock_sid,
+                    good,
+                    qty,
+                    price_micros: unit_price,
+                },
+            });
+        }
+        // Re-sort hold to canonical form (ascending Good) after any not-sold items.
+        ships.hold[crow].sort_unstable_by_key(|(g, _)| g.0);
+    }
+}
+
 /// Delivery-on-arrival settlement stage (deterministic, sorted-`ContractId` order).
 /// Runs in `World::step` AFTER boundary-event detection: `arrivals` is the list of
 /// `(craft, dest)` pairs lifted from this tick's just-detected `Arrival` events. For
@@ -3895,5 +4121,284 @@ mod tests {
             "Offered contract must remain Offered when the only candidate has a non-empty hold"
         );
         let _ = cid;
+    }
+
+    // --- A3.6: resolve_trade_buys / resolve_trade_sells (stage 1dx) ---
+
+    /// Station 0's typed id from a fixture world.
+    fn station0_id(world: &crate::world::World) -> StationId {
+        let (slot, generation) = world.stations.ids.id_at(0).expect("station 0 live");
+        StationId { slot, generation }
+    }
+
+    /// Identity baseline over the v1 (Ore, Fuel) pair for a fixture world. Counts
+    /// station stock + cargo + hold (the conserved total at the snapshot moment),
+    /// so a pre-loaded hold balances against the post-settle stock.
+    fn trade_identity_initial(world: &crate::world::World) -> [i64; N_GOODS_V1] {
+        let mut initial = [0i64; N_GOODS_V1];
+        for (r, slot) in initial.iter_mut().enumerate() {
+            let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
+            let in_transit: i64 = world
+                .ships
+                .cargo
+                .iter()
+                .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
+                .sum();
+            let in_hold: i64 = world
+                .ships
+                .hold
+                .iter()
+                .flat_map(|h| h.iter())
+                .filter_map(|(good, q)| (good.index() == r).then_some(*q as i64))
+                .sum();
+            *slot = stock + in_transit + in_hold;
+        }
+        initial
+    }
+
+    /// Resource identity for the v1 (Ore, Fuel) pair (the A2.2 invariant, local to
+    /// the economy tests): Σstock + Σcargo + Σhold == initial + mined − consumed.
+    fn assert_resource_identity(world: &crate::world::World, initial: &[i64; N_GOODS_V1]) {
+        for r in 0..N_GOODS_V1 {
+            let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
+            let in_transit: i64 = world
+                .ships
+                .cargo
+                .iter()
+                .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
+                .sum();
+            let in_hold: i64 = world
+                .ships
+                .hold
+                .iter()
+                .flat_map(|h| h.iter())
+                .filter_map(|(good, q)| (good.index() == r).then_some(*q as i64))
+                .sum();
+            let lhs = stock + in_transit + in_hold;
+            let rhs = initial[r] + world.econ.mined[r] - world.econ.consumed[r];
+            assert_eq!(lhs, rhs, "resource identity for r={r}: {lhs} != {rhs}");
+        }
+    }
+
+    /// World + identity baseline with a pending_trade_buy for Good(0) at station 0.
+    fn trade_buy_fixture(
+        wallet: i64,
+        stock: i64,
+        price: i64,
+        qty_intent: u32,
+    ) -> (crate::world::World, [i64; N_GOODS_V1]) {
+        // s1 price is irrelevant to the settle (it reads the dock's own price).
+        let mut world = trade_policy_fixture(wallet, stock, price, price * 2, 0);
+        let sid = station0_id(&world);
+        let initial = trade_identity_initial(&world);
+        world.ships.pending_trade_buy[0] = Some((Good(0), qty_intent, sid));
+        (world, initial)
+    }
+
+    #[test]
+    fn trade_buy_settles_stock_to_hold_no_consumed_counter() {
+        use crate::time::Tick;
+        let (mut world, initial) = trade_buy_fixture(10_000_000, 50, 200_000, 3);
+        let consumed_before = world.econ.consumed.clone();
+        let ex_treasury_before = world.corporations.treasury_micros[0];
+
+        resolve_trade_buys(
+            &mut world.ships,
+            &mut world.stations,
+            &world.bodies,
+            &world.eph,
+            &mut world.corporations,
+            &world.config.exchange,
+            &world.config.goods,
+            Tick(1),
+            &mut world.events,
+        );
+
+        assert!(world.ships.pending_trade_buy[0].is_none(), "intent must be consumed");
+        assert_eq!(world.stations.stock[0][0], 47, "station stock must decrease by 3");
+        assert_eq!(world.ships.hold[0], vec![(Good(0), 3u32)]);
+        assert_eq!(world.ships.credits_micros[0], 10_000_000 - 600_000);
+        assert_eq!(world.corporations.treasury_micros[0], ex_treasury_before + 600_000);
+        assert_eq!(
+            world.econ.consumed, consumed_before,
+            "consumed counter must not change on goods transfer"
+        );
+        let bought: Vec<_> = world
+            .events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::TradeBought { .. }))
+            .collect();
+        assert_eq!(bought.len(), 1);
+        assert_resource_identity(&world, &initial);
+    }
+
+    /// (credits, station stock, holds, treasuries) — the moved-state tuple checked
+    /// by the deterministic-skip assertions.
+    type TradeSnapshot = (Vec<i64>, Vec<Vec<i64>>, Vec<Vec<(Good, u32)>>, Vec<i64>);
+
+    /// Per-arm world snapshot for the deterministic-skip assertions.
+    fn world_snapshot(world: &crate::world::World) -> TradeSnapshot {
+        (
+            world.ships.credits_micros.clone(),
+            world.stations.stock.clone(),
+            world.ships.hold.clone(),
+            world.corporations.treasury_micros.clone(),
+        )
+    }
+
+    /// Build a buy-skip world for a named arm. Every arm has a pending_trade_buy
+    /// that must be consumed without any state movement.
+    fn trade_buy_skip_fixture(arm: &str) -> crate::world::World {
+        use crate::math::Vec3;
+        let mut world = trade_buy_fixture(10_000_000, 50, 200_000, 3).0;
+        let sid = station0_id(&world);
+        match arm {
+            "undocked" => {
+                // Move the craft far from any body.
+                world.ships.pos[0] = Vec3::new(100.0, 0.0, 0.0);
+                world.ships.prev_pos[0] = world.ships.pos[0];
+            }
+            "stock-0" => {
+                world.stations.stock[0][0] = 0;
+            }
+            "wallet-short" => {
+                world.ships.credits_micros[0] = 0;
+            }
+            "hold-full" => {
+                // Fill the hold to capacity (5 units) so no room remains.
+                world.ships.hold[0] = vec![(Good(1), 5u32)];
+            }
+            "price-0" => {
+                world.stations.price_micros[0][0] = 0;
+            }
+            "stale-corp" => {
+                // Point the Exchange at a non-existent corp row.
+                world.config.exchange.corp_index = 99;
+            }
+            other => panic!("unknown skip arm {other}"),
+        }
+        let _ = sid;
+        world
+    }
+
+    #[test]
+    fn trade_buy_skips_deterministically() {
+        use crate::time::Tick;
+        for arm in ["undocked", "stock-0", "wallet-short", "hold-full", "price-0", "stale-corp"] {
+            let mut world = trade_buy_skip_fixture(arm);
+            let snapshot = world_snapshot(&world);
+            resolve_trade_buys(
+                &mut world.ships,
+                &mut world.stations,
+                &world.bodies,
+                &world.eph,
+                &mut world.corporations,
+                &world.config.exchange,
+                &world.config.goods,
+                Tick(1),
+                &mut world.events,
+            );
+            assert!(world.ships.pending_trade_buy[0].is_none(), "{arm}: intent not consumed");
+            assert_eq!(snapshot, world_snapshot(&world), "{arm}: skip must not move any state");
+            assert!(
+                !world
+                    .events
+                    .events
+                    .iter()
+                    .any(|e| matches!(e.kind, EventKind::TradeBought { .. })),
+                "{arm}: no event on skip"
+            );
+        }
+    }
+
+    /// World + identity baseline with a pending_trade_sell at station 0 and a
+    /// non-empty hold. The dock (station 0) prices Good(0) at `dest_price`.
+    fn trade_sell_fixture(
+        hold: Vec<(Good, u32)>,
+        dest_price: i64,
+        ex_treasury: i64,
+    ) -> (crate::world::World, [i64; N_GOODS_V1]) {
+        // station 0 price for Good(0) == dest_price (the dock the craft sells at).
+        let mut world = trade_policy_fixture(0, 0, dest_price, 0, 0);
+        let sid = station0_id(&world);
+        world.ships.hold[0] = hold;
+        world.corporations.treasury_micros[0] = ex_treasury;
+        let initial = trade_identity_initial(&world);
+        world.ships.pending_trade_sell[0] = Some(sid);
+        (world, initial)
+    }
+
+    #[test]
+    fn trade_sell_settles_hold_to_stock_exchange_pays() {
+        use crate::time::Tick;
+        let (mut world, initial) = trade_sell_fixture(vec![(Good(0), 5u32)], 300_000, 5_000_000);
+        let credits_before = world.ships.credits_micros[0];
+        resolve_trade_sells(
+            &mut world.ships,
+            &mut world.stations,
+            &world.bodies,
+            &world.eph,
+            &mut world.corporations,
+            &world.config.exchange,
+            &world.config.goods,
+            Tick(1),
+            &mut world.events,
+        );
+
+        assert!(world.ships.pending_trade_sell[0].is_none());
+        assert_eq!(world.ships.hold[0].len(), 0, "hold must be empty after sell");
+        assert_eq!(world.stations.stock[0][0], 5, "station stock += 5");
+        assert_eq!(world.ships.credits_micros[0], credits_before + 1_500_000);
+        assert_eq!(world.corporations.treasury_micros[0], 5_000_000 - 1_500_000);
+
+        let sold: Vec<_> = world
+            .events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::TradeSold { .. }))
+            .collect();
+        assert_eq!(sold.len(), 1);
+        assert_resource_identity(&world, &initial);
+    }
+
+    #[test]
+    fn trade_sell_exchange_saturates_when_broke() {
+        use crate::time::Tick;
+        let (mut world, _initial) = trade_sell_fixture(vec![(Good(0), 5u32)], 300_000, 0);
+        let credits_before = world.ships.credits_micros[0];
+        resolve_trade_sells(
+            &mut world.ships,
+            &mut world.stations,
+            &world.bodies,
+            &world.eph,
+            &mut world.corporations,
+            &world.config.exchange,
+            &world.config.goods,
+            Tick(1),
+            &mut world.events,
+        );
+        assert_eq!(world.ships.hold[0].len(), 0, "goods unloaded even when Exchange broke");
+        assert_eq!(world.ships.credits_micros[0], credits_before, "no credit movement when Exchange broke");
+        assert_eq!(world.corporations.treasury_micros[0], 0, "Exchange treasury saturates at 0");
+    }
+
+    #[test]
+    fn credit_identity_holds_across_trade_buy_and_sell() {
+        // The fixture's scripted docked craft trades through the full step path
+        // (run_trade_policies -> resolve_trade_buys). Σtreasury+Σcredits+Σescrow
+        // must hold every tick: the Exchange leg is a pure transfer.
+        let mut world = trade_policy_fixture(10_000_000, 50, 200_000, 400_000, 0);
+        let t0_sum: i64 = world.corporations.treasury_micros.iter().sum::<i64>()
+            + world.ships.credits_micros.iter().sum::<i64>()
+            + world.contracts.escrow_micros.iter().sum::<i64>();
+        let mut cmds = Vec::new();
+        for _ in 0..50 {
+            world.step(&mut cmds);
+            let total: i64 = world.corporations.treasury_micros.iter().sum::<i64>()
+                + world.ships.credits_micros.iter().sum::<i64>()
+                + world.contracts.escrow_micros.iter().sum::<i64>();
+            assert_eq!(total, t0_sum, "credit identity violated after trade step");
+        }
     }
 }
