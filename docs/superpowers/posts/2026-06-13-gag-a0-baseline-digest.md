@@ -73,3 +73,24 @@ sha256sum <dir>/<scenario>-s<seed>.{out,jsonl,gossip.jsonl}
 Independently reproduced 2026-06-13 (main loop): frontier-s7 all three
 digests bit-identical (the .out matches after stripping the replay-check
 line from a run that had mistakenly included the flag).
+
+## A5.5 clean-pass verification (2026-06-13, A5 tip)
+
+Re-ran the digest-capture for trophic-s7 and frontier-s7 at the A5 phase tip.
+Behavior-stream digests (the load-bearing ones) reproduce BIT-IDENTICAL:
+
+- `trophic-s7.jsonl`  e34ddaac… ✓   `trophic-s7.gossip.jsonl`  669e1b32… ✓
+- `frontier-s7.jsonl` 527f3350… ✓   `frontier-s7.gossip.jsonl` 22fae2e7… ✓
+
+The `.out` (stdout) digests diverge by exactly ONE added line —
+`EXCHANGE treasury_micros=… drain_per_100k=0` — which is the A4-era EXCHANGE
+standing-read instrument (commit 7d80054), already present at the A4 tip
+(6a20d53) BEFORE any A5 work. The A5 runner edits (data-driven `bazaar_mode`
+= `scenario=="bazaar"` and `n_goods` = `cfg.goods.goods.len()`, and moving the
+`exchange_treasury` binding ahead of the BAZAAR anchored line) produce
+IDENTICAL stdout for trophic/frontier (both stay `bazaar_mode=false`, no
+`goods=` META tail, no BAZAAR line). All four goldens
+(`config_hash_golden_anchor_is_stable`, `state_hash_golden_zero_world`,
+`golden_zero_state_hash`, `frontier_trajectory_golden`) pass unchanged; all
+three scenarios (trophic/frontier/bazaar) replay-check bit-identical. The new
+own-trade stages are inert on trophic/frontier (`exchange.active == false`).
