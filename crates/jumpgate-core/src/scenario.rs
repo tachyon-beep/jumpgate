@@ -598,6 +598,69 @@ pub fn scenario_bazaar(seed: u64) -> RunConfig {
             },
         });
     }
+
+    // --- Arbitrage transport table (A4.2, PDR-0007) -------------------------
+    // The per-route transport floor is a FACTORY-TIME integer table from the
+    // phase-independent ring-radius geometry (the tier-reward precedent,
+    // scenario_frontier's reward ladder). For a directed pair (from_row,
+    // to_row) the impulsive Hohmann approximation is
+    //   dv ≈ √(GM/a_from) · |1 − √(a_from/a_to)|
+    // where a_row is the semi-major axis of the body hosting that station row
+    // (FRONTIER_ORBIT_AU[body_index − 1]) and GM = G_CANONICAL · STAR_MASS.
+    // The raw dv is normalized by the band's worst directed dv and scaled to
+    // the PER_UNIT_BASE_MICROS cost calibration. NOT runtime ephemeris (PDR-0007):
+    // this is phase-independent ring geometry, folded count-first into config_hash.
+    const STAR_MASS: f64 = 1.0e-3; // matches scenario_frontier
+    let n_stations = cfg.stations.len();
+    let axis_of = |srow: usize| -> f64 {
+        // station row -> hosting body -> band semi-major axis (AU).
+        let body_index = cfg.stations[srow].body_index;
+        FRONTIER_ORBIT_AU[(body_index - 1).min(FRONTIER_ORBIT_AU.len() - 1)]
+    };
+    let mu = G_CANONICAL * STAR_MASS;
+    // First pass: raw directed dv for every (from, to) pair (0 on the diagonal).
+    let axes: Vec<f64> = (0..n_stations).map(axis_of).collect();
+    let mut raw = vec![vec![0.0f64; n_stations]; n_stations];
+    let mut max_dv = 0.0f64;
+    for (from, raw_row) in raw.iter_mut().enumerate() {
+        let a_from = axes[from];
+        for (to, slot) in raw_row.iter_mut().enumerate() {
+            if from == to {
+                continue;
+            }
+            let dv = (mu / a_from).sqrt() * (1.0 - (a_from / axes[to]).sqrt()).abs();
+            *slot = dv;
+            if dv > max_dv {
+                max_dv = dv;
+            }
+        }
+    }
+    // Second pass: normalize by the band's worst directed dv and scale to the
+    // PER_UNIT_BASE_MICROS calibration (integer micros, FLOOR via round).
+    let mut transport_micros = vec![vec![0i64; n_stations]; n_stations];
+    if max_dv > 0.0 {
+        for (from, t_row) in transport_micros.iter_mut().enumerate() {
+            for (to, slot) in t_row.iter_mut().enumerate() {
+                if from == to {
+                    continue;
+                }
+                let dv_norm = raw[from][to] / max_dv;
+                *slot = (dv_norm * PER_UNIT_BASE_MICROS as f64).round() as i64;
+            }
+        }
+    }
+    cfg.arbitrage = crate::config::ArbitrageCfg {
+        // scan_interval stays 0 here: A5.2 arms the poster. The transport table,
+        // ladder, and wage shares are populated now so the geometry is auditable
+        // (the inert-gate discipline: data present, machinery off).
+        scan_interval: 0,
+        wage_flat_micros: 0,
+        wage_share_milli: 200,
+        transport_micros,
+        qty_ladder: vec![5],
+        max_posts_per_scan: 64,
+        arb_premium_micros: vec![0; cfg.corporations.len()],
+    };
     cfg
 }
 
