@@ -1377,6 +1377,142 @@ mod tests {
     }
 
     #[test]
+    fn scenario_bazaar_every_good_has_source_and_sink() {
+        // WA1 cannot stall if every good has at least one producing source and
+        // one consuming sink (else a good could never be produced or consumed).
+        use crate::economy::Good;
+        let cfg = scenario_bazaar(7);
+        let n_goods = cfg.goods.goods.len();
+        assert!(n_goods >= 3, "at least Ore + Fuel + Food");
+
+        for g in 0..n_goods {
+            let good = Good(g as u16);
+            let has_source = cfg.producers.iter().any(|p| {
+                p.recipe.input.is_none()
+                    && matches!(p.recipe.output, Some((res, _)) if res == good)
+            });
+            let has_sink = cfg.producers.iter().any(|p| {
+                p.recipe.output.is_none()
+                    && matches!(p.recipe.input, Some((res, _)) if res == good)
+            });
+            assert!(
+                has_source,
+                "good {g} ({}) must have >= 1 source producer",
+                cfg.goods.goods[g].name
+            );
+            assert!(
+                has_sink,
+                "good {g} ({}) must have >= 1 sink producer",
+                cfg.goods.goods[g].name
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_bazaar_source_sink_disjoint_per_good() {
+        // The clumped-topology law: no station is BOTH a source and a sink for
+        // the same good (independent Schmitt triggers per good).
+        use crate::economy::Good;
+        use std::collections::HashSet;
+        let cfg = scenario_bazaar(7);
+        let n_goods = cfg.goods.goods.len();
+
+        for g in 0..n_goods {
+            let good = Good(g as u16);
+            let sources: HashSet<usize> = cfg
+                .producers
+                .iter()
+                .filter(|p| {
+                    p.recipe.input.is_none()
+                        && matches!(p.recipe.output, Some((res, _)) if res == good)
+                })
+                .map(|p| p.station_index)
+                .collect();
+            let sinks: HashSet<usize> = cfg
+                .producers
+                .iter()
+                .filter(|p| {
+                    p.recipe.output.is_none()
+                        && matches!(p.recipe.input, Some((res, _)) if res == good)
+                })
+                .map(|p| p.station_index)
+                .collect();
+            let overlap: Vec<&usize> = sources.intersection(&sinks).collect();
+            assert!(
+                overlap.is_empty(),
+                "good {g} ({}): source-sink overlap at {overlap:?} (clumped topology requires disjoint)",
+                cfg.goods.goods[g].name,
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_bazaar_haven_excluded_from_sources_sinks_and_contracts() {
+        let cfg = scenario_bazaar(7);
+        let haven = BAZAAR_HAVEN_STATION;
+
+        for p in &cfg.producers {
+            assert_ne!(
+                p.station_index, haven,
+                "haven must not host any producer (source or sink)"
+            );
+        }
+        // Contracts are empty in the bazaar; guard against accidental rows.
+        for k in &cfg.contracts {
+            assert_ne!(
+                k.from_station_index, haven,
+                "haven is not a contract from-endpoint"
+            );
+            assert_ne!(
+                k.to_station_index, haven,
+                "haven is not a contract to-endpoint"
+            );
+        }
+    }
+
+    #[test]
+    fn scenario_bazaar_repost_structurally_off() {
+        let cfg = scenario_bazaar(7);
+        assert_eq!(
+            cfg.dispatch_cfg.demand_low, 0,
+            "demand_low must be 0 (REPOST structural off)"
+        );
+        assert_eq!(
+            cfg.dispatch_cfg.demand_high, 0,
+            "demand_high must be 0 (REPOST structural off)"
+        );
+        assert_eq!(
+            cfg.contracts.len(),
+            0,
+            "no pre-seeded contracts in bazaar (arbitrage replaces repost)"
+        );
+    }
+
+    #[test]
+    fn scenario_bazaar_no_rung_b_knobs() {
+        // L5-C4: rung-B config (posture, greed, fence discount, toll) must NOT be
+        // present in any rung-A config struct. The exhaustive destructures below
+        // are a static check: adding a rung-B field to ExchangeCfg or ArbitrageCfg
+        // makes this a compile error.
+        use crate::config::{ArbitrageCfg, ExchangeCfg};
+        let cfg = scenario_bazaar(7);
+        let ExchangeCfg {
+            corp_index: _,
+            active: _,
+        } = cfg.exchange;
+        let ArbitrageCfg {
+            scan_interval: _,
+            wage_flat_micros: _,
+            wage_share_milli: _,
+            transport_micros: _,
+            qty_ladder: _,
+            max_posts_per_scan: _,
+            arb_premium_micros: _,
+        } = cfg.arbitrage;
+        // If this compiles and runs, no rung-B fields have been added.
+    }
+
+    #[test]
     fn scenario_trophic_shape() {
         let cfg = scenario_trophic(7);
 
