@@ -949,6 +949,14 @@ fn main() -> ExitCode {
         );
     }
 
+    // EXCHANGE line: OD-2 standing drain read (rung A). Scenario-blind — printed
+    // every run; zero is a valid read ("Exchange is not live this run"). Lockstep:
+    // this println!, sweep_trophic's EXCHANGE_RE, and the V6 fixture land together.
+    // drain_per_100k=0 placeholder: full drain tracking (treasury_at_start baseline)
+    // is forward-hooked for console calibration.
+    let exchange_treasury = samples.last().map_or(0, |s| s.exchange_treasury_micros);
+    println!("EXCHANGE treasury_micros={exchange_treasury} drain_per_100k=0");
+
     if let Some(path) = &args.gossip_log {
         write_gossip_log(&world, path);
     }

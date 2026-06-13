@@ -100,12 +100,23 @@ BAZAAR_RE = re.compile(
     r"arb_posts=(?P<arb_posts>\d+) arb_withdrawals=(?P<arb_withdrawals>\d+)$"
 )
 
+# The EXCHANGE standing-read line (rung A, OD-2 drain monitor): the Exchange
+# treasury and its per-100k-tick drain. Scenario-blind — printed every run
+# (zero when the Exchange is inactive). Regex lands in the SAME commit as the
+# Rust println! (lockstep rule). Optional in ANCHORED: pre-A3.7 banked outputs
+# parse as None.
+EXCHANGE_RE = re.compile(
+    r"^EXCHANGE\s+treasury_micros=(?P<exchange_treasury_micros>-?\d+)"
+    r"\s+drain_per_100k=(?P<exchange_drain_per_100k>-?\d+)$"
+)
+
 ANCHORED = {
     "result": (True, RESULT_RE),
     "media": (True, MEDIA_RE),
     "meta": (False, META_RE),
     "fuel": (False, FUEL_RE),
     "bazaar": (False, BAZAAR_RE),   # rung A, scenario_bazaar; config-gated
+    "exchange": (False, EXCHANGE_RE),  # rung A, OD-2 standing drain read
 }
 
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli

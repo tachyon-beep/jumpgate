@@ -135,3 +135,28 @@ def test_meta_goods_tail_parses_when_present():
     m = sweep.META_RE.match(line)
     assert m is not None, "bazaar META line with goods= tail must match META_RE"
     assert m.group("goods") == "10"
+
+
+# V6: adds the optional EXCHANGE standing-read line (rung A, OD-2 drain monitor).
+# V6_STDOUT = V5_STDOUT + the new EXCHANGE line (additive; the V5 fixture is not
+# replaced). Lockstep: the println!, the ANCHORED regex, and this fixture land
+# together.
+V6_STDOUT = V5_STDOUT + (
+    "EXCHANGE treasury_micros=5000000000 drain_per_100k=0\n"
+)
+
+
+def test_exchange_line_is_parsed():
+    parsed = sweep.parse_stdout(V6_STDOUT)
+    assert parsed["exchange"] is not None
+    assert parsed["exchange"]["exchange_treasury_micros"] == "5000000000"
+    assert parsed["exchange"]["exchange_drain_per_100k"] == "0"
+
+
+def test_v5_stdout_still_parses_without_exchange_line():
+    # Backwards compatibility: V5 output (no EXCHANGE line) must still parse,
+    # with the optional EXCHANGE anchor reading None (not a parse error).
+    parsed = sweep.parse_stdout(V5_STDOUT)
+    assert parsed["exchange"] is None
+    # The other anchors are unaffected by the new optional line.
+    assert parsed["bazaar"] is not None

@@ -156,6 +156,10 @@ pub struct TrophicSample {
     /// Yard corp treasury at the sample point (the broken-flow diagnostic;
     /// 0 until Task 1 mints the Yard).
     pub yard_treasury_micros: i64,
+    /// Exchange corp treasury at the sample point (OD-2 standing drain read,
+    /// goods-as-goods rung A). Out-of-range index reads 0 (Exchange inactive or
+    /// absent — also a valid read: "Exchange is not live this run").
+    pub exchange_treasury_micros: i64,
     /// Per-craft wallet snapshot at the sample point (dense row order).
     pub per_craft_credits: Vec<i64>,
     /// Trip-phase (fraction-of-trip-elapsed × 1000) of each engagement in the
@@ -758,6 +762,13 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .get(world.shipyard_cfg().corp_index as usize)
             .copied()
             .unwrap_or(0),
+        // OD-2 standing drain read (rung A): the Exchange corp treasury.
+        exchange_treasury_micros: world
+            .corporations
+            .treasury_micros
+            .get(world.exchange_cfg().corp_index as usize)
+            .copied()
+            .unwrap_or(0),
         per_craft_credits: world.ships.credits_micros.clone(),
         // The stage-3b2 emission sites push one kinematic snapshot per
         // engagement (pirate.rs); this window reads the trip-phase channel.
@@ -918,6 +929,7 @@ mod tests {
             per_route_accepts: traffic.to_vec(),
             per_route_traffic: traffic.to_vec(),
             yard_treasury_micros: 0,
+            exchange_treasury_micros: 0,
             per_craft_credits: credits.to_vec(),
             engagement_phase_milli: Vec::new(),
             // Media lab fields default-zero: `classify` never reads them.
