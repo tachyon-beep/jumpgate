@@ -309,7 +309,12 @@ pub fn classify(samples: &[TrophicSample]) -> Diagnosis {
     } else {
         Verdict::Alive
     };
-    Diagnosis { cycled, risk_heterogeneous, outcomes_disperse, verdict }
+    Diagnosis {
+        cycled,
+        risk_heterogeneous,
+        outcomes_disperse,
+        verdict,
+    }
 }
 
 /// Minimum first-half engagements for PermanentPeace to be meaningful — a run
@@ -326,8 +331,7 @@ fn predation_collapsed(samples: &[TrophicSample]) -> bool {
         return false;
     }
     let mid = samples.len() / 2;
-    let eng =
-        |s: &TrophicSample| u64::from(s.robs).saturating_add(u64::from(s.drivenoffs));
+    let eng = |s: &TrophicSample| u64::from(s.robs).saturating_add(u64::from(s.drivenoffs));
     let early: u64 = samples[..mid].iter().map(&eng).fold(0, u64::saturating_add);
     let late: u64 = samples[mid..].iter().map(&eng).fold(0, u64::saturating_add);
     early >= PEACE_MIN_EARLY_ENGAGEMENTS && late == 0
@@ -393,8 +397,8 @@ fn risk_is_heterogeneous(samples: &[TrophicSample]) -> bool {
             .map(|&r| u128::from(r) * u128::from(r))
             .sum();
         let hhi_milli = sum_sq.saturating_mul(1000) / (u128::from(total) * u128::from(total));
-        norm_sum = norm_sum
-            .saturating_add(hhi_milli.saturating_mul(u128::from(s.active_pirates.max(1))));
+        norm_sum =
+            norm_sum.saturating_add(hhi_milli.saturating_mul(u128::from(s.active_pirates.max(1))));
         let hot = argmax_lowest(&occupied_robs);
         if let (Some(h), Some(p)) = (hot, prev_hot)
             && h != p
@@ -497,8 +501,8 @@ pub fn escaped_milli(samples: &[TrophicSample]) -> u32 {
     if last.gossip_born_cum == 0 {
         return 0;
     }
-    (u64::from(last.gossip_escaped_cum).saturating_mul(1000)
-        / u64::from(last.gossip_born_cum)) as u32
+    (u64::from(last.gossip_escaped_cum).saturating_mul(1000) / u64::from(last.gossip_born_cum))
+        as u32
 }
 
 /// Classify a windowed run's MEDIA propagation field (spec §9). Pure over the
@@ -511,7 +515,10 @@ pub fn media_classify(samples: &[TrophicSample], endpoint_rows: &[bool]) -> Medi
     if born == 0 {
         return MediaReading::NoMedia;
     }
-    let heard: u64 = samples.iter().map(|s| u64::from(s.gossip_first_heard)).sum();
+    let heard: u64 = samples
+        .iter()
+        .map(|s| u64::from(s.gossip_first_heard))
+        .sum();
     if heard == 0 {
         return MediaReading::NewsDesert;
     }
@@ -602,7 +609,11 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
                     purchases_escort = purchases_escort.saturating_add(1);
                 }
             },
-            EventKind::Refueled { units, price_micros, .. } => {
+            EventKind::Refueled {
+                units,
+                price_micros,
+                ..
+            } => {
                 refuels = refuels.saturating_add(1);
                 refuel_units = refuel_units.saturating_add(units.max(0) as u64);
                 refuel_spend_micros =
@@ -621,9 +632,8 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
                 ..
             } => {
                 gossip_first_heard = gossip_first_heard.saturating_add(1);
-                heard_lag_ticks.push(
-                    u32::try_from(e.tick.0.saturating_sub(rob_tick.0)).unwrap_or(u32::MAX),
-                );
+                heard_lag_ticks
+                    .push(u32::try_from(e.tick.0.saturating_sub(rob_tick.0)).unwrap_or(u32::MAX));
                 heard_hops.push(u32::from(hops));
             }
             _ => {}
@@ -656,8 +666,11 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         .flatten()
         .map(crate::media::GossipBuffer::occupied)
         .fold(0u32, u32::saturating_add);
-    let per_station_alerts: Vec<u32> =
-        world.station_gossip.iter().map(crate::media::GossipBuffer::occupied).collect();
+    let per_station_alerts: Vec<u32> = world
+        .station_gossip
+        .iter()
+        .map(crate::media::GossipBuffer::occupied)
+        .collect();
     let stations_with_news = per_station_alerts.iter().filter(|&&n| n > 0).count() as u32;
     let mut per_station_contacts = vec![0u32; world.station_gossip.len()];
     for &(t, srow) in &world.media_diag.contacts {
@@ -722,9 +735,10 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         }
 
         let nav_lurk: Option<usize> = match world.ships.nav[r] {
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
-                (0..n_stations).find(|&s| world.stations.body[s] == b)
-            }
+            NavState::Seeking {
+                dest: NavDest::Entity(EntityRef::Body(b)),
+                ..
+            } => (0..n_stations).find(|&s| world.stations.body[s] == b),
             _ => None,
         };
         let settled = nav_lurk.is_some_and(|s| {
@@ -733,8 +747,7 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         });
         match nav_lurk {
             Some(s) if settled => {
-                per_station_lurking_pirates[s] =
-                    per_station_lurking_pirates[s].saturating_add(1);
+                per_station_lurking_pirates[s] = per_station_lurking_pirates[s].saturating_add(1);
             }
             _ => {
                 pirates_commuting = pirates_commuting.saturating_add(1);
@@ -794,7 +807,12 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
         assign_counts_cum: world.assign_diag.candidate_counts.to_vec(),
         // Fuel lab fields: pure snapshots of the UNHASHED fuel_diag,
         // integerized through the one permille_floor seam.
-        per_craft_role: world.ships.role.iter().map(|r| u32::from(r.rank())).collect(),
+        per_craft_role: world
+            .ships
+            .role
+            .iter()
+            .map(|r| u32::from(r.rank()))
+            .collect(),
         per_craft_thrust_ticks: world.fuel_diag.thrust_ticks.clone(),
         per_craft_burn_milli: (0..world.ships.ids.len())
             .map(|r| {
@@ -834,12 +852,7 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .iter()
             .map(|pr| pr[Good::FUEL.index()])
             .collect(),
-        per_station_stock: world
-            .stations
-            .stock
-            .iter()
-            .map(|st| st.to_vec())
-            .collect(),
+        per_station_stock: world.stations.stock.iter().map(|st| st.to_vec()).collect(),
         per_station_price: world
             .stations
             .price_micros
@@ -873,15 +886,15 @@ pub fn route_of(world: &World, contract: ContractId) -> Option<usize> {
 /// rows (A0, WA2/WA4 joins). Returns `None` when the contract slot/generation
 /// is no longer live (stale id); the caller serialises `null` in that case.
 /// Pub since A0.2: called from `trophic_run.rs` examples.
-pub fn contract_resource_reward(
-    world: &World,
-    contract: ContractId,
-) -> Option<(Good, i64)> {
+pub fn contract_resource_reward(world: &World, contract: ContractId) -> Option<(Good, i64)> {
     let k = world
         .contracts
         .ids
         .dense_index(contract.slot, contract.generation)?;
-    Some((world.contracts.resource[k], world.contracts.reward_micros[k]))
+    Some((
+        world.contracts.resource[k],
+        world.contracts.reward_micros[k],
+    ))
 }
 
 /// Contract-endpoint station rows derived from the run's own config: row i is
@@ -997,18 +1010,36 @@ mod tests {
     fn cycling_heterogeneous_reads_alive() {
         let d = classify(&cycling_heterogeneous(&DISPERSED));
         assert!(d.cycled, "boom/bust series must read cycled");
-        assert!(d.risk_heterogeneous, "clumped persistent robs must read heterogeneous");
-        assert!(d.outcomes_disperse, "spread final wallets must read dispersed");
+        assert!(
+            d.risk_heterogeneous,
+            "clumped persistent robs must read heterogeneous"
+        );
+        assert!(
+            d.outcomes_disperse,
+            "spread final wallets must read dispersed"
+        );
         assert_eq!(d.verdict, Verdict::Alive);
     }
 
     #[test]
     fn flat_reads_no_cycle() {
         let samples: Vec<TrophicSample> = (0..12u64)
-            .map(|w| s((w + 1) * WINDOW_TICKS, 2, 4, &[2, 0, 0, 0], &[5, 7, 6, 5], &DISPERSED))
+            .map(|w| {
+                s(
+                    (w + 1) * WINDOW_TICKS,
+                    2,
+                    4,
+                    &[2, 0, 0, 0],
+                    &[5, 7, 6, 5],
+                    &DISPERSED,
+                )
+            })
             .collect();
         let d = classify(&samples);
-        assert!(!d.cycled, "a flat active-pirate series must not read cycled");
+        assert!(
+            !d.cycled,
+            "a flat active-pirate series must not read cycled"
+        );
         assert_eq!(d.verdict, Verdict::NoCycle);
     }
 
@@ -1032,7 +1063,10 @@ mod tests {
             .collect();
         let d = classify(&samples);
         assert!(d.cycled);
-        assert!(!d.risk_heterogeneous, "even spread over occupied routes must not read heterogeneous");
+        assert!(
+            !d.risk_heterogeneous,
+            "even spread over occupied routes must not read heterogeneous"
+        );
         assert_eq!(d.verdict, Verdict::RiskEqualized);
     }
 
@@ -1041,7 +1075,10 @@ mod tests {
         let d = classify(&cycling_heterogeneous(&UNIFORM));
         assert!(d.cycled);
         assert!(d.risk_heterogeneous);
-        assert!(!d.outcomes_disperse, "uniform final wallets must not read dispersed");
+        assert!(
+            !d.outcomes_disperse,
+            "uniform final wallets must not read dispersed"
+        );
         assert_eq!(d.verdict, Verdict::DecisionNotTranslating);
     }
 
@@ -1088,8 +1125,7 @@ mod tests {
     fn one_craft_vendor_cfg() -> crate::config::RunConfig {
         use crate::config::{
             BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
-            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
-            TrophicCfg,
+            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg, TrophicCfg,
         };
         use crate::math::Vec3;
         use crate::time::Dt;
@@ -1098,11 +1134,21 @@ mod tests {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 256,
             bodies: vec![BodyInit {
                 mass: 1e-9,
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             }],
             craft: vec![CraftInit {
                 spec: BaseSpec {
@@ -1126,7 +1172,11 @@ mod tests {
                 sells_upgrades: true,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
+            corporations: vec![CorporationInit {
+                treasury_micros: 0,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }],
             contracts: vec![],
             price_cfg: PriceCfg::default(),
             dispatch_cfg: DispatchCfg::default(),
@@ -1161,7 +1211,10 @@ mod tests {
         world.step(&mut vec![buy(UpgradeKind::Escort)]);
         world.step(&mut vec![buy(UpgradeKind::Hull)]);
         let s = sample_window(&world, Tick(0));
-        assert_eq!(s.purchases_escort, 1, "escort purchase counted in the window");
+        assert_eq!(
+            s.purchases_escort, 1,
+            "escort purchase counted in the window"
+        );
         assert_eq!(s.purchases_hull, 1, "hull purchase counted in the window");
         assert_eq!(
             s.yard_treasury_micros,
@@ -1176,8 +1229,14 @@ mod tests {
         assert_eq!(s.gossip_escaped_cum, 0);
         assert_eq!(s.alerts_carried, 0);
         assert_eq!(s.stations_with_news, 0);
-        assert!(s.per_station_alerts.is_empty(), "no reservoirs when media is off");
-        assert!(s.per_station_contacts.is_empty(), "no contacts when media is off");
+        assert!(
+            s.per_station_alerts.is_empty(),
+            "no reservoirs when media is off"
+        );
+        assert!(
+            s.per_station_contacts.is_empty(),
+            "no contacts when media is off"
+        );
         assert!(s.heard_lag_ticks.is_empty());
         assert!(s.heard_hops.is_empty());
         assert_eq!(s.alerts_evicted_cum, 0);
@@ -1201,9 +1260,17 @@ mod tests {
 
         let s = sample_window(&world, Tick(0));
         assert_eq!(s.per_craft_role, vec![0], "role snapshot (Idle rank 0)");
-        assert_eq!(s.per_craft_thrust_ticks, vec![41], "duty numerator snapshot");
+        assert_eq!(
+            s.per_craft_thrust_ticks,
+            vec![41],
+            "duty numerator snapshot"
+        );
         assert_eq!(s.per_craft_burn_milli, vec![599], "FLOOR: 599.9 -> 599");
-        assert_eq!(s.per_craft_min_tank_permille, vec![400], "FLOOR: 400.1 -> 400");
+        assert_eq!(
+            s.per_craft_min_tank_permille,
+            vec![400],
+            "FLOOR: 400.1 -> 400"
+        );
         assert_eq!(
             s.leg_burn_permille,
             vec![77, 123],
@@ -1215,8 +1282,7 @@ mod tests {
     fn sample_window_reads_fuel_book_and_pirate_partition() {
         use crate::config::{
             BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
-            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
-            TrophicCfg,
+            OrbitalElements, PriceCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg, TrophicCfg,
         };
         use crate::math::Vec3;
         use crate::stores::{CraftRole, NavState};
@@ -1228,7 +1294,10 @@ mod tests {
                 master_seed: 7,
                 dt: Dt::new(0.25),
                 softening: 1e-3,
-                substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+                substep_cfg: SubstepCfg {
+                    accel_ref: 1e-3,
+                    max_substeps: 64,
+                },
                 ephemeris_window: 256,
                 bodies: vec![BodyInit {
                     mass: 1e-9,
@@ -1288,15 +1357,27 @@ mod tests {
         let (world, _h) = World::reset(cfg(99)).expect("resolvable cfg");
         let s = sample_window(&world, Tick(0));
         assert_eq!(s.per_station_fuel_stock, vec![17], "Fuel-side stock book");
-        assert_eq!(s.per_station_fuel_price, vec![5_000], "Fuel-side price book");
-        assert_eq!(s.per_station_lurking_pirates, vec![1], "settled lurker at its station");
+        assert_eq!(
+            s.per_station_fuel_price,
+            vec![5_000],
+            "Fuel-side price book"
+        );
+        assert_eq!(
+            s.per_station_lurking_pirates,
+            vec![1],
+            "settled lurker at its station"
+        );
         assert_eq!(s.pirates_commuting, 0);
         assert_eq!(s.pirates_at_haven, 0);
         assert_eq!(s.refuels, 0, "no Refueled events on an inert-refuel world");
         assert_eq!(s.refuel_units, 0);
         assert_eq!(s.refuel_spend_micros, 0);
         let lurking: u32 = s.per_station_lurking_pirates.iter().sum();
-        assert_eq!(lurking + s.pirates_commuting + s.pirates_at_haven, 1, "partition is total");
+        assert_eq!(
+            lurking + s.pirates_commuting + s.pirates_at_haven,
+            1,
+            "partition is total"
+        );
 
         let (mut world, _h) = World::reset(cfg(99)).expect("resolvable cfg");
         world.ships.nav[0] = NavState::Idle;
@@ -1307,17 +1388,24 @@ mod tests {
         let (mut world, _h) = World::reset(cfg(0)).expect("resolvable cfg");
         world.ships.pirate[0].as_mut().unwrap().lie_low_until = Tick(10_000);
         let s = sample_window(&world, Tick(0));
-        assert_eq!(s.pirates_at_haven, 1, "lying low on the hideout body reads at-haven");
+        assert_eq!(
+            s.pirates_at_haven, 1,
+            "lying low on the hideout body reads at-haven"
+        );
         assert_eq!(s.pirates_commuting, 0);
-        assert_eq!(s.per_station_lurking_pirates, vec![0], "a refugee is not a lurker");
+        assert_eq!(
+            s.per_station_lurking_pirates,
+            vec![0],
+            "a refugee is not a lurker"
+        );
     }
 
     #[test]
     fn sample_window_counts_refuels() {
         use crate::config::{
             BaseSpec, BodyInit, CorporationInit, CraftInit, DispatchCfg, GuidanceParams,
-            OrbitalElements, PriceCfg, RefuelCfg, RunConfig, ShipyardCfg, StationInit,
-            SubstepCfg, TrophicCfg,
+            OrbitalElements, PriceCfg, RefuelCfg, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
+            TrophicCfg,
         };
         use crate::math::Vec3;
         use crate::stores::CraftRole;
@@ -1328,7 +1416,10 @@ mod tests {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 256,
             bodies: vec![BodyInit {
                 mass: 1e-9,
@@ -1363,7 +1454,11 @@ mod tests {
                 sells_upgrades: false,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
+            corporations: vec![CorporationInit {
+                treasury_micros: 0,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }],
             contracts: vec![],
             price_cfg: PriceCfg {
                 base_micros: vec![0i64, 5_000i64],
@@ -1375,7 +1470,10 @@ mod tests {
             trophic: TrophicCfg::default(),
             shipyard: ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
-            refuel: RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 },
+            refuel: RefuelCfg {
+                lot_mass: 2.5e-10,
+                corp_index: 0,
+            },
             goods: crate::config::GoodsCfg::default(),
             exchange: crate::config::ExchangeCfg::default(),
             arbitrage: crate::config::ArbitrageCfg::default(),
@@ -1385,9 +1483,19 @@ mod tests {
         world.step(&mut Vec::new());
         let s = sample_window(&world, Tick(0));
         assert_eq!(s.refuels, 1, "one Refueled event in the window");
-        assert_eq!(s.refuel_units, 3, "units = min(need 3, stock 10, afford 200)");
-        assert_eq!(s.refuel_spend_micros, 15_000, "3 units x seeded 5_000 micros");
-        assert_eq!(s.per_station_fuel_stock, vec![7], "stock book debited by the purchase");
+        assert_eq!(
+            s.refuel_units, 3,
+            "units = min(need 3, stock 10, afford 200)"
+        );
+        assert_eq!(
+            s.refuel_spend_micros, 15_000,
+            "3 units x seeded 5_000 micros"
+        );
+        assert_eq!(
+            s.per_station_fuel_stock,
+            vec![7],
+            "stock book debited by the purchase"
+        );
     }
 
     /// Phase-0b FLOOR pin (world-gets-big spec §7/§8): no f64-to-fixed-point
@@ -1396,13 +1504,33 @@ mod tests {
     #[test]
     fn permille_floor_is_floor_never_round() {
         assert_eq!(permille_floor(0.35, 1.0), 350, "milli-AU radius read");
-        assert_eq!(permille_floor(1.999, 1000.0), 1, "FLOOR, never round-half-up");
-        assert_eq!(permille_floor(0.9999999, 1.0), 999, "sub-unit stays below 1000");
+        assert_eq!(
+            permille_floor(1.999, 1000.0),
+            1,
+            "FLOOR, never round-half-up"
+        );
+        assert_eq!(
+            permille_floor(0.9999999, 1.0),
+            999,
+            "sub-unit stays below 1000"
+        );
         assert_eq!(permille_floor(1.0, 1.0), 1000, "exact full tank reads 1000");
-        assert_eq!(permille_floor(1.0, 0.0), 0, "zero denominator reads the 0 sentinel");
+        assert_eq!(
+            permille_floor(1.0, 0.0),
+            0,
+            "zero denominator reads the 0 sentinel"
+        );
         assert_eq!(permille_floor(1.0, -1.0), 0, "negative denominator reads 0");
-        assert_eq!(permille_floor(-1.0, 1.0), 0, "negative numerator clamps to 0");
-        assert_eq!(permille_floor(f64::NAN, 1.0), 0, "non-finite reads the 0 sentinel");
+        assert_eq!(
+            permille_floor(-1.0, 1.0),
+            0,
+            "negative numerator clamps to 0"
+        );
+        assert_eq!(
+            permille_floor(f64::NAN, 1.0),
+            0,
+            "non-finite reads the 0 sentinel"
+        );
     }
 
     // ---- media lab bench (Task 8): labeled synthetics, one per
@@ -1442,7 +1570,10 @@ mod tests {
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| m((w + 1) * WINDOW_TICKS, 0, 0, 2, 0, 0, 0, &[0, 0, 0]))
             .collect();
-        assert_eq!(media_classify(&samples, &[true, true, true]), MediaReading::NoMedia);
+        assert_eq!(
+            media_classify(&samples, &[true, true, true]),
+            MediaReading::NoMedia
+        );
     }
 
     #[test]
@@ -1452,7 +1583,16 @@ mod tests {
         // — the meaningful propagation zero is CRAFT hearings.
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| {
-                m((w + 1) * WINDOW_TICKS, 1, 0, 1, 0, (w + 1) as u32, 0, &[1, 0, 0])
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    1,
+                    0,
+                    1,
+                    0,
+                    (w + 1) as u32,
+                    0,
+                    &[1, 0, 0],
+                )
             })
             .collect();
         assert_eq!(
@@ -1469,7 +1609,16 @@ mod tests {
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| {
                 let heard = if w < 6 { 2 } else { 0 };
-                m((w + 1) * WINDOW_TICKS, 1, heard, 1, 3, (w + 1) as u32, 4, &[2, 1, 0])
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    1,
+                    heard,
+                    1,
+                    3,
+                    (w + 1) as u32,
+                    4,
+                    &[2, 1, 0],
+                )
             })
             .collect();
         assert_eq!(
@@ -1488,7 +1637,16 @@ mod tests {
             .map(|w| {
                 let (born, heard, robs) = if w < 6 { (1, 2, 1) } else { (0, 0, 0) };
                 let cum = (w + 1).min(6) as u32;
-                m((w + 1) * WINDOW_TICKS, born, heard, robs, 3, cum, 4, &[2, 1, 0])
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    born,
+                    heard,
+                    robs,
+                    3,
+                    cum,
+                    4,
+                    &[2, 1, 0],
+                )
             })
             .collect();
         assert_eq!(
@@ -1506,7 +1664,16 @@ mod tests {
             .map(|w| {
                 let born_cum = ((w + 1) * 2) as u32;
                 let escaped_cum = born_cum.saturating_sub(1);
-                m((w + 1) * WINDOW_TICKS, 2, 3, 1, 6, born_cum, escaped_cum, &[2, 1, 1])
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    2,
+                    3,
+                    1,
+                    6,
+                    born_cum,
+                    escaped_cum,
+                    &[2, 1, 1],
+                )
             })
             .collect();
         assert_eq!(
@@ -1521,7 +1688,16 @@ mod tests {
         // incomplete: the reading the cut is aiming for.
         let samples: Vec<TrophicSample> = (0..12u64)
             .map(|w| {
-                m((w + 1) * WINDOW_TICKS, 1, 1, 1, 2, (w + 1) as u32, 6, &[2, 0, 0])
+                m(
+                    (w + 1) * WINDOW_TICKS,
+                    1,
+                    1,
+                    1,
+                    2,
+                    (w + 1) as u32,
+                    6,
+                    &[2, 0, 0],
+                )
             })
             .collect();
         assert_eq!(
@@ -1606,25 +1782,35 @@ mod tests {
 
     #[test]
     fn sample_window_has_per_station_stock_and_price_matrices() {
-        use crate::{scenario_trophic, World};
+        use crate::{World, scenario_trophic};
         let (world, _) = World::reset(scenario_trophic(7)).expect("reset");
         let s = sample_window(&world, crate::time::Tick(0));
         // After A0.1 these fields exist and have n_stations entries.
         let n = world.stations.ids.len();
-        assert_eq!(s.per_station_stock.len(), n,
-            "per_station_stock: one row per station");
-        assert_eq!(s.per_station_price.len(), n,
-            "per_station_price: one row per station");
+        assert_eq!(
+            s.per_station_stock.len(),
+            n,
+            "per_station_stock: one row per station"
+        );
+        assert_eq!(
+            s.per_station_price.len(),
+            n,
+            "per_station_price: one row per station"
+        );
         // Each row covers all resources (N_RESOURCES columns today).
         // Fuel column must equal the existing per_station_fuel_stock scalar.
         let fuel_r = crate::economy::Good::FUEL.index();
         for (row, stock) in s.per_station_stock.iter().enumerate() {
-            assert_eq!(stock[fuel_r], s.per_station_fuel_stock[row],
-                "per_station_stock fuel column matches existing fuel scalar at row {row}");
+            assert_eq!(
+                stock[fuel_r], s.per_station_fuel_stock[row],
+                "per_station_stock fuel column matches existing fuel scalar at row {row}"
+            );
         }
         for (row, price) in s.per_station_price.iter().enumerate() {
-            assert_eq!(price[fuel_r], s.per_station_fuel_price[row],
-                "per_station_price fuel column matches existing fuel scalar at row {row}");
+            assert_eq!(
+                price[fuel_r], s.per_station_fuel_price[row],
+                "per_station_price fuel column matches existing fuel scalar at row {row}"
+            );
         }
     }
 }

@@ -12,9 +12,14 @@ use crate::types::{Lod, NavDest};
 #[derive(Clone, Copy, Debug)]
 pub enum NavState {
     Idle,
-    Seeking { dest: NavDest, dv_remaining: f64 },
+    Seeking {
+        dest: NavDest,
+        dv_remaining: f64,
+    },
     /// Direct thrust (no destination, no Δv budget — fuel is the budget).
-    DirectThrust { throttle_vec: Vec3 },
+    DirectThrust {
+        throttle_vec: Vec3,
+    },
 }
 
 /// Effective ship parameters = base × component-mods × wear. In v1 the mod and
@@ -415,8 +420,14 @@ mod tests {
         let boosted = effective_params(&spec, &EffectiveMods { thrust_factor: 1.5 });
         assert_eq!(boosted.max_thrust, 375.0);
         assert_eq!(boosted.dry_mass, spec.base_dry_mass, "dry_mass unaffected");
-        assert_eq!(boosted.exhaust_velocity, spec.base_exhaust_velocity, "v_e unaffected");
-        assert_eq!(boosted.fuel_capacity, spec.base_fuel_capacity, "capacity unaffected");
+        assert_eq!(
+            boosted.exhaust_velocity, spec.base_exhaust_velocity,
+            "v_e unaffected"
+        );
+        assert_eq!(
+            boosted.fuel_capacity, spec.base_fuel_capacity,
+            "capacity unaffected"
+        );
     }
 
     #[test]
@@ -592,7 +603,11 @@ mod tests {
         assert_eq!(ship.prev_inside_dest.len(), n);
         assert_eq!(ship.prev_pos.len(), n);
         assert_eq!(ship.mods.len(), n);
-        assert_eq!(ship.mods[0], EffectiveMods::IDENTITY, "push initializes mods to IDENTITY");
+        assert_eq!(
+            ship.mods[0],
+            EffectiveMods::IDENTITY,
+            "push initializes mods to IDENTITY"
+        );
         assert_eq!(ship.mods[1], EffectiveMods::IDENTITY);
 
         // ids_at wraps the dense row into a typed CraftId.

@@ -203,7 +203,11 @@ pub enum EventKind {
     /// station row. `breakout` = the landing lies beyond `pirate_max_reach_au`
     /// of the draw's own anchor (fresh post-refuge draw anchors at the
     /// pirate's position; hungry relocation anchors at the old lurk station).
-    LurkMoved { pirate: CraftId, to_station: u32, breakout: bool },
+    LurkMoved {
+        pirate: CraftId,
+        to_station: u32,
+        breakout: bool,
+    },
     // --- Goods-as-goods events (rung A; hash-neutral like all events) ---
     /// An Exchange arbitrage posting was withdrawn — either the spread no longer
     /// clears at current prices (Offered recheck) or the corp cannot fund the
@@ -467,8 +471,14 @@ mod tests {
         let fulfilled = EventKind::ContractFulfilled { contract, hauler };
         // Goods-as-goods rung A: TradeBought/TradeSold are Copy+PartialEq too.
         let trade_bought = EventKind::TradeBought {
-            craft: CraftId { slot: 0, generation: 0 },
-            station: StationId { slot: 0, generation: 0 },
+            craft: CraftId {
+                slot: 0,
+                generation: 0,
+            },
+            station: StationId {
+                slot: 0,
+                generation: 0,
+            },
             good: Good(0),
             qty: 3,
             price_micros: 100_000,
@@ -508,15 +518,27 @@ mod tests {
 
     #[test]
     fn offer_withdrawn_event_is_copy_and_partial_eq() {
-        use crate::ids::CorporationId;
         use crate::ids::ContractId;
-        let cid = ContractId { slot: 0, generation: 0 };
-        let corp = CorporationId { slot: 1, generation: 0 };
-        let ev = EventKind::OfferWithdrawn { contract: cid, corp };
+        use crate::ids::CorporationId;
+        let cid = ContractId {
+            slot: 0,
+            generation: 0,
+        };
+        let corp = CorporationId {
+            slot: 1,
+            generation: 0,
+        };
+        let ev = EventKind::OfferWithdrawn {
+            contract: cid,
+            corp,
+        };
         let ev_copy = ev;
         assert_eq!(ev, ev_copy);
         let prod = EventKind::Production {
-            producer: crate::ids::ProducerId { slot: 0, generation: 0 },
+            producer: crate::ids::ProducerId {
+                slot: 0,
+                generation: 0,
+            },
             resource: crate::economy::Good::ORE,
             qty: 1,
         };

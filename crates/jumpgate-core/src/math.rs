@@ -143,12 +143,20 @@ mod tests {
         let got = tsiolkovsky_dv(1.0e-2, 1.0e-9, 1.0e-9);
         let want = 1.0e-2 * ((1.0e-9_f64 + 1.0e-9) / 1.0e-9).ln(); // = 1e-2 * ln 2
         assert_eq!(got, want);
-        assert_eq!(got.to_bits(), want.to_bits(), "must match bit-for-bit (grouping)");
+        assert_eq!(
+            got.to_bits(),
+            want.to_bits(),
+            "must match bit-for-bit (grouping)"
+        );
     }
 
     #[test]
     fn tsiolkovsky_dv_degenerate_inputs_return_zero() {
-        assert_eq!(tsiolkovsky_dv(1.0e-2, 0.0, 1.0), 0.0, "no dry mass -> 0, not Inf");
+        assert_eq!(
+            tsiolkovsky_dv(1.0e-2, 0.0, 1.0),
+            0.0,
+            "no dry mass -> 0, not Inf"
+        );
         assert_eq!(tsiolkovsky_dv(1.0e-2, 1.0, 0.0), 0.0, "no propellant -> 0");
         assert_eq!(tsiolkovsky_dv(1.0e-2, -1.0, 1.0), 0.0, "negative dry -> 0");
     }

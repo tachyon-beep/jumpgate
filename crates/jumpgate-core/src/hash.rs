@@ -434,7 +434,10 @@ pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
         h.write_u64(generation as u64);
         h.write_u64(world.stations.body[i].slot as u64);
         h.write_u64(world.stations.body[i].generation as u64);
-        for (s, p) in world.stations.stock[i].iter().zip(world.stations.price_micros[i].iter()) {
+        for (s, p) in world.stations.stock[i]
+            .iter()
+            .zip(world.stations.price_micros[i].iter())
+        {
             h.write_u64(*s as u64);
             h.write_u64(*p as u64);
         }
@@ -456,7 +459,11 @@ pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
     let mut cids: Vec<(u32, u32)> = world.corporations.ids.iter_ids().collect();
     cids.sort();
     for (slot, generation) in cids {
-        let i = world.corporations.ids.dense_index(slot, generation).unwrap();
+        let i = world
+            .corporations
+            .ids
+            .dense_index(slot, generation)
+            .unwrap();
         h.write_u64(slot as u64);
         h.write_u64(generation as u64);
         h.write_u64(world.corporations.treasury_micros[i] as u64);
@@ -815,15 +822,21 @@ mod tests {
     /// goldens and the economy-free parity test leave it as dead code otherwise —
     /// the advisor's "vacuous guard" gap). Deterministic: no RNG in population.
     fn populated_world() -> World {
-        use crate::economy::{ContractStatus, Recipe, Good};
+        use crate::economy::{ContractStatus, Good, Recipe};
         use crate::stores::CraftRole;
         let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let body = w.body_ids()[0];
-        let st = w.stations.push(body, vec![10i64, 5i64], vec![100i64, 200i64]);
+        let st = w
+            .stations
+            .push(body, vec![10i64, 5i64], vec![100i64, 200i64]);
         let corp = w.corporations.push(1_000_000, st);
         let _prod = w.producers.push(
             st,
-            Recipe { input: Some((Good::ORE, 1)), output: Some((Good::FUEL, 2)), interval: 3 },
+            Recipe {
+                input: Some((Good::ORE, 1)),
+                output: Some((Good::FUEL, 2)),
+                interval: 3,
+            },
         );
         let k = w.contracts.push(corp, Good::FUEL, 3, st, st, 500_000);
         w.contracts.status[0] = ContractStatus::Accepted;
@@ -863,7 +876,10 @@ mod tests {
 
     #[test]
     fn populated_world_hashes_deterministically() {
-        assert_eq!(state_hash(&populated_world()), state_hash(&populated_world()));
+        assert_eq!(
+            state_hash(&populated_world()),
+            state_hash(&populated_world())
+        );
     }
 
     #[test]
@@ -890,26 +906,51 @@ mod tests {
             ($name:expr, $mut:expr) => {{
                 let mut w = populated_world();
                 $mut(&mut w);
-                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+                assert_ne!(
+                    state_hash(&w),
+                    h0,
+                    concat!($name, " must be folded into state_hash")
+                );
             }};
         }
-        moves!("craft role", |w: &mut World| w.ships.role[0] = CraftRole::Idle);
-        moves!("cargo qty", |w: &mut World| w.ships.cargo[0] = Some((Good::FUEL, 99)));
+        moves!("craft role", |w: &mut World| w.ships.role[0] =
+            CraftRole::Idle);
+        moves!("cargo qty", |w: &mut World| w.ships.cargo[0] =
+            Some((Good::FUEL, 99)));
         moves!("cargo presence", |w: &mut World| w.ships.cargo[0] = None);
-        moves!("cargo resource", |w: &mut World| w.ships.cargo[0] = Some((Good::ORE, 2)));
-        moves!("craft credits", |w: &mut World| w.ships.credits_micros[0] = 43);
-        moves!("craft contract handle", |w: &mut World| w.ships.contract[0] = None);
+        moves!("cargo resource", |w: &mut World| w.ships.cargo[0] =
+            Some((Good::ORE, 2)));
+        moves!("craft credits", |w: &mut World| w.ships.credits_micros[0] =
+            43);
+        moves!("craft contract handle", |w: &mut World| w.ships.contract
+            [0] = None);
         moves!("econ.mined", |w: &mut World| w.econ.mined[0] = 6);
         moves!("econ.consumed", |w: &mut World| w.econ.consumed[1] = 4);
         moves!("station stock", |w: &mut World| w.stations.stock[0][0] = 11);
-        moves!("station price", |w: &mut World| w.stations.price_micros[0][1] = 201);
-        moves!("corp treasury", |w: &mut World| w.corporations.treasury_micros[0] = 999_999);
-        moves!("producer recipe interval", |w: &mut World| w.producers.recipe[0].interval = 4);
-        moves!("contract status", |w: &mut World| w.contracts.status[0] = ContractStatus::Completed);
-        moves!("contract escrow", |w: &mut World| w.contracts.escrow_micros[0] = 250_001);
+        moves!("station price", |w: &mut World| w.stations.price_micros
+            [0][1] = 201);
+        moves!("corp treasury", |w: &mut World| w
+            .corporations
+            .treasury_micros[0] =
+            999_999);
+        moves!("producer recipe interval", |w: &mut World| w
+            .producers
+            .recipe[0]
+            .interval =
+            4);
+        moves!("contract status", |w: &mut World| w.contracts.status[0] =
+            ContractStatus::Completed);
+        moves!("contract escrow", |w: &mut World| w
+            .contracts
+            .escrow_micros[0] =
+            250_001);
         moves!("contract qty", |w: &mut World| w.contracts.qty[0] = 4);
-        moves!("contract reward", |w: &mut World| w.contracts.reward_micros[0] = 500_001);
-        moves!("contract hauler", |w: &mut World| w.contracts.hauler[0] = None);
+        moves!("contract reward", |w: &mut World| w
+            .contracts
+            .reward_micros[0] =
+            500_001);
+        moves!("contract hauler", |w: &mut World| w.contracts.hauler[0] =
+            None);
     }
 
     #[test]
@@ -920,7 +961,11 @@ mod tests {
         let h0 = state_hash(&populated_world());
         let mut w1 = populated_world();
         w1.ships.risk_appetite[0] = 500;
-        assert_ne!(state_hash(&w1), h0, "risk_appetite must be folded into state_hash");
+        assert_ne!(
+            state_hash(&w1),
+            h0,
+            "risk_appetite must be folded into state_hash"
+        );
 
         // pirate folds self-delimitingly: None vs Some differ, and each is stable.
         let mut none_a = populated_world();
@@ -969,7 +1014,11 @@ mod tests {
             let mut p = ps;
             mutate(&mut p);
             w.ships.pirate[0] = Some(p);
-            assert_ne!(state_hash(&w), base, "each PirateState field must be folded");
+            assert_ne!(
+                state_hash(&w),
+                base,
+                "each PirateState field must be folded"
+            );
         }
     }
 
@@ -986,12 +1035,18 @@ mod tests {
             ($name:expr, $mut:expr) => {{
                 let mut w = populated_world();
                 $mut(&mut w);
-                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+                assert_ne!(
+                    state_hash(&w),
+                    h0,
+                    concat!($name, " must be folded into state_hash")
+                );
             }};
         }
         // HASH_FIELD_ORDER word 27: the fleet ledger (both counts).
-        moves!("upgrades.hulls", |w: &mut World| w.ships.upgrades[0].hulls = 1);
-        moves!("upgrades.escorts", |w: &mut World| w.ships.upgrades[0].escorts = 2);
+        moves!("upgrades.hulls", |w: &mut World| w.ships.upgrades[0]
+            .hulls = 1);
+        moves!("upgrades.escorts", |w: &mut World| w.ships.upgrades[0]
+            .escorts = 2);
         // HASH_FIELD_ORDER word 28: dock-gated info freshness.
         moves!("info_tick", |w: &mut World| w.ships.info_tick[0] = Tick(9));
 
@@ -1010,7 +1065,10 @@ mod tests {
         let hp = state_hash(&pbase);
         let mut pmoved = populated_world();
         pirated(&mut pmoved);
-        pmoved.ships.pirate[0].as_mut().unwrap().engage_cooldown_until = Tick(77);
+        pmoved.ships.pirate[0]
+            .as_mut()
+            .unwrap()
+            .engage_cooldown_until = Tick(77);
         assert_ne!(
             state_hash(&pmoved),
             hp,
@@ -1060,7 +1118,11 @@ mod tests {
             ($name:expr, $mut:expr) => {{
                 let mut w = populated_world();
                 $mut(&mut w);
-                assert_ne!(state_hash(&w), h0, concat!($name, " must be folded into state_hash"));
+                assert_ne!(
+                    state_hash(&w),
+                    h0,
+                    concat!($name, " must be folded into state_hash")
+                );
             }};
         }
         // HASH_FIELD_ORDER word 30: craft gossip PRESENCE (None -> Some(empty)
@@ -1092,18 +1154,29 @@ mod tests {
         gossiped(&mut gbase);
         let hg = state_hash(&gbase);
         let field_probes = [
-            ("alert_seq", (|a: &mut GossipAlert| a.alert_seq = 9) as fn(&mut GossipAlert)),
+            (
+                "alert_seq",
+                (|a: &mut GossipAlert| a.alert_seq = 9) as fn(&mut GossipAlert),
+            ),
             ("route", |a: &mut GossipAlert| a.route = 5),
             ("pirate_slot", |a: &mut GossipAlert| a.pirate_slot = 6),
             ("rob_tick", |a: &mut GossipAlert| a.rob_tick = Tick(41)),
-            ("claimed_value_micros", |a: &mut GossipAlert| a.claimed_value_micros = 1_500_001),
-            ("first_heard", |a: &mut GossipAlert| a.first_heard = Tick(45)),
+            ("claimed_value_micros", |a: &mut GossipAlert| {
+                a.claimed_value_micros = 1_500_001
+            }),
+            ("first_heard", |a: &mut GossipAlert| {
+                a.first_heard = Tick(45)
+            }),
             ("hops", |a: &mut GossipAlert| a.hops = 2),
         ];
         for (name, mutate) in field_probes {
             let mut w = populated_world();
             gossiped(&mut w);
-            mutate(w.ships.gossip[0].as_mut().unwrap().slots[0].as_mut().unwrap());
+            mutate(
+                w.ships.gossip[0].as_mut().unwrap().slots[0]
+                    .as_mut()
+                    .unwrap(),
+            );
             assert_ne!(
                 state_hash(&w),
                 hg,
@@ -1120,7 +1193,10 @@ mod tests {
         let mut sbase = populated_world();
         stationed(&mut sbase);
         let hs = state_hash(&sbase);
-        assert_ne!(hs, h0, "station gossip buffer presence must be folded (word 31)");
+        assert_ne!(
+            hs, h0,
+            "station gossip buffer presence must be folded (word 31)"
+        );
         let mut sheld = populated_world();
         stationed(&mut sheld);
         sheld.station_gossip[0].slots[0] = Some(alert);
@@ -1268,8 +1344,7 @@ mod tests {
         // write_craft_economy. A non-empty hold must produce a different hash
         // than an empty hold. HASH_FORMAT_VERSION must be 6.
         assert_eq!(
-            HASH_FORMAT_VERSION,
-            6,
+            HASH_FORMAT_VERSION, 6,
             "A2 requires HASH_FORMAT_VERSION=6; update the version before this test passes"
         );
         let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
@@ -1327,7 +1402,10 @@ mod tests {
     fn pending_trade_buy_not_none_at_hash_point_panics() {
         let (mut world, _) = World::reset(cfg_with_craft_x(2.0)).expect("reset ok");
         // Force a Some into the column (simulating a broken settle stage).
-        let sentinel = crate::ids::StationId { slot: 0, generation: 0 };
+        let sentinel = crate::ids::StationId {
+            slot: 0,
+            generation: 0,
+        };
         world.ships.pending_trade_buy[0] = Some((crate::economy::Good(0), 1, sentinel));
         // state_hash must debug_assert-panic.
         let _ = crate::hash::state_hash(&world);
@@ -1339,7 +1417,10 @@ mod tests {
     #[should_panic(expected = "pending_trade_sell must be fully consumed")]
     fn pending_trade_sell_not_none_at_hash_point_panics() {
         let (mut world, _) = World::reset(cfg_with_craft_x(2.0)).expect("reset ok");
-        let sentinel = crate::ids::StationId { slot: 0, generation: 0 };
+        let sentinel = crate::ids::StationId {
+            slot: 0,
+            generation: 0,
+        };
         world.ships.pending_trade_sell[0] = Some(sentinel);
         let _ = crate::hash::state_hash(&world);
     }

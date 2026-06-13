@@ -57,13 +57,9 @@ pub enum CommandKind {
     },
     /// Intent to take a contract: ingestion sets the target craft's `contract`
     /// column + `role = Hauler` (deferred state transition lives in resolve_contracts).
-    AcceptContract {
-        contract: crate::ids::ContractId,
-    },
+    AcceptContract { contract: crate::ids::ContractId },
     /// Set the target craft's economic role.
-    SetRole {
-        role: crate::stores::CraftRole,
-    },
+    SetRole { role: crate::stores::CraftRole },
     /// Direct thrust intent (tactical Rung 1): world-frame throttle vector,
     /// |v| in [0,1] = throttle fraction (over-length clamps to 1 at the
     /// autopilot pass-through). Persists as NavState::DirectThrust until replaced.
@@ -143,8 +139,14 @@ mod tests {
     #[test]
     fn route_key_is_directed_hashable_ordered() {
         use std::collections::HashSet;
-        let a = StationId { slot: 0, generation: 0 };
-        let b = StationId { slot: 1, generation: 0 };
+        let a = StationId {
+            slot: 0,
+            generation: 0,
+        };
+        let b = StationId {
+            slot: 1,
+            generation: 0,
+        };
         let ab = RouteKey(a, b);
         let ba = RouteKey(b, a);
         // Directed: (a,b) != (b,a).

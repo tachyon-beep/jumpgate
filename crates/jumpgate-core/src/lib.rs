@@ -51,7 +51,9 @@ pub use config::{
     GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RunConfig, StationInit,
     SubstepCfg,
 };
-pub use contract::{Command, Event, EventKind, Integrator, RefuelDeniedReason, StateView, command_sort_key};
+pub use contract::{
+    Command, Event, EventKind, Integrator, RefuelDeniedReason, StateView, command_sort_key,
+};
 pub use diagnostics::{Diagnosis, TrophicSample, Verdict, classify, sample_window};
 pub use ephemeris::Ephemeris;
 pub use events::{EventStream, FUEL_EMPTY_EPS, detect_boundary_events};
@@ -71,8 +73,8 @@ pub use rng::{RngStream, RngStreams};
 pub use scenario::{apply_knob, scenario_frontier, scenario_trophic};
 pub use ship::thrust_accel_and_burn;
 pub use stores::{
-    BodyStore, CraftRole, CraftStore, Effective, EffectiveMods, NavState, PirateState,
-    UpgradeKind, UpgradeLevels, effective_params,
+    BodyStore, CraftRole, CraftStore, Effective, EffectiveMods, NavState, PirateState, UpgradeKind,
+    UpgradeLevels, effective_params,
 };
 pub use time::{Dt, Tick, sim_time};
 pub use types::{CommandKind, EntityRef, Lod, NavDest, RouteKey, Target};

@@ -86,7 +86,11 @@ pub struct GuidanceParams {
 
 impl Default for GuidanceParams {
     fn default() -> Self {
-        GuidanceParams { cruise_burn_fraction: 0.25, k_brake: 0.5, v_err_eps: 1.0e-4 }
+        GuidanceParams {
+            cruise_burn_fraction: 0.25,
+            k_brake: 0.5,
+            v_err_eps: 1.0e-4,
+        }
     }
 }
 
@@ -429,7 +433,10 @@ pub struct RefuelCfg {
 
 impl Default for RefuelCfg {
     fn default() -> Self {
-        RefuelCfg { lot_mass: 0.0, corp_index: 0 }
+        RefuelCfg {
+            lot_mass: 0.0,
+            corp_index: 0,
+        }
     }
 }
 
@@ -464,8 +471,14 @@ impl Default for GoodsCfg {
     fn default() -> Self {
         GoodsCfg {
             goods: vec![
-                GoodSpec { name: "Ore".to_string(),  unit_mass_milli: 1000 },
-                GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
+                GoodSpec {
+                    name: "Ore".to_string(),
+                    unit_mass_milli: 1000,
+                },
+                GoodSpec {
+                    name: "Fuel".to_string(),
+                    unit_mass_milli: 1000,
+                },
             ],
         }
     }
@@ -630,18 +643,18 @@ impl RunConfig {
             bodies,
             craft,
             guidance, // NEW (D4): destructure forces folding below
-            stations,     // NEW (economy): destructure forces folding below
+            stations, // NEW (economy): destructure forces folding below
             producers,
             corporations,
             contracts,
             price_cfg,
             dispatch_cfg,
-            trophic,  // NEW (pirates rung A): destructure forces folding below
-            shipyard, // NEW (pirates rung A): destructure forces folding below
-            media,    // NEW (media rung cut 1): destructure forces folding below
-            refuel,   // NEW (world-gets-big): destructure forces folding below
-            goods,    // NEW (A1b): folded at config tail in A3.2 (CONFIG_FIELD_ORDER 27)
-            exchange, // NEW (A3.2): folded at config tail (CONFIG_FIELD_ORDER 28)
+            trophic,   // NEW (pirates rung A): destructure forces folding below
+            shipyard,  // NEW (pirates rung A): destructure forces folding below
+            media,     // NEW (media rung cut 1): destructure forces folding below
+            refuel,    // NEW (world-gets-big): destructure forces folding below
+            goods,     // NEW (A1b): folded at config tail in A3.2 (CONFIG_FIELD_ORDER 27)
+            exchange,  // NEW (A3.2): folded at config tail (CONFIG_FIELD_ORDER 28)
             arbitrage, // NEW (A3.2): folded at config tail (CONFIG_FIELD_ORDER 29..=30)
         } = self;
         let mut h = ConfigFnv::new();
@@ -841,7 +854,10 @@ impl RunConfig {
         // byte stream above stays byte-identical; this only EXTENDS it.
         // Exhaustive destructure: a NEW RefuelCfg field is a COMPILE ERROR here
         // until explicitly folded (the D10/M6 discipline).
-        let RefuelCfg { lot_mass, corp_index } = refuel;
+        let RefuelCfg {
+            lot_mass,
+            corp_index,
+        } = refuel;
         h.write_u64(lot_mass.to_bits());
         h.write_u64(*corp_index as u64);
         // GOODS-AS-GOODS RUNG A (TAIL, append-only — CONFIG_FIELD_ORDER 27..=30).
@@ -850,10 +866,16 @@ impl RunConfig {
         // COUNT FIRST (anti-aliasing delimiter, config fold discipline):
         h.write_u64(goods.len() as u64);
         for g in goods {
-            let GoodSpec { name: _, unit_mass_milli } = g; // name NEVER folded (OD-7)
+            let GoodSpec {
+                name: _,
+                unit_mass_milli,
+            } = g; // name NEVER folded (OD-7)
             h.write_u64(*unit_mass_milli as u64);
         }
-        let ExchangeCfg { corp_index: ex_corp, active } = exchange;
+        let ExchangeCfg {
+            corp_index: ex_corp,
+            active,
+        } = exchange;
         h.write_u64(*ex_corp as u64);
         h.write_u64(*active as u64);
         let ArbitrageCfg {
@@ -1013,7 +1035,10 @@ mod tests {
 
         // ExchangeCfg.active=true must move the hash.
         let mut ex_modified = sample();
-        ex_modified.exchange = crate::config::ExchangeCfg { corp_index: 0, active: true };
+        ex_modified.exchange = crate::config::ExchangeCfg {
+            corp_index: 0,
+            active: true,
+        };
         assert_ne!(
             base.config_hash(),
             ex_modified.config_hash(),
@@ -1031,11 +1056,17 @@ mod tests {
 
         // CorporationInit.arb_premium_micros must move the hash.
         let mut corp_modified = sample();
-        corp_modified.corporations =
-            vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 7 }];
+        corp_modified.corporations = vec![CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 0,
+            arb_premium_micros: 7,
+        }];
         let mut base_with_corp = sample();
-        base_with_corp.corporations =
-            vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }];
+        base_with_corp.corporations = vec![CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 0,
+            arb_premium_micros: 0,
+        }];
         assert_ne!(
             base_with_corp.config_hash(),
             corp_modified.config_hash(),
@@ -1198,7 +1229,10 @@ mod tests {
         c.craft[0].role = crate::stores::CraftRole::Pirate;
         let (w, _) = crate::world::World::reset(c).expect("resolvable config");
         let p = w.ships.pirate[0].expect("Pirate role mints PirateState at reset");
-        assert_eq!(p.food_micros, 1_500_000, "minted with the configured grubstake");
+        assert_eq!(
+            p.food_micros, 1_500_000,
+            "minted with the configured grubstake"
+        );
         assert_eq!(p.notoriety, 0);
         assert_eq!(p.lie_low_until, crate::time::Tick(0));
         assert_eq!(w.ships.role[0], crate::stores::CraftRole::Pirate);
@@ -1297,9 +1331,15 @@ mod tests {
     #[test]
     fn goods_cfg_default_names_match_good_debug() {
         let cfg = GoodsCfg::default();
-        assert_eq!(cfg.goods[0].name, format!("{:?}", crate::economy::Good::ORE),
-            "GoodsCfg default name for index 0 must match Good::ORE Debug string");
-        assert_eq!(cfg.goods[1].name, format!("{:?}", crate::economy::Good::FUEL),
-            "GoodsCfg default name for index 1 must match Good::FUEL Debug string");
+        assert_eq!(
+            cfg.goods[0].name,
+            format!("{:?}", crate::economy::Good::ORE),
+            "GoodsCfg default name for index 0 must match Good::ORE Debug string"
+        );
+        assert_eq!(
+            cfg.goods[1].name,
+            format!("{:?}", crate::economy::Good::FUEL),
+            "GoodsCfg default name for index 1 must match Good::FUEL Debug string"
+        );
     }
 }

@@ -1,7 +1,7 @@
 use jumpgate_core::{
-    record_run, replay_run, BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt,
-    EntityRef, EventKind, GuidanceParams, NavDest, OrbitalElements, Provenance, RunConfig,
-    StateView, SubstepCfg, Target, Tick, Vec3, World,
+    BaseSpec, BodyInit, Command, CommandKind, CraftId, CraftInit, Dt, EntityRef, EventKind,
+    GuidanceParams, NavDest, OrbitalElements, Provenance, RunConfig, StateView, SubstepCfg, Target,
+    Tick, Vec3, World, record_run, replay_run,
 };
 
 /// A 2-body, 1-craft scenario big enough to exercise gravity + a thrust burn.
@@ -10,16 +10,33 @@ fn base_config() -> RunConfig {
         master_seed: 0x9E37_79B9_7F4A_7C15_u64, // arbitrary fixed seed (golden-ratio bits)
         dt: Dt::new(0.5),
         softening: 1e-4,
-        substep_cfg: SubstepCfg { accel_ref: 1.0, max_substeps: 16 },
+        substep_cfg: SubstepCfg {
+            accel_ref: 1.0,
+            max_substeps: 16,
+        },
         ephemeris_window: 4096,
         bodies: vec![
             BodyInit {
                 mass: 1.0,
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
             BodyInit {
                 mass: 3.0e-6,
-                elements: OrbitalElements { a: 1.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 1.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
         ],
         craft: vec![CraftInit {
@@ -76,7 +93,10 @@ fn discover_craft_id() -> CraftId {
     assert_eq!(ids.len(), 1, "v1 scenario has exactly one craft");
     assert_eq!(
         ids[0],
-        CraftId { slot: 0, generation: 0 },
+        CraftId {
+            slot: 0,
+            generation: 0
+        },
         "first-minted craft must be slot 0 / generation 0 (slot-map convention from Task 4: a fresh slot starts at generation 0)"
     );
     ids[0]
@@ -117,15 +137,13 @@ fn recorded_run_actually_thrusts() {
         let pre = world.tick();
         let mut cmds = driver(pre);
         world.step(&mut cmds);
-        if world
-            .recent_events(pre)
-            .iter()
-            .any(|e| matches!(e.kind, EventKind::ThrustApplied { dv, .. } if dv > 0.0 && {
+        if world.recent_events(pre).iter().any(|e| {
+            matches!(e.kind, EventKind::ThrustApplied { dv, .. } if dv > 0.0 && {
                 // craft binding is implicit (single craft); dv>0 proves a burn
                 let _ = e;
                 true
-            }))
-        {
+            })
+        }) {
             saw_thrust = true;
         }
     }
@@ -141,7 +159,11 @@ fn record_then_replay_is_bit_identical() {
     let craft = discover_craft_id();
     let rec = record_run(base_config(), 200, transfer_driver(craft));
     assert_eq!(rec.hashes.len(), 200, "one hash per stepped tick");
-    assert_eq!(replay_run(&rec), Ok(()), "faithful re-feed must reproduce every tick hash");
+    assert_eq!(
+        replay_run(&rec),
+        Ok(()),
+        "faithful re-feed must reproduce every tick hash"
+    );
 }
 
 #[test]

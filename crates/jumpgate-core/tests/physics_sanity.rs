@@ -49,15 +49,18 @@
 //! would otherwise report an upstream regression as a (false) physics blowup.
 
 use jumpgate_core::{
-    BaseSpec, BodyInit, Command, CommandKind, CraftInit, Dt, EntityRef, EventKind,
-    G_CANONICAL, GuidanceParams, NavDest, OrbitalElements, RunConfig, StateView, SubstepCfg,
-    Target, Tick, Vec3, World,
+    BaseSpec, BodyInit, Command, CommandKind, CraftInit, Dt, EntityRef, EventKind, G_CANONICAL,
+    GuidanceParams, NavDest, OrbitalElements, RunConfig, StateView, SubstepCfg, Target, Tick, Vec3,
+    World,
 };
 
 // ---- resolved v1 tuning defaults ----
 const DT_DAYS: f64 = 0.25;
 const SOFTENING: f64 = 1.0e-3;
-const SUBSTEP_CFG: SubstepCfg = SubstepCfg { accel_ref: 1.0e-3, max_substeps: 64 };
+const SUBSTEP_CFG: SubstepCfg = SubstepCfg {
+    accel_ref: 1.0e-3,
+    max_substeps: 64,
+};
 
 /// A massive star pinned at the origin (a == 0 => Kepler conic degenerates to a
 /// fixed point at the focus), plus a caller-supplied set of craft. One body only,
@@ -71,7 +74,14 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
         ephemeris_window: window,
         bodies: vec![BodyInit {
             mass: star_mass,
-            elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            elements: OrbitalElements {
+                a: 0.0,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
         }],
         craft,
         guidance: GuidanceParams::default(),
@@ -96,7 +106,7 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
 fn coasting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
     CraftInit {
         spec: BaseSpec {
-            base_dry_mass: 1.0e-12,        // ~negligible vs M_sun; craft exerts no gravity anyway
+            base_dry_mass: 1.0e-12, // ~negligible vs M_sun; craft exerts no gravity anyway
             base_max_thrust: 0.0,
             base_exhaust_velocity: 1.0e-2,
             base_fuel_capacity: 0.0,
@@ -126,7 +136,8 @@ fn circular_orbit_stays_bounded_over_many_orbits() {
     let n_orbits: u64 = 10;
     let total_ticks = ticks_per_orbit * n_orbits;
 
-    let (mut world, _cfg_hash) = World::reset(star_config(1, m, total_ticks + 8, craft)).expect("resolvable config");
+    let (mut world, _cfg_hash) =
+        World::reset(star_config(1, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     let mut r_min = f64::INFINITY;
@@ -135,10 +146,17 @@ fn circular_orbit_stays_bounded_over_many_orbits() {
     for _ in 0..total_ticks {
         world.step(&mut cmds);
         let p = world.craft_pos(cid).expect("craft alive");
-        assert!(p.x.is_finite() && p.y.is_finite() && p.z.is_finite(), "position went non-finite");
+        assert!(
+            p.x.is_finite() && p.y.is_finite() && p.z.is_finite(),
+            "position went non-finite"
+        );
         let r = p.length();
-        if r < r_min { r_min = r; }
-        if r > r_max { r_max = r; }
+        if r < r_min {
+            r_min = r;
+        }
+        if r > r_max {
+            r_max = r;
+        }
     }
     // bounded: radius never drifts more than 5% off the initial circular radius
     assert!(r_min > 0.95 * r0, "orbit decayed inward: r_min = {r_min}");
@@ -148,9 +166,9 @@ fn circular_orbit_stays_bounded_over_many_orbits() {
 #[test]
 fn eccentric_close_approach_does_not_blow_up() {
     let m: f64 = 1.0;
-    let a: f64 = 1.0;   // semi-major axis (AU)
-    let e: f64 = 0.9;   // high eccentricity => periapsis r_p = a(1-e) = 0.1 AU
-    let r_apo = a * (1.0 + e);                 // 1.9 AU, start here
+    let a: f64 = 1.0; // semi-major axis (AU)
+    let e: f64 = 0.9; // high eccentricity => periapsis r_p = a(1-e) = 0.1 AU
+    let r_apo = a * (1.0 + e); // 1.9 AU, start here
     // vis-viva: v^2 = G*M*(2/r - 1/a); at apoapsis velocity is purely tangential
     let v_apo = (G_CANONICAL * m * (2.0 / r_apo - 1.0 / a)).sqrt();
     let craft = vec![coasting_craft(
@@ -161,7 +179,8 @@ fn eccentric_close_approach_does_not_blow_up() {
     let period_days = std::f64::consts::TAU * (a * a * a / (G_CANONICAL * m)).sqrt();
     let total_ticks = (5.0 * period_days / DT_DAYS).ceil() as u64; // 5 orbits incl. 5 periapsis passes
 
-    let (mut world, _h) = World::reset(star_config(2, m, total_ticks + 8, craft)).expect("resolvable config");
+    let (mut world, _h) =
+        World::reset(star_config(2, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     let mut r_min = f64::INFINITY;
@@ -175,13 +194,23 @@ fn eccentric_close_approach_does_not_blow_up() {
             "close approach produced a non-finite position (blowup or upstream a==0 star NaN)"
         );
         let r = p.length();
-        if r < r_min { r_min = r; }
-        if r > r_max { r_max = r; }
+        if r < r_min {
+            r_min = r;
+        }
+        if r > r_max {
+            r_max = r;
+        }
     }
     // engaged substepping kept periapsis off the singularity ...
-    assert!(r_min > 0.5 * a * (1.0 - e), "periapsis collapsed: r_min = {r_min}");
+    assert!(
+        r_min > 0.5 * a * (1.0 - e),
+        "periapsis collapsed: r_min = {r_min}"
+    );
     // ... and did not get slingshot to escape (bound orbit stays near apoapsis scale)
-    assert!(r_max < 3.0 * r_apo, "trajectory blew outward: r_max = {r_max}");
+    assert!(
+        r_max < 3.0 * r_apo,
+        "trajectory blew outward: r_max = {r_max}"
+    );
 }
 
 #[test]
@@ -197,28 +226,24 @@ fn coast_specific_energy_drift_is_bounded() {
     let period_days = std::f64::consts::TAU / (G_CANONICAL * m / (r0 * r0 * r0)).sqrt();
     let total_ticks = (period_days / DT_DAYS).ceil() as u64; // one orbit
 
-    let (mut world, _h) = World::reset(star_config(3, m, total_ticks + 8, craft)).expect("resolvable config");
+    let (mut world, _h) =
+        World::reset(star_config(3, m, total_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
-    let energy = |p: Vec3, v: Vec3| -> f64 {
-        0.5 * v.length_sq() - G_CANONICAL * m / p.length()
-    };
-    let e0 = energy(
-        world.craft_pos(cid).unwrap(),
-        world.craft_vel(cid).unwrap(),
-    );
+    let energy = |p: Vec3, v: Vec3| -> f64 { 0.5 * v.length_sq() - G_CANONICAL * m / p.length() };
+    let e0 = energy(world.craft_pos(cid).unwrap(), world.craft_vel(cid).unwrap());
 
     let mut cmds: Vec<Command> = Vec::new();
     for _ in 0..total_ticks {
         world.step(&mut cmds);
     }
-    let e1 = energy(
-        world.craft_pos(cid).unwrap(),
-        world.craft_vel(cid).unwrap(),
-    );
+    let e1 = energy(world.craft_pos(cid).unwrap(), world.craft_vel(cid).unwrap());
 
     let rel_drift = ((e1 - e0) / e0).abs();
-    assert!(rel_drift < 1.0e-2, "energy drift too large over one orbit: {rel_drift}");
+    assert!(
+        rel_drift < 1.0e-2,
+        "energy drift too large over one orbit: {rel_drift}"
+    );
 }
 
 /// A craft with real thrust + fuel, in a weak-gravity region so the autopilot's
@@ -250,17 +275,25 @@ fn thrusting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
 
 /// Run a transfer to `dest` and return Some(arrival_tick) if an Arrival event for
 /// the (single) craft fired within `max_ticks`, else None.
-fn run_transfer(seed: u64, start: Vec3, dest: Vec3, budget: Option<f64>, max_ticks: u64)
-    -> Option<u64>
-{
+fn run_transfer(
+    seed: u64,
+    start: Vec3,
+    dest: Vec3,
+    budget: Option<f64>,
+    max_ticks: u64,
+) -> Option<u64> {
     let craft = vec![thrusting_craft(start, Vec3::ZERO)];
-    let (mut world, _h) = World::reset(star_config(seed, 1.0, max_ticks + 8, craft)).expect("resolvable config");
+    let (mut world, _h) =
+        World::reset(star_config(seed, 1.0, max_ticks + 8, craft)).expect("resolvable config");
     let cid = world.craft_ids()[0];
 
     // single ingestion path: command the destination once at tick 0
     let mut cmds = vec![Command {
         target: Target::Entity(EntityRef::Craft(cid)),
-        kind: CommandKind::Destination { dest: NavDest::Position(dest), burn_budget: budget },
+        kind: CommandKind::Destination {
+            dest: NavDest::Position(dest),
+            burn_budget: budget,
+        },
     }];
     world.step(&mut cmds); // tick 0 ingests + integrates
 
@@ -291,7 +324,10 @@ fn fueled_autopilot_transfer_reaches_destination() {
     let start = Vec3::new(5.0, 0.0, 0.0);
     let dest = Vec3::new(5.5, 0.0, 0.0); // 0.5 AU hop
     let arrival = run_transfer(11, start, dest, Some(1.0), 4_000);
-    assert!(arrival.is_some(), "craft never emitted Arrival within budget");
+    assert!(
+        arrival.is_some(),
+        "craft never emitted Arrival within budget"
+    );
 }
 
 #[test]
@@ -301,7 +337,10 @@ fn transfer_arrival_tick_is_deterministic() {
     let a = run_transfer(11, start, dest, Some(1.0), 4_000);
     let b = run_transfer(11, start, dest, Some(1.0), 4_000);
     assert!(a.is_some(), "first run did not arrive");
-    assert_eq!(a, b, "same config produced different arrival ticks: {a:?} vs {b:?}");
+    assert_eq!(
+        a, b,
+        "same config produced different arrival ticks: {a:?} vs {b:?}"
+    );
 }
 
 /// Velocity-matched RENDEZVOUS at a MOVING body. The autopilot works in the
@@ -342,12 +381,26 @@ fn transfer_to_moving_body_rendezvous() {
             // Central star (a==0 => fixed at the focus, the gravity source).
             BodyInit {
                 mass: 1.0,
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
             // Planet: real a>0 orbit, tiny mass (negligible self-gravity on the craft).
             BodyInit {
                 mass: 1.0e-9,
-                elements: OrbitalElements { a: planet_a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: planet_a,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
         ],
         craft,
@@ -372,7 +425,12 @@ fn transfer_to_moving_body_rendezvous() {
     let planet = world.body_ids()[1];
     // Sanity: the planet really is the moving body we think it is at tick 0.
     assert!(
-        world.body_pos(planet, Tick(0)).unwrap().sub(planet_pos0).length() < 1e-9,
+        world
+            .body_pos(planet, Tick(0))
+            .unwrap()
+            .sub(planet_pos0)
+            .length()
+            < 1e-9,
         "planet tick-0 position mismatch"
     );
 
@@ -430,7 +488,10 @@ fn transfer_to_moving_body_rendezvous() {
     // measured: d=4.77e-5, rel_speed=1.25e-4 (1.6% of v_circ) at tick 621.
     // d within a few ARRIVAL_RADIUS (1e-4) of the moving body; loosened slightly
     // from exactly 1e-4 to absorb the tick between event-emit and state-read.
-    assert!(d < 5.0e-4, "craft not near the body at rendezvous: d={d:.4e}");
+    assert!(
+        d < 5.0e-4,
+        "craft not near the body at rendezvous: d={d:.4e}"
+    );
     // Velocity-matched: relative speed is a small fraction of the body's orbital
     // speed. A flyby would show rel_speed ~ v_circ; a rendezvous, ~0.
     assert!(
@@ -478,11 +539,25 @@ fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
         bodies: vec![
             BodyInit {
                 mass: 1.0,
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
             BodyInit {
                 mass: 1.0e-9,
-                elements: OrbitalElements { a: planet_a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: planet_a,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             },
         ],
         craft,

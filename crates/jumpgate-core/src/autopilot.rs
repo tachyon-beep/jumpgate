@@ -142,10 +142,21 @@ mod tests {
             // dt = 1e-4, NOT 0.25: dt feeds ONLY the backstop debug_assert, and eff()
             // (a_max=0.5) trips it at 0.25 (0.5*0.0625 = 0.03125 >= R/(2k)=1e-4). 1e-4
             // passes (0.5*1e-8 = 5e-9 < 1e-4) and leaves the trajectory assertion intact.
-            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            vel,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(throttle, 1.0);
-        assert!(dir.dot(dest.sub(pos).normalize_or_zero()) < 0.0, "still brakes retrograde");
+        assert!(
+            dir.dot(dest.sub(pos).normalize_or_zero()) < 0.0,
+            "still brakes retrograde"
+        );
     }
 
     #[test]
@@ -159,17 +170,39 @@ mod tests {
         // Craft already moving at exactly the cap toward dest -> v_err ~ 0 (matched at cap).
         let vel = Vec3::new(expected_cap, 0.0, 0.0);
         let (_dir, throttle) = autopilot_command(
-            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4, // dt: backstop-only
+            seeking(dest),
+            pos,
+            vel,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4, // dt: backstop-only
         );
-        assert_eq!(throttle, 0.0, "at the cap with zero residual error -> within deadband, coast");
+        assert_eq!(
+            throttle, 0.0,
+            "at the cap with zero residual error -> within deadband, coast"
+        );
         // Bracket the cap magnitude (a factor-of-2 cap bug would suppress at the wrong
         // speed): moving FASTER than the cap toward dest must command a retrograde brake.
         let faster = Vec3::new(expected_cap * 2.0, 0.0, 0.0);
         let (dir2, throttle2) = autopilot_command(
-            seeking(dest), pos, faster, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            faster,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(throttle2, 1.0);
-        assert!(dir2.x < 0.0, "over the cap -> brake retrograde (pins cap magnitude, not just deadband)");
+        assert!(
+            dir2.x < 0.0,
+            "over the cap -> brake retrograde (pins cap magnitude, not just deadband)"
+        );
     }
 
     #[test]
@@ -179,7 +212,15 @@ mod tests {
         let pos = Vec3::new(0.0, 0.0, 0.0);
         let dest = Vec3::new(3.0, 0.0, 0.0);
         let (dir, throttle) = autopilot_command(
-            seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            Vec3::ZERO,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(dir, Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(throttle, 1.0);
@@ -195,7 +236,15 @@ mod tests {
         // Closing fast: velocity points toward the dest (-x) at a large speed.
         let vel = Vec3::new(-1.0, 0.0, 0.0);
         let (thrust_dir, throttle) = autopilot_command(
-            seeking(dest), pos, vel, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            vel,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(throttle, 1.0, "should still be thrusting to brake");
         assert!(
@@ -228,8 +277,17 @@ mod tests {
         // AU/day for this fixture) with dt=1e-4 needs ~2.5e6
         // steps; give generous headroom.
         for _ in 0..5_000_000 {
-            let (tdir, throttle) =
-                autopilot_command(nav, pos, vel, dest, Vec3::ZERO, fuel, &eff, &guidance(), 1.0e-4);
+            let (tdir, throttle) = autopilot_command(
+                nav,
+                pos,
+                vel,
+                dest,
+                Vec3::ZERO,
+                fuel,
+                &eff,
+                &guidance(),
+                1.0e-4,
+            );
             let a_max = eff.max_thrust / (eff.dry_mass + fuel);
             let accel = tdir.scale(throttle * a_max);
             vel = vel.add(accel.scale(dt));
@@ -267,7 +325,15 @@ mod tests {
         // Craft already moving exactly at the target velocity.
         let vel = dest_vel;
         let (thrust_dir, throttle) = autopilot_command(
-            seeking(dest), pos, vel, dest, dest_vel, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            vel,
+            dest,
+            dest_vel,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         // d is ~2e-4, so v_brake = sqrt(2*0.5*0.5*1e-4) ~= 7e-3, capped further by
         // v_des; with rel_vel==0 the error is v_des (toward dest). The point of
@@ -320,7 +386,15 @@ mod tests {
         let dest = Vec3::new(0.0, 0.0, 0.0);
         let pos = Vec3::new(ARRIVAL_RADIUS * 0.5, 0.0, 0.0);
         let (dir, throttle) = autopilot_command(
-            seeking(dest), pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            seeking(dest),
+            pos,
+            Vec3::ZERO,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);
@@ -335,7 +409,15 @@ mod tests {
             dv_remaining: 0.0, // budget gone
         };
         let (dir, throttle) = autopilot_command(
-            nav, pos, Vec3::ZERO, dest, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            nav,
+            pos,
+            Vec3::ZERO,
+            dest,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(dir, Vec3::ZERO);
         assert_eq!(throttle, 0.0);
@@ -347,7 +429,15 @@ mod tests {
             throttle_vec: Vec3::new(0.6, 0.0, 0.0),
         };
         let (dir, throttle) = autopilot_command(
-            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            nav,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(dir, Vec3::new(1.0, 0.0, 0.0));
         assert!((throttle - 0.6).abs() < 1e-12);
@@ -359,7 +449,15 @@ mod tests {
             throttle_vec: Vec3::new(3.0, 4.0, 0.0), // |v| = 5
         };
         let (dir, throttle) = autopilot_command(
-            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            nav,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert!((dir.length() - 1.0).abs() < 1e-12);
         assert_eq!(throttle, 1.0);
@@ -371,7 +469,15 @@ mod tests {
             throttle_vec: Vec3::ZERO,
         };
         let (_dir, throttle) = autopilot_command(
-            nav, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, 1.0, &eff(), &guidance(), 1.0e-4,
+            nav,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            Vec3::ZERO,
+            1.0,
+            &eff(),
+            &guidance(),
+            1.0e-4,
         );
         assert_eq!(throttle, 0.0);
     }

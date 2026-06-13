@@ -47,11 +47,15 @@ pub struct GossipBuffer {
 impl GossipBuffer {
     /// An all-empty buffer with `cap` slots.
     pub fn empty(cap: u32) -> Self {
-        GossipBuffer { slots: vec![None; cap as usize] }
+        GossipBuffer {
+            slots: vec![None; cap as usize],
+        }
     }
     /// Whether any held alert carries this `alert_seq` (the dedup check).
     pub fn holds(&self, alert_seq: u32) -> bool {
-        self.slots.iter().any(|s| s.is_some_and(|a| a.alert_seq == alert_seq))
+        self.slots
+            .iter()
+            .any(|s| s.is_some_and(|a| a.alert_seq == alert_seq))
     }
     /// Count of occupied slots.
     pub fn occupied(&self) -> u32 {
@@ -80,9 +84,12 @@ impl GossipBuffer {
             .iter()
             .flatten()
             .filter(|a| {
-                let anchor = if from_rob_tick { a.rob_tick } else { a.first_heard };
-                a.route as usize == route
-                    && now.0.saturating_sub(anchor.0) <= evidence_window
+                let anchor = if from_rob_tick {
+                    a.rob_tick
+                } else {
+                    a.first_heard
+                };
+                a.route as usize == route && now.0.saturating_sub(anchor.0) <= evidence_window
             })
             .count() as u32
     }
@@ -141,7 +148,9 @@ pub fn insert_alert(
 ) -> bool {
     let priority = |a: &GossipAlert| -> i64 {
         (a.rob_tick.0 as i64).saturating_add(
-            a.claimed_value_micros.saturating_mul(m.value_ticks_milli as i64) / 1_000_000,
+            a.claimed_value_micros
+                .saturating_mul(m.value_ticks_milli as i64)
+                / 1_000_000,
         )
     };
     // (a) lowest empty slot.
@@ -195,7 +204,12 @@ fn receiver_copy(alert: GossipAlert, now: Tick, m: &MediaCfg) -> GossipAlert {
     } else {
         alert.claimed_value_micros
     };
-    GossipAlert { hops, first_heard: now, claimed_value_micros: claimed, ..alert }
+    GossipAlert {
+        hops,
+        first_heard: now,
+        claimed_value_micros: claimed,
+        ..alert
+    }
 }
 
 /// One candidate item crossing one direction of a dock edge: (1) dedupe FIRST
@@ -311,8 +325,12 @@ pub fn run_gossip_exchange(
             );
         }
         // Station→ship downloads over the POST-upload station content.
-        let downloads: Vec<GossipAlert> =
-            station_gossip[srow].slots.iter().flatten().copied().collect();
+        let downloads: Vec<GossipAlert> = station_gossip[srow]
+            .slots
+            .iter()
+            .flatten()
+            .copied()
+            .collect();
         let Some(cbuf) = ships.gossip[crow].as_mut() else {
             continue;
         };
@@ -389,31 +407,78 @@ mod tests {
         let window = 100u64;
         let mut buf = GossipBuffer::empty(2);
         // (a) lowest empty slot first.
-        assert!(insert_alert(&mut buf, alert(0, 1_000_000, 10, 10, 0), Tick(10), window, &m, &mut ev));
+        assert!(insert_alert(
+            &mut buf,
+            alert(0, 1_000_000, 10, 10, 0),
+            Tick(10),
+            window,
+            &m,
+            &mut ev
+        ));
         assert_eq!(buf.slots[0].unwrap().alert_seq, 0);
-        assert!(insert_alert(&mut buf, alert(1, 1_000_000, 10, 10, 0), Tick(10), window, &m, &mut ev));
+        assert!(insert_alert(
+            &mut buf,
+            alert(1, 1_000_000, 10, 10, 0),
+            Tick(10),
+            window,
+            &m,
+            &mut ev
+        ));
         assert_eq!(buf.slots[1].unwrap().alert_seq, 1);
         assert_eq!(ev, 0, "filling empty slots is not eviction");
         // (b) a stale item (now - first_heard > window) is reclaimable space —
         // NOT an eviction (forgetting has one owner, the read window). Slot 0
         // goes stale at now 111; slot 1 stays fresh via a later first_heard.
         buf.slots[1].as_mut().unwrap().first_heard = Tick(60);
-        assert!(insert_alert(&mut buf, alert(2, 1, 111, 111, 0), Tick(111), window, &m, &mut ev));
-        assert_eq!(buf.slots[0].unwrap().alert_seq, 2, "lowest-index stale slot reclaimed");
+        assert!(insert_alert(
+            &mut buf,
+            alert(2, 1, 111, 111, 0),
+            Tick(111),
+            window,
+            &m,
+            &mut ev
+        ));
+        assert_eq!(
+            buf.slots[0].unwrap().alert_seq,
+            2,
+            "lowest-index stale slot reclaimed"
+        );
         assert_eq!(buf.slots[1].unwrap().alert_seq, 1, "fresh item untouched");
         assert_eq!(ev, 0, "stale reclaim is not eviction");
         // (c) overflow, both fresh: priority = rob_tick + claimed*value_ticks/1e6.
         //   slot 0: rob 111 + 1*1000/1e6 = 111; slot 1: rob 10 + 1M*1000/1e6 = 1010.
         //   Incoming priority 111 + 0 = 111: NOT > argmin 111 -> DROP, 1 eviction.
-        assert!(!insert_alert(&mut buf, alert(3, 0, 111, 111, 0), Tick(111), window, &m, &mut ev));
+        assert!(!insert_alert(
+            &mut buf,
+            alert(3, 0, 111, 111, 0),
+            Tick(111),
+            window,
+            &m,
+            &mut ev
+        ));
         assert_eq!(ev, 1, "the drop counts one eviction");
-        assert_eq!(buf.slots[0].unwrap().alert_seq, 2, "incoming dropped, holder kept");
+        assert_eq!(
+            buf.slots[0].unwrap().alert_seq,
+            2,
+            "incoming dropped, holder kept"
+        );
         //   Incoming priority 111 + 2*1 = wait — claimed 2M -> 111 + 2000? No:
         //   incoming rob 111, claimed 2_000_000 -> 111 + 2000 = 2111 > 111 ->
         //   evict the argmin (slot 0), 1 more eviction.
-        assert!(insert_alert(&mut buf, alert(4, 2_000_000, 111, 111, 0), Tick(111), window, &m, &mut ev));
+        assert!(insert_alert(
+            &mut buf,
+            alert(4, 2_000_000, 111, 111, 0),
+            Tick(111),
+            window,
+            &m,
+            &mut ev
+        ));
         assert_eq!(ev, 2, "the replace counts one eviction");
-        assert_eq!(buf.slots[0].unwrap().alert_seq, 4, "argmin evicted, incoming landed");
+        assert_eq!(
+            buf.slots[0].unwrap().alert_seq,
+            4,
+            "argmin evicted, incoming landed"
+        );
     }
 
     #[test]
@@ -423,10 +488,31 @@ mod tests {
         let mut buf = GossipBuffer::empty(2);
         // Two holders with IDENTICAL priority (rob 5, claimed 1M -> 5 + 1000 =
         // 1005) but different seq; ties evict the LOWEST alert_seq.
-        assert!(insert_alert(&mut buf, alert(9, 1_000_000, 5, 5, 0), Tick(5), 1000, &m, &mut ev));
-        assert!(insert_alert(&mut buf, alert(3, 1_000_000, 5, 5, 0), Tick(5), 1000, &m, &mut ev));
+        assert!(insert_alert(
+            &mut buf,
+            alert(9, 1_000_000, 5, 5, 0),
+            Tick(5),
+            1000,
+            &m,
+            &mut ev
+        ));
+        assert!(insert_alert(
+            &mut buf,
+            alert(3, 1_000_000, 5, 5, 0),
+            Tick(5),
+            1000,
+            &m,
+            &mut ev
+        ));
         // Incoming strictly higher priority: rob 5, claimed 2M -> 2005.
-        assert!(insert_alert(&mut buf, alert(11, 2_000_000, 5, 5, 0), Tick(5), 1000, &m, &mut ev));
+        assert!(insert_alert(
+            &mut buf,
+            alert(11, 2_000_000, 5, 5, 0),
+            Tick(5),
+            1000,
+            &m,
+            &mut ev
+        ));
         assert!(buf.holds(9), "higher seq kept on tie");
         assert!(!buf.holds(3), "lowest seq evicted on tie");
         assert!(buf.holds(11));
@@ -448,7 +534,14 @@ mod tests {
 
     fn xfix(n_craft: usize, master: u64) -> XFix {
         let mut stations = StationStore::empty();
-        stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
+        stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64, 0i64],
+        );
         let spec = || BaseSpec {
             base_dry_mass: 1.0,
             base_max_thrust: 0.0,
@@ -517,13 +610,25 @@ mod tests {
             exchange(&mut f, &[Some(0)], Tick(now));
             f.ships.info_tick[0] = Tick(now); // the world's post-exchange refresh
         }
-        assert_eq!(f.diag.contacts.len(), 1, "exactly ONE contact for a parked craft");
-        assert_eq!(f.diag.contacts[0], (Tick(2), 0), "the contact is the arrival edge");
+        assert_eq!(
+            f.diag.contacts.len(),
+            1,
+            "exactly ONE contact for a parked craft"
+        );
+        assert_eq!(
+            f.diag.contacts[0],
+            (Tick(2), 0),
+            "the contact is the arrival edge"
+        );
         assert!(
             f.ships.gossip[0].as_ref().unwrap().holds(0),
             "the rumor crossed on the edge"
         );
-        assert_eq!(gossip_heard_count(&f), 1, "at most one GossipHeard per alert");
+        assert_eq!(
+            gossip_heard_count(&f),
+            1,
+            "at most one GossipHeard per alert"
+        );
     }
 
     #[test]
@@ -542,7 +647,9 @@ mod tests {
         // The stream-cursor equivalence trick: zero Media draws consumed.
         assert_eq!(
             f.rng.stream(RngStream::Media).next_u64(),
-            RngStreams::from_master(MASTER).stream(RngStream::Media).next_u64(),
+            RngStreams::from_master(MASTER)
+                .stream(RngStream::Media)
+                .next_u64(),
             "dedupe consumed ZERO Media draws"
         );
     }
@@ -589,10 +696,22 @@ mod tests {
         // Craft 0 edge at now=2: upload hops 0 -> 1, NO inflation (firsthand).
         exchange(&mut f, &[Some(0), None], Tick(2));
         f.ships.info_tick[0] = Tick(2);
-        let station_copy = f.station_gossip[0].slots.iter().flatten().next().expect("uploaded");
+        let station_copy = f.station_gossip[0]
+            .slots
+            .iter()
+            .flatten()
+            .next()
+            .expect("uploaded");
         assert_eq!(station_copy.hops, 1);
-        assert_eq!(station_copy.claimed_value_micros, C, "hops 0->1 does NOT inflate");
-        assert_eq!(station_copy.first_heard, Tick(2), "first_heard re-anchors per node");
+        assert_eq!(
+            station_copy.claimed_value_micros, C,
+            "hops 0->1 does NOT inflate"
+        );
+        assert_eq!(
+            station_copy.first_heard,
+            Tick(2),
+            "first_heard re-anchors per node"
+        );
         // Craft 1 edge at now=3: download hops 1 -> 2, x1.125 floor-division.
         exchange(&mut f, &[None, Some(0)], Tick(3));
         let retold = f.ships.gossip[1].as_ref().unwrap().slots[0].expect("downloaded");
@@ -611,7 +730,10 @@ mod tests {
         g.ships.info_tick[0] = Tick(2);
         exchange(&mut g, &[None, Some(0)], Tick(3));
         let capped = g.ships.gossip[1].as_ref().unwrap().slots[0].expect("downloaded");
-        assert_eq!(capped.claimed_value_micros, 10_000_000, "claims saturate at the cap");
+        assert_eq!(
+            capped.claimed_value_micros, 10_000_000,
+            "claims saturate at the cap"
+        );
     }
 
     #[test]
@@ -625,7 +747,14 @@ mod tests {
             let mut buf = GossipBuffer::empty(2);
             for i in 0..50u32 {
                 let claimed = ((i as i64) % 7) * 500_000;
-                insert_alert(&mut buf, alert(i, claimed, 20, 20, 0), Tick(20), 1000, &m, &mut ev);
+                insert_alert(
+                    &mut buf,
+                    alert(i, claimed, 20, 20, 0),
+                    Tick(20),
+                    1000,
+                    &m,
+                    &mut ev,
+                );
             }
             (buf, ev)
         };

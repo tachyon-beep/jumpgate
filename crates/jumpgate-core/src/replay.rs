@@ -50,7 +50,11 @@ pub fn record_run(
         "World::reset must return the config's own hash"
     );
 
-    let mut log = ActionLog { entries: Vec::new(), commands_flat: Vec::new(), config_hash };
+    let mut log = ActionLog {
+        entries: Vec::new(),
+        commands_flat: Vec::new(),
+        config_hash,
+    };
     let mut hashes: Vec<(Tick, u64)> = Vec::with_capacity(ticks as usize);
 
     for _ in 0..ticks {
@@ -65,7 +69,13 @@ pub fn record_run(
         hashes.push((world.tick(), state_hash(&world)));
     }
 
-    Recording { config: cfg, log, hashes, config_hash, provenance: Provenance::current() }
+    Recording {
+        config: cfg,
+        log,
+        hashes,
+        config_hash,
+        provenance: Provenance::current(),
+    }
 }
 
 /// Reject a provenance mismatch, then a config-hash mismatch; rebuild from

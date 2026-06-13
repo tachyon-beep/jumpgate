@@ -32,7 +32,6 @@
 use crate::autopilot::ARRIVAL_RADIUS;
 use crate::config::{CraftInit, MediaCfg, TrophicCfg};
 use crate::contract::{Event, EventKind};
-use crate::media::{GossipAlert, GossipBuffer, GossipNode, MediaDiag, insert_alert};
 use crate::economy::{
     ContractStatus, ContractStore, CorporationStore, EconCounters, FailureCause, StationStore,
     settle_contract_failure,
@@ -41,6 +40,7 @@ use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
 use crate::ids::BodyId;
 use crate::math::Vec3;
+use crate::media::{GossipAlert, GossipBuffer, GossipNode, MediaDiag, insert_alert};
 use crate::rng::{RngStream, RngStreams};
 use crate::stores::{BodyStore, CraftRole, CraftStore, NavState, UpgradeLevels, effective_params};
 use crate::time::Tick;
@@ -80,7 +80,11 @@ pub struct EngagementSnapshot {
 /// site, never stored (the fleet-ledger discipline); saturating per the §8
 /// totality discipline. Range [0, 3] under the structural caps.
 pub fn strength(role: CraftRole, upgrades: UpgradeLevels, trophic: &TrophicCfg) -> u8 {
-    let base = if role == CraftRole::Pirate { trophic.pirate_base_strength } else { 0 };
+    let base = if role == CraftRole::Pirate {
+        trophic.pirate_base_strength
+    } else {
+        0
+    };
     upgrades.escorts.saturating_add(base)
 }
 
@@ -354,11 +358,18 @@ pub fn resolve_encounters(
             // transfer, no heat — just the cooldown below.
             events.emit(Event {
                 tick,
-                kind: EventKind::DrivenOff { pirate: pirate_id, hauler: hauler_id },
+                kind: EventKind::DrivenOff {
+                    pirate: pirate_id,
+                    hauler: hauler_id,
+                },
             });
         }
         // Either outcome digests: no per-tick re-rolls (spec §2 step 3).
-        let cooldown = if robbed { trophic.rob_cooldown } else { trophic.driveoff_cooldown };
+        let cooldown = if robbed {
+            trophic.rob_cooldown
+        } else {
+            trophic.driveoff_cooldown
+        };
         if let Some(p) = ships.pirate[prow].as_mut() {
             p.engage_cooldown_until = Tick(tick.0.saturating_add(cooldown));
         }
@@ -422,7 +433,11 @@ fn trip_phase_milli(
     let d_from = hauler_pos.sub(origin).length();
     let d_to = hauler_pos.sub(dest).length();
     let total = d_from + d_to;
-    if total > 0.0 { (((d_from / total) * 1000.0) as u32).min(1000) } else { 0 }
+    if total > 0.0 {
+        (((d_from / total) * 1000.0) as u32).min(1000)
+    } else {
+        0
+    }
 }
 
 /// Relative bearing (milliradians) of the pirate as seen from the hauler,
@@ -484,8 +499,10 @@ pub fn relocate_lurk_target(
 fn seek_body(ships: &mut CraftStore, row: usize, body: BodyId) {
     let eff = effective_params(&ships.spec[row], &ships.mods[row]);
     let dv = crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ships.fuel_mass[row]);
-    ships.nav[row] =
-        NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(body)), dv_remaining: dv };
+    ships.nav[row] = NavState::Seeking {
+        dest: NavDest::Entity(EntityRef::Body(body)),
+        dv_remaining: dv,
+    };
 }
 
 /// Stage 1c2 — the pirate brain: a bounded DUMB lurker (spec §5). Pre-physics
@@ -584,9 +601,10 @@ pub fn run_pirate_brains(
         // (Idle / seeking the hideout / a non-station body) -> draw a fresh
         // lurk from the pirate's current position.
         let nav_lurk: Option<usize> = match ships.nav[row] {
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
-                (0..stations.ids.len()).find(|&s| stations.body[s] == b)
-            }
+            NavState::Seeking {
+                dest: NavDest::Entity(EntityRef::Body(b)),
+                ..
+            } => (0..stations.ids.len()).find(|&s| stations.body[s] == b),
             _ => None,
         };
         // TROPHIC-C3 (spec §6, phase 0a): the haven is NEVER a lurk — not
@@ -613,8 +631,8 @@ pub fn run_pirate_brains(
                         // Post-refuge re-entry IS a move (there was no lurk).
                         // Breakout judged against this draw's anchor: the
                         // pirate's own position.
-                        let breakout =
-                            station_pos[s].sub(ships.pos[row]).length() > trophic.pirate_max_reach_au;
+                        let breakout = station_pos[s].sub(ships.pos[row]).length()
+                            > trophic.pirate_max_reach_au;
                         events.emit(Event {
                             tick,
                             kind: EventKind::LurkMoved {
@@ -653,11 +671,12 @@ pub fn run_pirate_brains(
                     trophic.pirate_max_reach_au,
                     haven_station,
                     u,
-                ) && s != lurk {
+                ) && s != lurk
+                {
                     // Breakout judged against this draw's anchor: the old
                     // lurk station (matching-anchor rule, spec §7).
-                    let breakout =
-                        station_pos[s].sub(station_pos[lurk]).length() > trophic.pirate_max_reach_au;
+                    let breakout = station_pos[s].sub(station_pos[lurk]).length()
+                        > trophic.pirate_max_reach_au;
                     events.emit(Event {
                         tick,
                         kind: EventKind::LurkMoved {
@@ -725,22 +744,28 @@ pub fn update_pirate_population(
                 p.food_micros = trophic.grubstake_micros;
                 events.emit(Event {
                     tick,
-                    kind: EventKind::PirateLieLow { pirate: ships.ids_at(row), until: p.lie_low_until },
+                    kind: EventKind::PirateLieLow {
+                        pirate: ships.ids_at(row),
+                        until: p.lie_low_until,
+                    },
                 });
             } else if p.notoriety >= trophic.heat_threshold {
                 p.lie_low_until = Tick(tick.0.saturating_add(trophic.heat_lie_low_ticks));
                 events.emit(Event {
                     tick,
-                    kind: EventKind::PirateLieLow { pirate: ships.ids_at(row), until: p.lie_low_until },
+                    kind: EventKind::PirateLieLow {
+                        pirate: ships.ids_at(row),
+                        until: p.lie_low_until,
+                    },
                 });
             }
         }
         // Geometric notoriety decay on the interval (runs while hiding too —
         // lying low is how heat cools off the predation field).
         if trophic.decay_interval > 0 && tick.0.is_multiple_of(trophic.decay_interval) {
-            p.notoriety =
-                ((p.notoriety as u64).saturating_mul(trophic.notoriety_decay_milli as u64) / 1000)
-                    as u32;
+            p.notoriety = ((p.notoriety as u64)
+                .saturating_mul(trophic.notoriety_decay_milli as u64)
+                / 1000) as u32;
         }
         ships.pirate[row] = Some(p);
     }
@@ -809,8 +834,22 @@ mod tests {
 
     fn fix() -> Fix {
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
+        let from = stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64, 0i64],
+        );
+        let to = stations.push(
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64, 0i64],
+        );
         let station_pos = vec![Vec3::ZERO, Vec3::new(0.3, 0.0, 0.0)];
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, from);
@@ -839,7 +878,10 @@ mod tests {
             counters: EconCounters::zero(crate::economy::N_GOODS_V1),
             stations,
             station_pos,
-            route_evidence: RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] },
+            route_evidence: RouteEvidence {
+                robs: vec![[Tick(0); 8]; 4],
+                cursor: vec![0; 4],
+            },
             // Media defaults OFF (caps 0/0): existing tests are media-blind.
             // Media tests flip `f.media` to live caps and mint the buffers.
             station_gossip: vec![GossipBuffer::empty(16), GossipBuffer::empty(16)],
@@ -917,10 +959,16 @@ mod tests {
         assert_eq!(seed.route, 1, "route 0->1 over 2 stations = 0*2+1");
         // The pirate gets no copy (its gossip row is None in world resets; the
         // fixture's push default is None too).
-        assert!(f.ships.gossip[0].is_none(), "pirate stays information-blind");
+        assert!(
+            f.ships.gossip[0].is_none(),
+            "pirate stays information-blind"
+        );
         // Events: NO GossipHeard for the hops-0 seed; AlertBorn with the join.
         assert!(
-            !f.events.events.iter().any(|e| matches!(e.kind, EventKind::GossipHeard { .. })),
+            !f.events
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::GossipHeard { .. })),
             "the seed does not emit GossipHeard"
         );
         assert!(
@@ -938,7 +986,10 @@ mod tests {
         );
         assert_eq!(f.next_alert_seq, 1, "mint counter advanced once");
         // Station reservoirs untouched (no pier in radius).
-        assert!(f.station_gossip.iter().all(|b| b.occupied() == 0), "no pier deposit mid-route");
+        assert!(
+            f.station_gossip.iter().all(|b| b.occupied() == 0),
+            "no pier deposit mid-route"
+        );
     }
 
     #[test]
@@ -963,7 +1014,12 @@ mod tests {
         f.events
             .events
             .iter()
-            .filter(|e| matches!(e.kind, EventKind::Robbed { .. } | EventKind::DrivenOff { .. }))
+            .filter(|e| {
+                matches!(
+                    e.kind,
+                    EventKind::Robbed { .. } | EventKind::DrivenOff { .. }
+                )
+            })
             .count()
     }
 
@@ -982,10 +1038,10 @@ mod tests {
         // reliable, which is what makes buying it a real decision).
         let cfg = live_trophic();
         for &(p_escorts, h_escorts, expect) in &[
-            (0u8, 0u8, true),  // S_p 1 vs S_h 0 -> engage
-            (0, 1, false),     // 1 vs 1 -> tie to defender, NO engagement
-            (0, 2, false),     // 1 vs 2 -> stronger defender, NO engagement
-            (1, 1, true),      // 2 vs 1 -> engage again
+            (0u8, 0u8, true), // S_p 1 vs S_h 0 -> engage
+            (0, 1, false),    // 1 vs 1 -> tie to defender, NO engagement
+            (0, 2, false),    // 1 vs 2 -> stronger defender, NO engagement
+            (1, 1, true),     // 2 vs 1 -> engage again
         ] {
             let mut f = fix();
             f.ships.upgrades[0].escorts = p_escorts;
@@ -1015,7 +1071,11 @@ mod tests {
             f.ships.credits_micros[1] = wallet;
             run(&mut f, &cfg, Tick(10));
             // Cargo: the accounted SINK leg (the FuelEmpty precedent).
-            assert_eq!(f.counters.consumed[Good::FUEL.index()], 5, "{status:?}: consumed += qty");
+            assert_eq!(
+                f.counters.consumed[Good::FUEL.index()],
+                5,
+                "{status:?}: consumed += qty"
+            );
             assert_eq!(f.ships.cargo[1], None, "{status:?}: cargo cleared");
             // Contract: Failed; escrow refunded EXACTLY reward to the right corp.
             assert_eq!(f.contracts.status[0], ContractStatus::Failed, "{status:?}");
@@ -1039,8 +1099,15 @@ mod tests {
             assert_eq!(f.ships.role[1], CraftRole::Idle, "{status:?}");
             // Metabolism: food += qty * per-unit; heat accrues; cooldown set.
             let p = f.ships.pirate[0].unwrap();
-            assert_eq!(p.food_micros, 1_000_000 + 5 * 100_000, "{status:?}: food fed");
-            assert_eq!(p.notoriety, cfg.notoriety_per_rob, "{status:?}: heat accrued");
+            assert_eq!(
+                p.food_micros,
+                1_000_000 + 5 * 100_000,
+                "{status:?}: food fed"
+            );
+            assert_eq!(
+                p.notoriety, cfg.notoriety_per_rob,
+                "{status:?}: heat accrued"
+            );
             assert_eq!(
                 p.engage_cooldown_until,
                 Tick(10 + cfg.rob_cooldown),
@@ -1073,17 +1140,28 @@ mod tests {
         let mut f = fix();
         run(&mut f, &cfg, Tick(10));
         assert!(
-            f.events.events.iter().any(|e| matches!(e.kind, EventKind::DrivenOff { .. })),
+            f.events
+                .events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::DrivenOff { .. })),
             "DrivenOff emitted"
         );
-        assert_eq!(f.contracts.status[0], ContractStatus::InTransit, "no settlement");
+        assert_eq!(
+            f.contracts.status[0],
+            ContractStatus::InTransit,
+            "no settlement"
+        );
         assert_eq!(f.ships.cargo[1], Some((Good::FUEL, 5)), "cargo kept");
         assert_eq!(f.counters.consumed[Good::FUEL.index()], 0, "no sink leg");
         assert_eq!(f.ships.credits_micros[0], 0, "no ransom");
         let p = f.ships.pirate[0].unwrap();
         assert_eq!(p.notoriety, 0, "no heat on a failed bluff");
         assert_eq!(p.engage_cooldown_until, Tick(10 + cfg.driveoff_cooldown));
-        assert_eq!(f.diag.len(), 1, "DrivenOff emission site also logs the snapshot");
+        assert_eq!(
+            f.diag.len(),
+            1,
+            "DrivenOff emission site also logs the snapshot"
+        );
     }
 
     #[test]
@@ -1118,9 +1196,16 @@ mod tests {
         let cfg = TrophicCfg::default();
         let mut f = fix();
         run(&mut f, &cfg, Tick(10));
-        assert!(f.events.events.is_empty(), "no engagement events when inert");
+        assert!(
+            f.events.events.is_empty(),
+            "no engagement events when inert"
+        );
         assert!(f.diag.is_empty(), "no snapshots when inert");
-        assert_eq!(f.contracts.status[0], ContractStatus::InTransit, "contract untouched");
+        assert_eq!(
+            f.contracts.status[0],
+            ContractStatus::InTransit,
+            "contract untouched"
+        );
         // Population stage shares the lever: a zero-food, white-hot pirate
         // neither starves nor lies low while the machinery is inert.
         f.ships.pirate[0] = Some(PirateState {
@@ -1144,8 +1229,15 @@ mod tests {
         f.ships.pirate[0].as_mut().unwrap().food_micros = 5; // 5 - 10 <= 0
         update_pirate_population(&mut f.ships, &cfg, Tick(100), &mut f.events);
         let p = f.ships.pirate[0].unwrap();
-        assert_eq!(p.lie_low_until, Tick(100 + cfg.starve_lie_low_ticks), "starve lie-low");
-        assert_eq!(p.food_micros, cfg.grubstake_micros, "re-emerges hungry on the grubstake");
+        assert_eq!(
+            p.lie_low_until,
+            Tick(100 + cfg.starve_lie_low_ticks),
+            "starve lie-low"
+        );
+        assert_eq!(
+            p.food_micros, cfg.grubstake_micros,
+            "re-emerges hungry on the grubstake"
+        );
         assert!(
             f.events.events.iter().any(|e| matches!(
                 e.kind,
@@ -1156,7 +1248,11 @@ mod tests {
         // (b) Lying low: NO upkeep drain (upkeep only while active).
         let food_before = f.ships.pirate[0].unwrap().food_micros;
         update_pirate_population(&mut f.ships, &cfg, Tick(101), &mut f.events);
-        assert_eq!(f.ships.pirate[0].unwrap().food_micros, food_before, "no upkeep while hiding");
+        assert_eq!(
+            f.ships.pirate[0].unwrap().food_micros,
+            food_before,
+            "no upkeep while hiding"
+        );
 
         // (c) HEAT: notoriety >= threshold forces lie-low; NO notoriety reset
         // (heat cools through decay, not a reset).
@@ -1164,8 +1260,15 @@ mod tests {
         f.ships.pirate[0].as_mut().unwrap().notoriety = cfg.heat_threshold;
         update_pirate_population(&mut f.ships, &cfg, Tick(50), &mut f.events);
         let p = f.ships.pirate[0].unwrap();
-        assert_eq!(p.lie_low_until, Tick(50 + cfg.heat_lie_low_ticks), "heat lie-low");
-        assert_eq!(p.notoriety, cfg.heat_threshold, "notoriety NOT reset by the refuge");
+        assert_eq!(
+            p.lie_low_until,
+            Tick(50 + cfg.heat_lie_low_ticks),
+            "heat lie-low"
+        );
+        assert_eq!(
+            p.notoriety, cfg.heat_threshold,
+            "notoriety NOT reset by the refuge"
+        );
         assert!(
             f.events.events.iter().any(|e| matches!(
                 e.kind,
@@ -1184,9 +1287,17 @@ mod tests {
             engage_cooldown_until: Tick(0),
         });
         update_pirate_population(&mut f.ships, &cfg, Tick(199), &mut f.events);
-        assert_eq!(f.ships.pirate[0].unwrap().notoriety, 100, "no decay off the interval");
+        assert_eq!(
+            f.ships.pirate[0].unwrap().notoriety,
+            100,
+            "no decay off the interval"
+        );
         update_pirate_population(&mut f.ships, &cfg, Tick(200), &mut f.events);
-        assert_eq!(f.ships.pirate[0].unwrap().notoriety, 95, "100 * 950 / 1000 on the interval");
+        assert_eq!(
+            f.ships.pirate[0].unwrap().notoriety,
+            95,
+            "100 * 950 / 1000 on the interval"
+        );
     }
 
     // ---- World-level tests: stage ordering + first runtime Piracy draws ------
@@ -1209,7 +1320,10 @@ mod tests {
     }
 
     fn pirate_init(pos: Vec3) -> CraftInit {
-        CraftInit { role: CraftRole::Pirate, ..hauler_init(pos) }
+        CraftInit {
+            role: CraftRole::Pirate,
+            ..hauler_init(pos)
+        }
     }
 
     /// Two-body pirate world: near-massless central star at the origin hosting
@@ -1222,16 +1336,33 @@ mod tests {
             master_seed: 42,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 6000,
             bodies: vec![
                 BodyInit {
                     mass: 1e-9,
-                    elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                    elements: OrbitalElements {
+                        a: 0.0,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
                 },
                 BodyInit {
                     mass: 1e-12,
-                    elements: OrbitalElements { a: 0.3, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                    elements: OrbitalElements {
+                        a: 0.3,
+                        e: 0.0,
+                        i: 0.0,
+                        raan: 0.0,
+                        argp: 0.0,
+                        m0: 0.0,
+                    },
                 },
             ],
             craft: vec![hauler_init(Vec3::ZERO), pirate_init(Vec3::ZERO)],
@@ -1251,7 +1382,11 @@ mod tests {
                 },
             ],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }],
+            corporations: vec![CorporationInit {
+                treasury_micros: 5_000_000,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }],
             contracts: vec![ContractInit {
                 corp_index: 0,
                 resource: Good::FUEL,
@@ -1261,7 +1396,10 @@ mod tests {
                 reward_micros: 1_000_000,
             }],
             price_cfg: PriceCfg::default(),
-            dispatch_cfg: DispatchCfg { stagger_period: 0, ..Default::default() },
+            dispatch_cfg: DispatchCfg {
+                stagger_period: 0,
+                ..Default::default()
+            },
             trophic: TrophicCfg {
                 engage_radius_au: 5.0e-4,
                 p_rob_milli: 1000,
@@ -1322,8 +1460,7 @@ mod tests {
         assert_eq!(deposit.first_heard, Tick(1), "landed the SAME tick");
         // reward 1M + ransom min(grubstake 1M wallet, cap 2M) = 2M: no
         // inflation on the deposit (claimed == the victim's seed).
-        let victim_seed =
-            world.ships.gossip[0].as_ref().unwrap().slots[0].expect("victim seed");
+        let victim_seed = world.ships.gossip[0].as_ref().unwrap().slots[0].expect("victim seed");
         assert_eq!(
             deposit.claimed_value_micros, victim_seed.claimed_value_micros,
             "NO inflation on the pier deposit"
@@ -1359,7 +1496,10 @@ mod tests {
         // compile-level: `relocate_lurk_target`'s geometry-only signature.)
         let (mut world, _h) = World::reset(media_live_cfg()).expect("resolvable cfg");
         let pirate_id = world.ships.ids_at(1);
-        assert!(world.ships.gossip[1].is_none(), "pirate row mints None at reset");
+        assert!(
+            world.ships.gossip[1].is_none(),
+            "pirate row mints None at reset"
+        );
         let hauler = world.ships.ids_at(0);
         let contract = contract_id_row0(&world);
         // The rob-on-load robbery stocks the origin reservoir at tick 1; the
@@ -1368,7 +1508,10 @@ mod tests {
             target: Target::Entity(EntityRef::Craft(hauler)),
             kind: CommandKind::AcceptContract { contract },
         }]);
-        assert!(world.station_gossip[0].occupied() > 0, "reservoir stocked (non-vacuous)");
+        assert!(
+            world.station_gossip[0].occupied() > 0,
+            "reservoir stocked (non-vacuous)"
+        );
         let mut cmds = Vec::new();
         for _ in 0..30 {
             world.step(&mut cmds);
@@ -1420,7 +1563,11 @@ mod tests {
             crate::economy::ContractStatus::Failed,
             "contract failed by robbery"
         );
-        assert_eq!(world.econ.consumed[Good::FUEL.index()], 5, "cargo sink leg accounted");
+        assert_eq!(
+            world.econ.consumed[Good::FUEL.index()],
+            5,
+            "cargo sink leg accounted"
+        );
         assert_eq!(
             world.corporations.treasury_micros[0], 5_000_000,
             "escrow refunded same tick (escrowed 1M at 1c, refunded at 3b2)"
@@ -1430,7 +1577,11 @@ mod tests {
         // The §2 kinematic snapshot reaches the diagnostics sampler: one
         // engagement at trip-phase ~0 (the departure-ambush endpoint).
         let sample = crate::diagnostics::sample_window(&world, Tick(0));
-        assert_eq!(sample.engagement_phase_milli.len(), 1, "sampler sees the snapshot");
+        assert_eq!(
+            sample.engagement_phase_milli.len(),
+            1,
+            "sampler sees the snapshot"
+        );
         assert!(
             sample.engagement_phase_milli[0] < 50,
             "origin-dock ambush reads near phase 0, got {}",
@@ -1471,8 +1622,10 @@ mod tests {
             .unwrap();
         // Seeking the destination body from inside ARRIVAL_RADIUS at ~rest:
         // the Arrival edge fires on step 1.
-        world.ships.nav[0] =
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(to_body)), dv_remaining: 1e-3 };
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Entity(EntityRef::Body(to_body)),
+            dv_remaining: 1e-3,
+        };
         world.step(&mut Vec::new());
         assert!(
             world
@@ -1481,7 +1634,10 @@ mod tests {
                 .any(|e| matches!(e.kind, EventKind::ContractFulfilled { .. })),
             "delivery settled on the arrival tick"
         );
-        assert_eq!(world.contracts.status[0], crate::economy::ContractStatus::Completed);
+        assert_eq!(
+            world.contracts.status[0],
+            crate::economy::ContractStatus::Completed
+        );
         assert_eq!(world.ships.credits_micros[0], 1_000_000, "payout landed");
         assert!(
             !world.recent_events(Tick(1)).iter().any(|e| matches!(
@@ -1528,7 +1684,11 @@ mod tests {
     /// cadence so successive loads actually re-engage.
     fn self_running_pirate_cfg() -> RunConfig {
         let mut cfg = pirate_world_cfg();
-        cfg.craft = vec![hauler_init(Vec3::ZERO), hauler_init(Vec3::ZERO), pirate_init(Vec3::ZERO)];
+        cfg.craft = vec![
+            hauler_init(Vec3::ZERO),
+            hauler_init(Vec3::ZERO),
+            pirate_init(Vec3::ZERO),
+        ];
         for h in &mut cfg.craft[0..2] {
             h.spec.base_exhaust_velocity = 2e-1;
             h.spec.base_fuel_capacity = 9e-9;
@@ -1537,7 +1697,11 @@ mod tests {
         cfg.producers = vec![
             ProducerInit {
                 station_index: 0,
-                recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
+                recipe: Recipe {
+                    input: None,
+                    output: Some((Good::ORE, 5)),
+                    interval: 1,
+                },
             },
             ProducerInit {
                 station_index: 0,
@@ -1549,7 +1713,11 @@ mod tests {
             },
             ProducerInit {
                 station_index: 1,
-                recipe: Recipe { input: Some((Good::FUEL, 1)), output: None, interval: 1 },
+                recipe: Recipe {
+                    input: Some((Good::FUEL, 1)),
+                    output: None,
+                    interval: 1,
+                },
             },
         ];
         cfg.dispatch_cfg = DispatchCfg {
@@ -1559,8 +1727,11 @@ mod tests {
             contract_reward_micros: 1_000_000,
             contract_qty: 5,
         };
-        cfg.corporations =
-            vec![CorporationInit { treasury_micros: 100_000_000, home_station_index: 0, arb_premium_micros: 0 }];
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 100_000_000,
+            home_station_index: 0,
+            arb_premium_micros: 0,
+        }];
         cfg.trophic.p_rob_milli = 700;
         cfg.trophic.rob_cooldown = 200;
         cfg.trophic.driveoff_cooldown = 50;
@@ -1600,8 +1771,14 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.kind, EventKind::DrivenOff { .. }))
             .count();
-        assert!(robs >= 1, "no robbery in 5k ticks — the replay claim is vacuous");
-        assert!(robs + driveoffs >= 2, "expected repeated engagements, got {robs}+{driveoffs}");
+        assert!(
+            robs >= 1,
+            "no robbery in 5k ticks — the replay claim is vacuous"
+        );
+        assert!(
+            robs + driveoffs >= 2,
+            "expected repeated engagements, got {robs}+{driveoffs}"
+        );
     }
 
     // ---- Task 5 (Commit E): brains, evidence, scripted policies --------------
@@ -1636,17 +1813,26 @@ mod tests {
                     sells_upgrades: false,
                 })
                 .collect();
-            c.corporations =
-                vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }];
+            c.corporations = vec![CorporationInit {
+                treasury_micros: 0,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }];
             c.contracts = vec![];
-            c.craft =
-                vec![pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO)];
+            c.craft = vec![
+                pirate_init(Vec3::ZERO),
+                pirate_init(Vec3::ZERO),
+                pirate_init(Vec3::ZERO),
+            ];
             c
         }
         fn lurk_map(world: &World) -> Vec<u32> {
             (0..world.ships.ids.len())
                 .map(|row| match world.ships.nav[row] {
-                    NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => b.slot,
+                    NavState::Seeking {
+                        dest: NavDest::Entity(EntityRef::Body(b)),
+                        ..
+                    } => b.slot,
                     ref other => panic!("pirate row {row} not Seeking a body at reset: {other:?}"),
                 })
                 .collect()
@@ -1657,7 +1843,10 @@ mod tests {
         for m in ma.iter().chain(mb.iter()) {
             assert!(*m < 4, "lurk body slot {m} must be a station body");
         }
-        assert_ne!(ma, mb, "different master seeds must draw different lurk maps");
+        assert_ne!(
+            ma, mb,
+            "different master seeds must draw different lurk maps"
+        );
     }
 
     #[test]
@@ -1683,13 +1872,16 @@ mod tests {
         let mut hits = [0u32; 6];
         for _ in 0..64 {
             let u = rng.stream(RngStream::Piracy).next_u64();
-            let s = relocate_lurk_target(anchor, &station_pos, reach, None, u)
-                .expect("stations exist");
+            let s =
+                relocate_lurk_target(anchor, &station_pos, reach, None, u).expect("stations exist");
             assert!(in_reach.contains(&s), "target {s} is beyond reach");
             hits[s] += 1;
         }
         for &s in &in_reach {
-            assert!(hits[s] > 0, "uniform-in-reach: station {s} never drawn in 64");
+            assert!(
+                hits[s] > 0,
+                "uniform-in-reach: station {s} never drawn in 64"
+            );
         }
         // Exact uniformity of the draw map: u = 0..64 cycles the 4 candidates
         // evenly (16 each) — no weighting of any kind.
@@ -1712,8 +1904,14 @@ mod tests {
         // The haven is never huntable: in-reach (anchor covers 0,1,3,5 minus
         // excluded 1 -> [0,3,5], u=4 -> 4 % 3 = 1 -> station 3) and breakout
         // (far, exclude 2 -> [0,1,3,4,5], 7 % 5 = 2 -> station 3) both skip it.
-        assert_eq!(relocate_lurk_target(anchor, &station_pos, reach, Some(1), 4), Some(3));
-        assert_eq!(relocate_lurk_target(far, &station_pos, reach, Some(2), 7), Some(3));
+        assert_eq!(
+            relocate_lurk_target(anchor, &station_pos, reach, Some(1), 4),
+            Some(3)
+        );
+        assert_eq!(
+            relocate_lurk_target(far, &station_pos, reach, Some(2), 7),
+            Some(3)
+        );
         // No stations at all -> None (totality, spec §8).
         assert_eq!(relocate_lurk_target(anchor, &[], reach, None, 7), None);
     }
@@ -1748,14 +1946,20 @@ mod tests {
         // with a fresh fuel-derived dv budget.
         let mut world = mk();
         let b0 = body0(&world);
-        world.ships.nav[0] =
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b0)), dv_remaining: 0.0 };
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Entity(EntityRef::Body(b0)),
+            dv_remaining: 0.0,
+        };
         world.ships.pos[0] = Vec3::new(radius * 0.6, 0.0, 0.0); // > radius/2 from the lurk body
         world.ships.prev_pos[0] = world.ships.pos[0];
         world.step(&mut Vec::new());
         match world.ships.nav[0] {
             NavState::Seeking { dest, dv_remaining } => {
-                assert_eq!(dest, NavDest::Entity(EntityRef::Body(b0)), "still seeking the lurk");
+                assert_eq!(
+                    dest,
+                    NavDest::Entity(EntityRef::Body(b0)),
+                    "still seeking the lurk"
+                );
                 assert!(
                     dv_remaining > 1.0e-3,
                     "drifted lurker re-seeks with a refreshed dv, got {dv_remaining}"
@@ -1767,8 +1971,10 @@ mod tests {
         // (b) SETTLED inside engage_radius/2: NO re-issue (budget not refreshed).
         let mut world = mk();
         let b0 = body0(&world);
-        world.ships.nav[0] =
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b0)), dv_remaining: 0.0 };
+        world.ships.nav[0] = NavState::Seeking {
+            dest: NavDest::Entity(EntityRef::Body(b0)),
+            dv_remaining: 0.0,
+        };
         world.ships.pos[0] = Vec3::ZERO; // exactly at the lurk body
         world.ships.prev_pos[0] = world.ships.pos[0];
         world.step(&mut Vec::new());
@@ -1791,9 +1997,10 @@ mod tests {
         // roams on its stagger slot (coverage exactly where it is failing).
         fn lurk_of(world: &World, row: usize) -> Option<BodyId> {
             match world.ships.nav[row] {
-                NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => {
-                    Some(b)
-                }
+                NavState::Seeking {
+                    dest: NavDest::Entity(EntityRef::Body(b)),
+                    ..
+                } => Some(b),
                 _ => None,
             }
         }
@@ -1836,7 +2043,10 @@ mod tests {
                 break;
             }
         }
-        assert!(moved, "a hungry pirate roams (relocation re-enabled by hunger)");
+        assert!(
+            moved,
+            "a hungry pirate roams (relocation re-enabled by hunger)"
+        );
     }
 
     #[test]
@@ -1849,9 +2059,11 @@ mod tests {
                 .recent_events(Tick(0))
                 .iter()
                 .filter_map(|e| match e.kind {
-                    EventKind::LurkMoved { to_station, breakout, .. } => {
-                        Some((to_station, breakout))
-                    }
+                    EventKind::LurkMoved {
+                        to_station,
+                        breakout,
+                        ..
+                    } => Some((to_station, breakout)),
                     _ => None,
                 })
                 .collect()
@@ -1876,7 +2088,10 @@ mod tests {
         for _ in 0..64 {
             world.step(&mut Vec::new());
         }
-        assert!(lurk_moved_events(&world).is_empty(), "a fed pirate's camp is not a move");
+        assert!(
+            lurk_moved_events(&world).is_empty(),
+            "a fed pirate's camp is not a move"
+        );
         // HUNGRY pirate, both stations in reach: relocations emit, and every
         // landing is in reach of the OLD lurk (0.3 AU < 10) — breakout=false.
         let (mut world, _) = World::reset(cfg()).expect("resolvable cfg");
@@ -1885,8 +2100,14 @@ mod tests {
             world.step(&mut Vec::new());
         }
         let moves = lurk_moved_events(&world);
-        assert!(!moves.is_empty(), "a hungry pirate's redraws emit LurkMoved");
-        assert!(moves.iter().all(|&(_, b)| !b), "in-reach hops are not breakouts");
+        assert!(
+            !moves.is_empty(),
+            "a hungry pirate's redraws emit LurkMoved"
+        );
+        assert!(
+            moves.iter().all(|&(_, b)| !b),
+            "in-reach hops are not breakouts"
+        );
         // POST-REFUGE fresh draw with NOTHING in reach: one marooned breakout
         // (anchor = the pirate's own position, ~5 AU from both stations).
         let mut c = cfg();
@@ -1900,7 +2121,11 @@ mod tests {
         world.ships.nav[0] = NavState::Idle;
         world.step(&mut Vec::new());
         let moves = lurk_moved_events(&world);
-        assert_eq!(moves.len(), 1, "one fresh post-refuge draw -> one LurkMoved");
+        assert_eq!(
+            moves.len(),
+            1,
+            "one fresh post-refuge draw -> one LurkMoved"
+        );
         assert!(moves[0].1, "nothing in reach -> the landing is a breakout");
     }
 
@@ -1944,7 +2169,10 @@ mod tests {
             dv_remaining: 1.0,
         };
         let lurk_body = |w: &World| match w.ships.nav[0] {
-            NavState::Seeking { dest: NavDest::Entity(EntityRef::Body(b)), .. } => Some(b),
+            NavState::Seeking {
+                dest: NavDest::Entity(EntityRef::Body(b)),
+                ..
+            } => Some(b),
             _ => None,
         };
         for _ in 0..8 {
@@ -2040,7 +2268,10 @@ mod tests {
         // pirate gets NO reset lurk draw and NO brain nav writes.
         let mut cfg = pirate_world_cfg();
         cfg.contracts = vec![];
-        cfg.craft = vec![CraftInit { scripted: false, ..pirate_init(Vec3::new(0.01, 0.0, 0.0)) }];
+        cfg.craft = vec![CraftInit {
+            scripted: false,
+            ..pirate_init(Vec3::new(0.01, 0.0, 0.0))
+        }];
         let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
         assert!(
             matches!(world.ships.nav[0], NavState::Idle),
@@ -2059,13 +2290,28 @@ mod tests {
         // any station body); an in-flight craft keeps its stale info_tick.
         let mut cfg = pirate_world_cfg();
         cfg.contracts = vec![];
-        cfg.craft = vec![hauler_init(Vec3::ZERO), hauler_init(Vec3::new(0.15, 0.0, 0.0))];
+        cfg.craft = vec![
+            hauler_init(Vec3::ZERO),
+            hauler_init(Vec3::new(0.15, 0.0, 0.0)),
+        ];
         let (mut world, _) = World::reset(cfg).expect("resolvable cfg");
         world.step(&mut Vec::new());
-        assert_eq!(world.ships.info_tick[0], Tick(1), "docked craft refreshes to current tick");
-        assert_eq!(world.ships.info_tick[1], Tick(0), "in-flight craft keeps stale info_tick");
+        assert_eq!(
+            world.ships.info_tick[0],
+            Tick(1),
+            "docked craft refreshes to current tick"
+        );
+        assert_eq!(
+            world.ships.info_tick[1],
+            Tick(0),
+            "in-flight craft keeps stale info_tick"
+        );
         world.step(&mut Vec::new());
-        assert_eq!(world.ships.info_tick[0], Tick(2), "refresh repeats every docked tick");
+        assert_eq!(
+            world.ships.info_tick[0],
+            Tick(2),
+            "refresh repeats every docked tick"
+        );
         assert_eq!(world.ships.info_tick[1], Tick(0));
     }
 
@@ -2090,23 +2336,54 @@ mod tests {
         let route_ab = 1usize; // 0 * n_stations + 1
         // Reader last docked BEFORE the rob -> evidence invisible.
         world.ships.info_tick[0] = Tick(0);
-        assert_eq!(world.route_evidence(hauler, route_ab), 0, "docked at T-1 sees count 0");
+        assert_eq!(
+            world.route_evidence(hauler, route_ab),
+            0,
+            "docked at T-1 sees count 0"
+        );
         // Reader docked AFTER the rob -> evidence visible.
         world.ships.info_tick[0] = Tick(2);
-        assert_eq!(world.route_evidence(hauler, route_ab), 1, "docked at T+1 sees the rob");
+        assert_eq!(
+            world.route_evidence(hauler, route_ab),
+            1,
+            "docked at T+1 sees the rob"
+        );
         // Ageing (default evidence_window 4000): the window is
         // (info_tick - window, info_tick] — at rob_tick + window the entry
         // sits exactly on the excluded lower edge.
         world.ships.info_tick[0] = Tick(1 + 4000 - 1);
-        assert_eq!(world.route_evidence(hauler, route_ab), 1, "still inside the window");
+        assert_eq!(
+            world.route_evidence(hauler, route_ab),
+            1,
+            "still inside the window"
+        );
         world.ships.info_tick[0] = Tick(1 + 4000);
-        assert_eq!(world.route_evidence(hauler, route_ab), 0, "aged out past evidence_window");
+        assert_eq!(
+            world.route_evidence(hauler, route_ab),
+            0,
+            "aged out past evidence_window"
+        );
         // Other routes / stale readers read 0 (totality, spec §8).
         world.ships.info_tick[0] = Tick(2);
-        assert_eq!(world.route_evidence(hauler, 0), 0, "untouched route reads 0");
-        assert_eq!(world.route_evidence(hauler, 99), 0, "out-of-range route reads 0");
-        let stale = crate::ids::CraftId { slot: 0, generation: 99 };
-        assert_eq!(world.route_evidence(stale, route_ab), 0, "stale reader reads 0");
+        assert_eq!(
+            world.route_evidence(hauler, 0),
+            0,
+            "untouched route reads 0"
+        );
+        assert_eq!(
+            world.route_evidence(hauler, 99),
+            0,
+            "out-of-range route reads 0"
+        );
+        let stale = crate::ids::CraftId {
+            slot: 0,
+            generation: 99,
+        };
+        assert_eq!(
+            world.route_evidence(stale, route_ab),
+            0,
+            "stale reader reads 0"
+        );
     }
 
     #[test]
@@ -2129,7 +2406,11 @@ mod tests {
         let mut empty: Vec<Command> = Vec::new();
         for t in 1..=5000u64 {
             world.step(&mut empty);
-            assert_eq!(credit_now(&world), initial_credit, "credit identity broke at tick {t}");
+            assert_eq!(
+                credit_now(&world),
+                initial_credit,
+                "credit identity broke at tick {t}"
+            );
             for r in 0..crate::economy::N_GOODS_V1 {
                 let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
                 let in_transit: i64 = world
@@ -2152,6 +2433,9 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.kind, EventKind::Robbed { .. }))
             .count();
-        assert!(robs >= 1, "no robbery settled — the identity claim is vacuous");
+        assert!(
+            robs >= 1,
+            "no robbery settled — the identity claim is vacuous"
+        );
     }
 }

@@ -173,10 +173,22 @@ mod tests {
     #[test]
     fn since_returns_tick_tail() {
         let mut s = EventStream::new();
-        let cid = CraftId { slot: 0, generation: 1 };
-        s.emit(Event { tick: Tick(1), kind: EventKind::FuelEmpty { craft: cid } });
-        s.emit(Event { tick: Tick(3), kind: EventKind::FuelEmpty { craft: cid } });
-        s.emit(Event { tick: Tick(3), kind: EventKind::FuelEmpty { craft: cid } });
+        let cid = CraftId {
+            slot: 0,
+            generation: 1,
+        };
+        s.emit(Event {
+            tick: Tick(1),
+            kind: EventKind::FuelEmpty { craft: cid },
+        });
+        s.emit(Event {
+            tick: Tick(3),
+            kind: EventKind::FuelEmpty { craft: cid },
+        });
+        s.emit(Event {
+            tick: Tick(3),
+            kind: EventKind::FuelEmpty { craft: cid },
+        });
         assert_eq!(s.since(Tick(0)).len(), 3);
         assert_eq!(s.since(Tick(3)).len(), 2);
         assert_eq!(s.since(Tick(4)).len(), 0);
@@ -203,10 +215,16 @@ mod tests {
         // ARM the edge. At the old eps (1e-9) prev == eps exactly and the
         // strict `>` in fuel_just_emptied made FuelEmpty arithmetically
         // unfireable for the whole band.
-        assert!(fuel_just_emptied(0.0, 1.0e-9), "band-scale tank fires on its dry tick");
+        assert!(
+            fuel_just_emptied(0.0, 1.0e-9),
+            "band-scale tank fires on its dry tick"
+        );
         // A tank draining THROUGH eps (at/below now, strictly above before)
         // arms without ever touching exact zero.
-        assert!(fuel_just_emptied(FUEL_EMPTY_EPS * 0.5, FUEL_EMPTY_EPS * 2.0));
+        assert!(fuel_just_emptied(
+            FUEL_EMPTY_EPS * 0.5,
+            FUEL_EMPTY_EPS * 2.0
+        ));
         // The strict-greater pin is unchanged: a tank parked AT eps never fires.
         assert!(!fuel_just_emptied(0.0, FUEL_EMPTY_EPS));
     }
@@ -250,7 +268,13 @@ mod tests {
         // passed rel_speed (|v| = 1e-6) clears the `rel_speed <= ARRIVAL_SPEED` gate.
         let dest = Vec3::ZERO;
         let inside = Vec3::new(0.5e-4, 0.0, 0.0); // within R
-        assert!(swept_fixed(inside, inside, dest, Vec3::new(1.0e-6, 0.0, 0.0), false));
+        assert!(swept_fixed(
+            inside,
+            inside,
+            dest,
+            Vec3::new(1.0e-6, 0.0, 0.0),
+            false
+        ));
     }
 
     #[test]
@@ -268,9 +292,21 @@ mod tests {
         let dest = Vec3::ZERO;
         let inside = Vec3::new(0.5e-4, 0.0, 0.0);
         // Just under the gate -> fires.
-        assert!(swept_fixed(inside, inside, dest, Vec3::new(ARRIVAL_SPEED - 1e-9, 0.0, 0.0), false));
+        assert!(swept_fixed(
+            inside,
+            inside,
+            dest,
+            Vec3::new(ARRIVAL_SPEED - 1e-9, 0.0, 0.0),
+            false
+        ));
         // Strictly over the gate -> does not fire.
-        assert!(!swept_fixed(inside, inside, dest, Vec3::new(ARRIVAL_SPEED + 1e-3, 0.0, 0.0), false));
+        assert!(!swept_fixed(
+            inside,
+            inside,
+            dest,
+            Vec3::new(ARRIVAL_SPEED + 1e-3, 0.0, 0.0),
+            false
+        ));
     }
 
     #[test]
@@ -279,7 +315,13 @@ mod tests {
         // suppresses a second fire even though geometry+speed would otherwise qualify.
         let dest = Vec3::ZERO;
         let inside = Vec3::new(0.5e-4, 0.0, 0.0);
-        assert!(!swept_fixed(inside, inside, dest, Vec3::new(1.0e-6, 0.0, 0.0), true));
+        assert!(!swept_fixed(
+            inside,
+            inside,
+            dest,
+            Vec3::new(1.0e-6, 0.0, 0.0),
+            true
+        ));
     }
 
     #[test]
@@ -312,9 +354,21 @@ mod tests {
         // A point just inside ARRIVAL_RADIUS, zero-length chord, low rel_speed,
         // coming from outside -> fires.
         let just_inside = Vec3::new(ARRIVAL_RADIUS * 0.5, 0.0, 0.0);
-        assert!(swept_fixed(just_inside, just_inside, dest, Vec3::ZERO, false));
+        assert!(swept_fixed(
+            just_inside,
+            just_inside,
+            dest,
+            Vec3::ZERO,
+            false
+        ));
         // Same point, already inside -> no repeat (once-only latch).
-        assert!(!swept_fixed(just_inside, just_inside, dest, Vec3::ZERO, true));
+        assert!(!swept_fixed(
+            just_inside,
+            just_inside,
+            dest,
+            Vec3::ZERO,
+            true
+        ));
         // A point well outside -> never (zero-length chord, closest approach is the
         // point itself, outside R).
         let outside = Vec3::new(ARRIVAL_RADIUS * 10.0 + 1.0, 0.0, 0.0);

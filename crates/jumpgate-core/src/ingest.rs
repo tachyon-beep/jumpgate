@@ -5,10 +5,10 @@
 
 use crate::config::ConfigHash;
 use crate::contract::{Command, Event, EventKind, command_sort_key};
+use crate::economy::ContractStatus;
 use crate::ephemeris::Ephemeris;
 use crate::events::EventStream;
 use crate::math::Vec3;
-use crate::economy::ContractStatus;
 use crate::stores::{CraftRole, CraftStore, NavState};
 use crate::time::Tick;
 use crate::types::{CommandKind, EntityRef, NavDest, Target};
@@ -72,12 +72,7 @@ fn action_ingested(tick: Tick, target: Target) -> Event {
 /// Resolve a `NavDest` to a concrete world `Vec3` at `tick`.
 /// `Position` is already absolute; `Entity` is looked up via the ephemeris
 /// (bodies) or the ship store (craft). Returns `None` if the referent is gone.
-fn resolve_dest(
-    dest: NavDest,
-    tick: Tick,
-    ship: &CraftStore,
-    eph: &Ephemeris,
-) -> Option<Vec3> {
+fn resolve_dest(dest: NavDest, tick: Tick, ship: &CraftStore, eph: &Ephemeris) -> Option<Vec3> {
     match dest {
         NavDest::Position(p) => Some(p),
         NavDest::Entity(EntityRef::Body(bid)) => {
@@ -108,7 +103,10 @@ pub fn ingest_into(
         log.record(tick, *cmd);
 
         match (cmd.target, cmd.kind) {
-            (Target::Entity(EntityRef::Craft(cid)), CommandKind::Destination { dest, burn_budget }) => {
+            (
+                Target::Entity(EntityRef::Craft(cid)),
+                CommandKind::Destination { dest, burn_budget },
+            ) => {
                 if let Some(idx) = ship.index_of(cid) {
                     // dv budget: explicit cap, else Tsiolkovsky fuel-derived.
                     let dv = burn_budget.unwrap_or_else(|| dv_from_fuel(ship, idx));
@@ -160,7 +158,13 @@ pub fn ingest_commands(world: &mut crate::world::World, tick: Tick, cmds: &mut V
                     // dv budget: explicit cap, else Tsiolkovsky fuel-derived (D9/M5) — path-
                     // independent with the slice path, and never INFINITY into dv_remaining.
                     let dv = burn_budget.unwrap_or_else(|| world.dv_from_fuel_for(id));
-                    world.set_nav(id, NavState::Seeking { dest, dv_remaining: dv });
+                    world.set_nav(
+                        id,
+                        NavState::Seeking {
+                            dest,
+                            dv_remaining: dv,
+                        },
+                    );
                 }
                 CommandKind::AcceptContract { contract } => {
                     // Record INTENT only: set the craft's contract column + role Hauler
@@ -297,9 +301,36 @@ mod tests {
     #[test]
     fn log_records_queries_by_tick_and_since() {
         let mut log = ActionLog::new(cfg_hash());
-        log.record(Tick(5), dest_for(CraftId { slot: 0, generation: 1 }, 1.0));
-        log.record(Tick(5), dest_for(CraftId { slot: 1, generation: 1 }, 2.0));
-        log.record(Tick(6), dest_for(CraftId { slot: 0, generation: 1 }, 3.0));
+        log.record(
+            Tick(5),
+            dest_for(
+                CraftId {
+                    slot: 0,
+                    generation: 1,
+                },
+                1.0,
+            ),
+        );
+        log.record(
+            Tick(5),
+            dest_for(
+                CraftId {
+                    slot: 1,
+                    generation: 1,
+                },
+                2.0,
+            ),
+        );
+        log.record(
+            Tick(6),
+            dest_for(
+                CraftId {
+                    slot: 0,
+                    generation: 1,
+                },
+                3.0,
+            ),
+        );
         assert_eq!(log.at(Tick(5)).len(), 2);
         assert_eq!(log.at(Tick(6)).len(), 1);
         assert_eq!(log.at(Tick(7)).len(), 0);
@@ -333,15 +364,35 @@ mod tests {
         let mut ev_a = EventStream::new();
         let mut ev_b = EventStream::new();
 
-        ingest_into(&mut store_a, &eph, &mut log_a, &mut ev_a, Tick(0), &mut shuffled);
-        ingest_into(&mut store_b, &eph, &mut log_b, &mut ev_b, Tick(0), &mut presorted);
+        ingest_into(
+            &mut store_a,
+            &eph,
+            &mut log_a,
+            &mut ev_a,
+            Tick(0),
+            &mut shuffled,
+        );
+        ingest_into(
+            &mut store_b,
+            &eph,
+            &mut log_b,
+            &mut ev_b,
+            Tick(0),
+            &mut presorted,
+        );
 
         // Resolved NavState must be identical regardless of input order.
         for i in 0..2 {
             match (store_a.nav[i], store_b.nav[i]) {
                 (
-                    NavState::Seeking { dest: da, dv_remaining: va },
-                    NavState::Seeking { dest: db, dv_remaining: vb },
+                    NavState::Seeking {
+                        dest: da,
+                        dv_remaining: va,
+                    },
+                    NavState::Seeking {
+                        dest: db,
+                        dv_remaining: vb,
+                    },
                 ) => {
                     assert_eq!(da, db, "dest mismatch at craft {i}");
                     assert_eq!(va, vb, "dv mismatch at craft {i}");
@@ -389,11 +440,21 @@ mod tests {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 256,
             bodies: vec![BodyInit {
                 mass: 1.0,
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             }],
             craft: vec![CraftInit {
                 spec: BaseSpec {
@@ -433,9 +494,18 @@ mod tests {
 
         // Seed one Offered, unassigned contract directly on the live store (test
         // precondition; config minting is a later task).
-        let corp = CorporationId { slot: 0, generation: 0 };
-        let from = StationId { slot: 0, generation: 0 };
-        let to = StationId { slot: 1, generation: 0 };
+        let corp = CorporationId {
+            slot: 0,
+            generation: 0,
+        };
+        let from = StationId {
+            slot: 0,
+            generation: 0,
+        };
+        let to = StationId {
+            slot: 1,
+            generation: 0,
+        };
         let cid = world.contracts.push(corp, Good::ORE, 5, from, to, 1_000);
 
         let mut cmds = vec![Command {
@@ -450,7 +520,11 @@ mod tests {
         assert_eq!(world.ships.role[0], CraftRole::Hauler, "role set to Hauler");
 
         // The command was logged at its tick on the single ingestion path.
-        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+        assert_eq!(
+            world.log_mut().at(Tick(2)).len(),
+            1,
+            "command logged at tick"
+        );
 
         // An ActionIngested event was emitted for the craft target (the seam).
         let emitted = world.events_mut().since(Tick(0));
@@ -476,17 +550,34 @@ mod tests {
 
         let mut cmds = vec![Command {
             target: Target::Entity(EntityRef::Craft(id0)),
-            kind: CommandKind::BuyUpgrade { kind: UpgradeKind::Escort },
+            kind: CommandKind::BuyUpgrade {
+                kind: UpgradeKind::Escort,
+            },
         }];
         ingest_commands(&mut world, Tick(2), &mut cmds);
 
         // Intent written; NO settle on the ingest path (single-ingestion-path lever).
-        assert_eq!(world.ships.pending_upgrade[0], Some(UpgradeKind::Escort), "intent column set");
-        assert_eq!(world.ships.upgrades[0], UpgradeLevels::default(), "no level change at ingest");
-        assert_eq!(world.ships.credits_micros[0], 0, "no credit movement at ingest");
+        assert_eq!(
+            world.ships.pending_upgrade[0],
+            Some(UpgradeKind::Escort),
+            "intent column set"
+        );
+        assert_eq!(
+            world.ships.upgrades[0],
+            UpgradeLevels::default(),
+            "no level change at ingest"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], 0,
+            "no credit movement at ingest"
+        );
 
         // Logged + ActionIngested (the seam fires for every command).
-        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+        assert_eq!(
+            world.log_mut().at(Tick(2)).len(),
+            1,
+            "command logged at tick"
+        );
         let emitted = world.events_mut().since(Tick(0));
         assert_eq!(emitted.len(), 1);
         assert!(matches!(
@@ -507,9 +598,19 @@ mod tests {
         ingest_commands(&mut world, Tick(2), &mut cmds);
 
         assert_eq!(world.ships.pending_refuel[0], Some(()), "intent column set");
-        assert_eq!(world.ships.fuel_mass[0], world.ships.prev_fuel[0], "no tank movement at ingest");
-        assert_eq!(world.ships.credits_micros[0], 0, "no credit movement at ingest");
-        assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command logged at tick");
+        assert_eq!(
+            world.ships.fuel_mass[0], world.ships.prev_fuel[0],
+            "no tank movement at ingest"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], 0,
+            "no credit movement at ingest"
+        );
+        assert_eq!(
+            world.log_mut().at(Tick(2)).len(),
+            1,
+            "command logged at tick"
+        );
         let emitted = world.events_mut().since(Tick(0));
         assert_eq!(emitted.len(), 1);
         assert!(matches!(
@@ -524,12 +625,28 @@ mod tests {
         let id0 = world.ships.ids_at(0);
 
         // Seed a contract that is already assigned to ANOTHER craft -> not acceptable.
-        let corp = CorporationId { slot: 0, generation: 0 };
-        let from = StationId { slot: 0, generation: 0 };
-        let to = StationId { slot: 1, generation: 0 };
+        let corp = CorporationId {
+            slot: 0,
+            generation: 0,
+        };
+        let from = StationId {
+            slot: 0,
+            generation: 0,
+        };
+        let to = StationId {
+            slot: 1,
+            generation: 0,
+        };
         let cid = world.contracts.push(corp, Good::ORE, 5, from, to, 1_000);
-        let other = CraftId { slot: 99, generation: 0 };
-        let cidx = world.contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        let other = CraftId {
+            slot: 99,
+            generation: 0,
+        };
+        let cidx = world
+            .contracts
+            .ids
+            .dense_index(cid.slot, cid.generation)
+            .unwrap();
         world.contracts.hauler[cidx] = Some(other);
 
         let mut cmds = vec![Command {
@@ -540,9 +657,20 @@ mod tests {
 
         // Deterministic skip: craft columns untouched, but command still logged +
         // ActionIngested still emitted (the seam fires for every command).
-        assert_eq!(world.ships.contract[0], None, "skipped: contract column stays None");
-        assert_eq!(world.ships.role[0], CraftRole::Idle, "skipped: role stays Idle");
+        assert_eq!(
+            world.ships.contract[0], None,
+            "skipped: contract column stays None"
+        );
+        assert_eq!(
+            world.ships.role[0],
+            CraftRole::Idle,
+            "skipped: role stays Idle"
+        );
         assert_eq!(world.log_mut().at(Tick(2)).len(), 1, "command still logged");
-        assert_eq!(world.events_mut().since(Tick(0)).len(), 1, "ActionIngested still emitted");
+        assert_eq!(
+            world.events_mut().since(Tick(0)).len(),
+            1,
+            "ActionIngested still emitted"
+        );
     }
 }
