@@ -395,13 +395,12 @@ fn write_recipe_hash(h: &mut FnvHasher, r: &crate::economy::Recipe) {
 /// store's allocator cursor is folded (like the ship/body cursors) so a mid-run
 /// `ContractStore::push` is reflected and a future spawn cannot rewrite history.
 pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
-    use crate::economy::N_RESOURCES;
     // 20. EconCounters.
-    for r in 0..N_RESOURCES {
-        h.write_u64(world.econ.mined[r] as u64);
+    for v in &world.econ.mined {
+        h.write_u64(*v as u64);
     }
-    for r in 0..N_RESOURCES {
-        h.write_u64(world.econ.consumed[r] as u64);
+    for v in &world.econ.consumed {
+        h.write_u64(*v as u64);
     }
     // 21. stations.
     h.write_u64(world.stations.ids.cursor());
@@ -413,9 +412,9 @@ pub(crate) fn write_economy_stores(h: &mut FnvHasher, world: &World) {
         h.write_u64(generation as u64);
         h.write_u64(world.stations.body[i].slot as u64);
         h.write_u64(world.stations.body[i].generation as u64);
-        for r in 0..N_RESOURCES {
-            h.write_u64(world.stations.stock[i][r] as u64);
-            h.write_u64(world.stations.price_micros[i][r] as u64);
+        for (s, p) in world.stations.stock[i].iter().zip(world.stations.price_micros[i].iter()) {
+            h.write_u64(*s as u64);
+            h.write_u64(*p as u64);
         }
     }
     // 22. producers.
@@ -601,6 +600,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -795,7 +795,7 @@ mod tests {
         use crate::stores::CraftRole;
         let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let body = w.body_ids()[0];
-        let st = w.stations.push(body, [10, 5], [100, 200]);
+        let st = w.stations.push(body, vec![10i64, 5i64], vec![100i64, 200i64]);
         let corp = w.corporations.push(1_000_000, st);
         let _prod = w.producers.push(
             st,
@@ -1234,5 +1234,31 @@ mod tests {
     #[test]
     fn golden_zero_state_hash() {
         assert_eq!(manual_zero_fold(), GOLDEN_ZERO_STATE_HASH);
+    }
+
+    #[test]
+    #[ignore = "A1a/A1b hash-neutrality probe — trophic, run before/after, compare outputs"]
+    fn print_trophic_tick_hashes_1000() {
+        use crate::scenario::scenario_trophic;
+        use crate::world::World;
+        let (mut w, _) = World::reset(scenario_trophic(7)).expect("trophic seed 7 ok");
+        let mut cmds = Vec::new();
+        for t in 0..1_000u64 {
+            w.step(&mut cmds);
+            println!("tick={t} hash={:016x}", crate::hash::state_hash(&w));
+        }
+    }
+
+    #[test]
+    #[ignore = "A1b hash-neutrality probe — frontier, run before/after, compare outputs"]
+    fn print_frontier_tick_hashes_2000() {
+        use crate::scenario::scenario_frontier;
+        use crate::world::World;
+        let (mut w, _) = World::reset(scenario_frontier(7)).expect("frontier seed 7 ok");
+        let mut cmds = Vec::new();
+        for t in 0..2_000u64 {
+            w.step(&mut cmds);
+            println!("tick={t} hash={:016x}", crate::hash::state_hash(&w));
+        }
     }
 }

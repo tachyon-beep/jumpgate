@@ -406,6 +406,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 

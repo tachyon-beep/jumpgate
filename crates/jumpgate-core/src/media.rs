@@ -448,7 +448,7 @@ mod tests {
 
     fn xfix(n_craft: usize, master: u64) -> XFix {
         let mut stations = StationStore::empty();
-        stations.push(BodyId { slot: 0, generation: 0 }, [0, 0], [0, 0]);
+        stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
         let spec = || BaseSpec {
             base_dry_mass: 1.0,
             base_max_thrust: 0.0,

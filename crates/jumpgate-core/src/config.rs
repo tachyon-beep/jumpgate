@@ -100,8 +100,8 @@ impl Default for GuidanceParams {
 #[derive(Clone, Debug)]
 pub struct StationInit {
     pub body_index: usize,
-    pub initial_stock: [i64; crate::economy::N_RESOURCES],
-    pub initial_price_micros: [i64; crate::economy::N_RESOURCES],
+    pub initial_stock: Vec<i64>,
+    pub initial_price_micros: Vec<i64>,
     /// First station capability mixin (spec §6): this station vends Hull/Escort
     /// upgrades (the Yard's storefront). Default `false`.
     pub sells_upgrades: bool,
@@ -139,10 +139,10 @@ pub struct ContractInit {
 /// clamped `>= 0`: at stock 0 → `base*2`; at stock `cap` → `base*(2 - slope)`. The
 /// reprice cadence is part of the recorded schedule (invoked from `World::step`, NOT
 /// lazily on read). Consumed by `update_prices` (Stage 2 — Tasks 19/20).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct PriceCfg {
-    pub base_micros: [i64; crate::economy::N_RESOURCES],
-    pub cap: [i64; crate::economy::N_RESOURCES],
+    pub base_micros: Vec<i64>,
+    pub cap: Vec<i64>,
     /// `k * 1000`, e.g. `1800 == 1.8`.
     pub slope_milli: i64,
     /// `update_prices` runs when `tick % reprice_interval == 0`. `1` == every tick.
@@ -152,8 +152,8 @@ pub struct PriceCfg {
 impl Default for PriceCfg {
     fn default() -> Self {
         PriceCfg {
-            base_micros: [0; crate::economy::N_RESOURCES],
-            cap: [1; crate::economy::N_RESOURCES],
+            base_micros: vec![0i64; crate::economy::N_GOODS_V1],
+            cap: vec![1i64; crate::economy::N_GOODS_V1],
             slope_milli: 1800,
             reprice_interval: 1,
         }
@@ -430,6 +430,44 @@ impl Default for RefuelCfg {
     }
 }
 
+/// Minimal-live per-good property record (OD-7).  `name` is NEVER folded
+/// into any hash (display-only).  `unit_mass_milli` is read by the capacity
+/// gate on every transfer; uniform 1000 in v1 (one unit == one milli-mass).
+/// Additional columns (value_density, perishability, …) land each with their
+/// first reader (the INDUSTRY hook).
+#[derive(Clone, Debug)]
+pub struct GoodSpec {
+    /// Human-readable name for console / chronicle output.  Not hashed.
+    /// `String` (not `&'static str`) because names will eventually come from
+    /// config files; using `String` keeps derive sets consistent and avoids
+    /// lifetime annotations at every call site (C6 fix: architecture rationale).
+    pub name: String,
+    /// Mass per unit in milli-mass (1000 == 1 mass unit).
+    pub unit_mass_milli: u32,
+}
+
+/// The ordered goods table.  `goods[i]` describes `Good(i as u16)`.
+/// `goods.len()` is the authoritative `n_goods` used to size every
+/// per-resource Vec at `World::reset`.  Folded into `config_hash` in A3
+/// (the one rung-A config commit); not yet folded here so A1b stays
+/// hash-neutral on the config side too.
+#[derive(Clone, Debug)]
+pub struct GoodsCfg {
+    pub goods: Vec<GoodSpec>,
+}
+
+impl Default for GoodsCfg {
+    /// v1 two-good table (ORE at 0, FUEL at 1).  Matches the v1 pinned indices.
+    fn default() -> Self {
+        GoodsCfg {
+            goods: vec![
+                GoodSpec { name: "Ore".to_string(),  unit_mass_milli: 1000 },
+                GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
+            ],
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -462,6 +500,10 @@ pub struct RunConfig {
     // World-gets-big rung (folded AFTER media, append-only). Default leaves the
     // refuel machinery inert (lot_mass == 0.0 => both refuel stages no-op).
     pub refuel: RefuelCfg,
+    // Goods-as-goods rung A (folded AFTER refuel in A3, append-only). Default
+    // is the v1 two-good table; n_goods = goods.goods.len() sizes all
+    // per-resource Vecs at World::reset.
+    pub goods: GoodsCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -549,7 +591,9 @@ impl RunConfig {
             shipyard, // NEW (pirates rung A): destructure forces folding below
             media,    // NEW (media rung cut 1): destructure forces folding below
             refuel,   // NEW (world-gets-big): destructure forces folding below
+            goods,   // NEW (A1b): destructure forces folding in A3
         } = self;
+        let _ = goods; // folded in A3; bound here so adding A3's fold is a compile error until explicit
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
         h.write_u64(*master_seed);
@@ -604,7 +648,7 @@ impl RunConfig {
         h.write_u64(contracts.len() as u64);
         for s in stations {
             h.write_u64(s.body_index as u64);
-            for r in 0..crate::economy::N_RESOURCES {
+            for r in 0..s.initial_stock.len() {
                 h.write_u64(s.initial_stock[r] as u64);
                 h.write_u64(s.initial_price_micros[r] as u64);
             }
@@ -627,7 +671,7 @@ impl RunConfig {
         }
         h.write_u64(price_cfg.slope_milli as u64);
         h.write_u64(price_cfg.reprice_interval as u64);
-        for r in 0..crate::economy::N_RESOURCES {
+        for r in 0..price_cfg.base_micros.len() {
             h.write_u64(price_cfg.base_micros[r] as u64);
             h.write_u64(price_cfg.cap[r] as u64);
         }
@@ -828,6 +872,7 @@ mod tests {
             shipyard: ShipyardCfg::default(),
             media: MediaCfg::default(),
             refuel: RefuelCfg::default(),
+            goods: GoodsCfg::default(),
         }
     }
 
@@ -933,8 +978,8 @@ mod tests {
         let mut c = sample();
         c.stations.push(StationInit {
             body_index: 0,
-            initial_stock: [10, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![10i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         });
         assert_ne!(sample().config_hash(), c.config_hash());
@@ -1062,8 +1107,8 @@ mod tests {
         // sells_upgrades participates: same station with/without the vendor bit.
         let station = |sells: bool| StationInit {
             body_index: 0,
-            initial_stock: [10, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![10i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: sells,
         };
         let mut f = sample();
@@ -1099,5 +1144,14 @@ mod tests {
             scripted: true,
         });
         assert_ne!(sample().config_hash(), c.config_hash());
+    }
+
+    #[test]
+    fn goods_cfg_default_names_match_good_debug() {
+        let cfg = GoodsCfg::default();
+        assert_eq!(cfg.goods[0].name, format!("{:?}", crate::economy::Good::ORE),
+            "GoodsCfg default name for index 0 must match Good::ORE Debug string");
+        assert_eq!(cfg.goods[1].name, format!("{:?}", crate::economy::Good::FUEL),
+            "GoodsCfg default name for index 1 must match Good::FUEL Debug string");
     }
 }

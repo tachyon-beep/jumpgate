@@ -38,29 +38,12 @@ impl Good {
     /// All v1 base goods in canonical index order.  Used only by `update_prices`
     /// to build PriceUpdate events; code that needs a runtime count should read
     /// `n_goods` from GoodsCfg (A3).
-    pub const ALL_V1: [Good; N_RESOURCES] = [Good::ORE, Good::FUEL];
+    pub const ALL_V1: [Good; N_GOODS_V1] = [Good::ORE, Good::FUEL];
 }
 
-/// Backward-compatible alias kept for migration in A1a; removed in A1b once all
-/// call sites are updated.  Declared after `Good` so `Resource::Ore.index()`
-/// still compiles, easing the mechanical conversion.
-#[allow(non_camel_case_types, dead_code)]
-#[deprecated(since = "0.0.0", note = "migrate to Good::ORE / Good::FUEL (A1)")]
-pub type Resource = Good;
-
-/// Backward-compat shim: re-export old names as associated consts.
-#[allow(dead_code, non_upper_case_globals)]
-impl Good {
-    #[deprecated(since = "0.0.0", note = "use Good::ORE")]
-    pub const Ore:  Good = Good::ORE;
-    #[deprecated(since = "0.0.0", note = "use Good::FUEL")]
-    pub const Fuel: Good = Good::FUEL;
-}
-
-/// Number of base goods in v1 (pinned; Experiment C raises this via config).
-/// Used ONLY for fixed-size array literals that survive until A1b converts them
-/// to Vecs; do NOT introduce new uses.
-pub const N_RESOURCES: usize = 2;
+/// Number of goods in the v1 table.  Use for Default impls and old-lineage
+/// tests only; runtime sizing must read from GoodsCfg.
+pub const N_GOODS_V1: usize = 2;
 
 use crate::diagnostics::permille_floor;
 use crate::ids::{BodyId, ContractId, CorporationId, CraftId, ProducerId, SlotMap, StationId};
@@ -81,8 +64,8 @@ pub struct Recipe {
 pub struct StationStore {
     pub ids: SlotMap<()>,
     pub body: Vec<BodyId>,
-    pub stock: Vec<[i64; N_RESOURCES]>,
-    pub price_micros: Vec<[i64; N_RESOURCES]>,
+    pub stock: Vec<Vec<i64>>,
+    pub price_micros: Vec<Vec<i64>>,
 }
 
 impl StationStore {
@@ -98,8 +81,8 @@ impl StationStore {
     pub fn push(
         &mut self,
         body: BodyId,
-        stock: [i64; N_RESOURCES],
-        price_micros: [i64; N_RESOURCES],
+        stock: Vec<i64>,
+        price_micros: Vec<i64>,
     ) -> StationId {
         let (slot, generation) = self.ids.insert(());
         debug_assert_eq!(slot as usize, self.body.len(), "station slot == row");
@@ -250,16 +233,16 @@ impl ContractStore {
 /// They make the resource accounting identity exact:
 /// `Σstock(r) + in_transit(r) == initial(r) + mined(r) − consumed(r)`.
 /// Mutable per-tick state → HASHED (folded in state_hash at the version-2 bump).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EconCounters {
-    pub mined: [i64; N_RESOURCES],
-    pub consumed: [i64; N_RESOURCES],
+    pub mined: Vec<i64>,
+    pub consumed: Vec<i64>,
 }
 
 impl EconCounters {
-    /// All-zero counters (the reset state).
-    pub fn zero() -> Self {
-        EconCounters { mined: [0; N_RESOURCES], consumed: [0; N_RESOURCES] }
+    /// All-zero counters sized for `n_goods`.
+    pub fn zero(n_goods: usize) -> Self {
+        EconCounters { mined: vec![0i64; n_goods], consumed: vec![0i64; n_goods] }
     }
 }
 
@@ -344,7 +327,7 @@ pub fn update_prices(
     events: &mut EventStream,
 ) {
     for row in 0..stations.ids.len() {
-        for r in 0..N_RESOURCES {
+        for r in 0..price_cfg.cap.len() {
             if price_cfg.cap[r] == 0 {
                 continue;
             }
@@ -1615,27 +1598,39 @@ mod tests {
         fn needs_eq<T: Eq>() {}
         needs_copy::<Good>();
         needs_eq::<Good>();
+        // ALL_V1 is index-dense: ALL_V1[i].index() == i.
+        assert_eq!(Good::ALL_V1.len(), N_GOODS_V1);
+        for (i, r) in Good::ALL_V1.iter().enumerate() {
+            assert_eq!(r.index(), i);
+        }
+    }
+
+    #[test]
+    fn good_debug_wire_format_is_stable() {
+        assert_eq!(format!("{:?}", Good::ORE), "Ore");
+        assert_eq!(format!("{:?}", Good::FUEL), "Fuel");
+        assert_eq!(format!("{:?}", Good(2)), "Good(2)");
     }
 
     /// A station whose Body is a throwaway (BodyId not resolved here; producers
     /// read by StationId row, not body).
-    fn one_station(stock: [i64; N_RESOURCES]) -> StationStore {
+    fn one_station(stock: Vec<i64>) -> StationStore {
         let mut s = StationStore::empty();
-        s.push(BodyId { slot: 0, generation: 0 }, stock, [0; N_RESOURCES]);
+        s.push(BodyId { slot: 0, generation: 0 }, stock, vec![0i64; N_GOODS_V1]);
         s
     }
 
     #[test]
     fn run_producers_miner_mines_ore_and_counts() {
         // Miner: ∅ -> Ore(5), interval 1. Source leg only: mined[Ore]+=5.
-        let mut stations = one_station([0, 0]);
+        let mut stations = one_station(vec![0i64, 0i64]);
         let st = StationId { slot: 0, generation: 0 };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
             Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
         );
-        let mut counters = EconCounters::zero();
+        let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
@@ -1661,7 +1656,7 @@ mod tests {
     fn run_producers_refiner_bumps_both_legs() {
         // Refiner: Ore(3) -> Fuel(2), interval 1. PER-LEG: consumed[Ore]+=3 AND
         // mined[Fuel]+=2 (the dual-bump the T18 identity depends on).
-        let mut stations = one_station([10, 0]);
+        let mut stations = one_station(vec![10i64, 0i64]);
         let st = StationId { slot: 0, generation: 0 };
         let mut producers = ProducerStore::empty();
         producers.push(
@@ -1672,7 +1667,7 @@ mod tests {
                 interval: 1,
             },
         );
-        let mut counters = EconCounters::zero();
+        let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
@@ -1700,7 +1695,7 @@ mod tests {
     fn run_producers_all_or_nothing_skip_on_insufficient_input() {
         // Refiner needs Ore(5) but station has 2 -> skip: no stock change, no
         // counter change, no event, last_fired NOT advanced (retries next tick).
-        let mut stations = one_station([2, 0]);
+        let mut stations = one_station(vec![2i64, 0i64]);
         let st = StationId { slot: 0, generation: 0 };
         let mut producers = ProducerStore::empty();
         producers.push(
@@ -1711,13 +1706,13 @@ mod tests {
                 interval: 1,
             },
         );
-        let mut counters = EconCounters::zero();
+        let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
 
-        assert_eq!(stations.stock[0], [2, 0], "no stock change on skip");
-        assert_eq!(counters, EconCounters::zero(), "no counter change on skip");
+        assert_eq!(stations.stock[0], vec![2i64, 0i64], "no stock change on skip");
+        assert_eq!(counters, EconCounters::zero(N_GOODS_V1), "no counter change on skip");
         assert_eq!(producers.last_fired[0], Tick(0), "last_fired NOT advanced on skip");
         assert!(events.events.is_empty(), "no Production on skip");
     }
@@ -1725,14 +1720,14 @@ mod tests {
     #[test]
     fn run_producers_respects_interval() {
         // Miner interval 3: fires at tick 3 (3-0>=3), not at tick 1 or 2.
-        let mut stations = one_station([0, 0]);
+        let mut stations = one_station(vec![0i64, 0i64]);
         let st = StationId { slot: 0, generation: 0 };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
             Recipe { input: None, output: Some((Good::ORE, 1)), interval: 3 },
         );
-        let mut counters = EconCounters::zero();
+        let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
@@ -1751,8 +1746,8 @@ mod tests {
         // Ore has cap==0 -> SKIPPED (div-by-zero guard, price left unchanged).
         let price_cfg = PriceCfg {
             slope_milli: 1800,
-            base_micros: [0, 100_000],
-            cap: [0, 10],
+            base_micros: vec![0i64, 100_000i64],
+            cap: vec![0i64, 10i64],
             ..PriceCfg::default()
         };
 
@@ -1763,8 +1758,8 @@ mod tests {
         for (i, &fstock) in fuel_stocks.iter().enumerate() {
             stations.push(
                 BodyId { slot: i as u32, generation: 0 },
-                [0, fstock],
-                [777, 0],
+                vec![0i64, fstock],
+                vec![777i64, 0i64],
             );
         }
         let mut events = EventStream::new();
@@ -1810,16 +1805,6 @@ mod tests {
             e.kind,
             EventKind::PriceUpdate { resource: Good::FUEL, .. }
         )));
-    }
-
-    #[test]
-    fn resource_index_is_stable_and_dense() {
-        assert_eq!(Good::ORE.index(), 0);
-        assert_eq!(Good::FUEL.index(), 1);
-        assert_eq!(Good::ALL_V1.len(), N_RESOURCES);
-        for (i, r) in Good::ALL_V1.iter().enumerate() {
-            assert_eq!(r.index(), i);
-        }
     }
 
     #[test]
@@ -1897,8 +1882,8 @@ mod tests {
             guidance: GuidanceParams::default(),
             stations: vec![StationInit {
                 body_index: 0,
-                initial_stock: [0, 0],
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades,
             }],
             producers: vec![],
@@ -1910,6 +1895,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -2052,11 +2038,11 @@ mod tests {
     fn refuel_world_fixture() -> crate::config::RunConfig {
         let mut cfg = vendor_world_fixture(false);
         cfg.craft[0].fuel_mass = 0.0;
-        cfg.stations[0].initial_stock = [0, 40];
-        cfg.stations[0].initial_price_micros = [0, 5_000];
+        cfg.stations[0].initial_stock = vec![0i64, 40i64];
+        cfg.stations[0].initial_price_micros = vec![0i64, 5_000i64];
         cfg.price_cfg = crate::config::PriceCfg {
-            base_micros: [0, 5_000],
-            cap: [0, 40],
+            base_micros: vec![0i64, 5_000i64],
+            cap: vec![0i64, 40i64],
             slope_milli: 1800,
             reprice_interval: 0,
         };
@@ -2380,14 +2366,14 @@ mod tests {
         cfg.stations = vec![
             StationInit {
                 body_index: 0,
-                initial_stock: [0, 20], // covers the qty-10 Fuel load
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 20i64], // covers the qty-10 Fuel load
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades: false,
             },
             StationInit {
                 body_index: 1,
-                initial_stock: [0, 0],
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades: false,
             },
         ];
@@ -2454,8 +2440,8 @@ mod tests {
         use crate::math::Vec3;
 
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, [0, 100], [0; N_RESOURCES]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 100i64], vec![0i64; N_GOODS_V1]);
+        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
@@ -2592,9 +2578,9 @@ mod tests {
         use crate::config::BaseSpec;
         use crate::math::Vec3;
         let mut stations = StationStore::empty();
-        let a = stations.push(BodyId { slot: 0, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
-        let b = stations.push(BodyId { slot: 1, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
-        let c = stations.push(BodyId { slot: 2, generation: 0 }, [0; N_RESOURCES], [0; N_RESOURCES]);
+        let a = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
+        let b = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
+        let c = stations.push(BodyId { slot: 2, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, a);
         let mut contracts = ContractStore::empty();
@@ -2955,8 +2941,8 @@ mod tests {
         use crate::math::Vec3;
 
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, [0, 100], [0; N_RESOURCES]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 100i64], vec![0i64; N_GOODS_V1]);
+        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
@@ -3099,14 +3085,14 @@ mod tests {
             stations: vec![
                 StationInit {
                     body_index: 0,
-                    initial_stock: [0, 10],
-                    initial_price_micros: [0, 0],
+                    initial_stock: vec![0i64, 10i64],
+                    initial_price_micros: vec![0i64, 0i64],
                     sells_upgrades: false,
                 },
                 StationInit {
                     body_index: 1,
-                    initial_stock: [0, 10],
-                    initial_price_micros: [0, 0],
+                    initial_stock: vec![0i64, 10i64],
+                    initial_price_micros: vec![0i64, 0i64],
                     sells_upgrades: false,
                 },
             ],
@@ -3129,6 +3115,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -3379,8 +3366,8 @@ mod tests {
         // Two stations, two equal-reward offers on opposite directed routes
         // (dense 2-station layout: s0->s1 = route 1, s1->s0 = route 2).
         let mut stations = StationStore::empty();
-        let s0 = stations.push(BodyId { slot: 0, generation: 0 }, [0, 0], [0; N_RESOURCES]);
-        let s1 = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0; N_RESOURCES]);
+        let s0 = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
+        let s1 = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, s0);
         let mut contracts = ContractStore::empty();

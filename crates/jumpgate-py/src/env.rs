@@ -212,6 +212,7 @@ fn config_template(num_craft: usize) -> RunConfig {
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
+        goods: jumpgate_core::config::GoodsCfg::default(),
     }
 }
 
@@ -382,26 +383,26 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
     let stations = vec![
         StationInit {
             body_index: 1,
-            initial_stock: [40, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![40i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         },
         StationInit {
             body_index: 2,
-            initial_stock: [0, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         },
         StationInit {
             body_index: 3,
-            initial_stock: [40, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![40i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         },
         StationInit {
             body_index: 4,
-            initial_stock: [0, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         },
     ];
@@ -490,6 +491,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
+        goods: jumpgate_core::config::GoodsCfg::default(),
     }
 }
 

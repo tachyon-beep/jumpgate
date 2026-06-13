@@ -1109,8 +1109,8 @@ mod tests {
             guidance: GuidanceParams::default(),
             stations: vec![StationInit {
                 body_index: 0,
-                initial_stock: [0, 0],
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades: true,
             }],
             producers: vec![],
@@ -1122,6 +1122,7 @@ mod tests {
             shipyard: ShipyardCfg::default(), // corp_index 0 == the only corp
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -1243,8 +1244,8 @@ mod tests {
                 guidance: GuidanceParams::default(),
                 stations: vec![StationInit {
                     body_index: 0,
-                    initial_stock: [3, 17],
-                    initial_price_micros: [0, 5_000],
+                    initial_stock: vec![3i64, 17i64],
+                    initial_price_micros: vec![0i64, 5_000i64],
                     sells_upgrades: false,
                 }],
                 producers: vec![],
@@ -1263,6 +1264,7 @@ mod tests {
                 shipyard: ShipyardCfg::default(),
                 media: crate::config::MediaCfg::default(),
                 refuel: crate::config::RefuelCfg::default(),
+                goods: crate::config::GoodsCfg::default(),
             }
         }
 
@@ -1339,16 +1341,16 @@ mod tests {
             guidance: GuidanceParams::default(),
             stations: vec![StationInit {
                 body_index: 0,
-                initial_stock: [0, 10],
-                initial_price_micros: [0, 5_000],
+                initial_stock: vec![0i64, 10i64],
+                initial_price_micros: vec![0i64, 5_000i64],
                 sells_upgrades: false,
             }],
             producers: vec![],
             corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
             contracts: vec![],
             price_cfg: PriceCfg {
-                base_micros: [0, 5_000],
-                cap: [0, 40],
+                base_micros: vec![0i64, 5_000i64],
+                cap: vec![0i64, 40i64],
                 slope_milli: 1800,
                 reprice_interval: 1,
             },
@@ -1357,6 +1359,7 @@ mod tests {
             shipyard: ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 },
+            goods: crate::config::GoodsCfg::default(),
         };
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         world.ships.credits_micros[0] = 1_000_000;
@@ -1573,8 +1576,8 @@ mod tests {
         let mut cfg = crate::scenario::scenario_trophic(7);
         cfg.stations.push(crate::config::StationInit {
             body_index: 1,
-            initial_stock: [0, 0],
-            initial_price_micros: [0, 0],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         });
         let rows = endpoint_station_rows(&cfg);

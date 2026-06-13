@@ -61,6 +61,7 @@ fn base_config() -> RunConfig {
         shipyard: jumpgate_core::config::ShipyardCfg::default(),
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
+        goods: jumpgate_core::config::GoodsCfg::default(),
     }
 }
 

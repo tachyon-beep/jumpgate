@@ -809,8 +809,8 @@ mod tests {
 
     fn fix() -> Fix {
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, [0, 0], [0, 0]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, [0, 0], [0, 0]);
+        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
+        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64, 0i64]);
         let station_pos = vec![Vec3::ZERO, Vec3::new(0.3, 0.0, 0.0)];
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, from);
@@ -836,7 +836,7 @@ mod tests {
             ships,
             contracts,
             corporations,
-            counters: EconCounters::zero(),
+            counters: EconCounters::zero(crate::economy::N_GOODS_V1),
             stations,
             station_pos,
             route_evidence: RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] },
@@ -1239,14 +1239,14 @@ mod tests {
             stations: vec![
                 StationInit {
                     body_index: 0,
-                    initial_stock: [0, 10],
-                    initial_price_micros: [0, 0],
+                    initial_stock: vec![0i64, 10i64],
+                    initial_price_micros: vec![0i64, 0i64],
                     sells_upgrades: false,
                 },
                 StationInit {
                     body_index: 1,
-                    initial_stock: [0, 0],
-                    initial_price_micros: [0, 0],
+                    initial_stock: vec![0i64, 0i64],
+                    initial_price_micros: vec![0i64, 0i64],
                     sells_upgrades: false,
                 },
             ],
@@ -1273,6 +1273,7 @@ mod tests {
             shipyard: ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -1628,8 +1629,8 @@ mod tests {
             c.stations = (0..4)
                 .map(|i| StationInit {
                     body_index: i,
-                    initial_stock: [0, 0],
-                    initial_price_micros: [0, 0],
+                    initial_stock: vec![0i64, 0i64],
+                    initial_price_micros: vec![0i64, 0i64],
                     sells_upgrades: false,
                 })
                 .collect();
@@ -2119,7 +2120,7 @@ mod tests {
                 + w.contracts.escrow_micros.iter().sum::<i64>()
         };
         let initial_credit = credit_now(&world);
-        let mut initial_stock = [0i64; crate::economy::N_RESOURCES];
+        let mut initial_stock = [0i64; crate::economy::N_GOODS_V1];
         for (r, slot) in initial_stock.iter_mut().enumerate() {
             *slot = world.stations.stock.iter().map(|s| s[r]).sum();
         }
@@ -2127,7 +2128,7 @@ mod tests {
         for t in 1..=5000u64 {
             world.step(&mut empty);
             assert_eq!(credit_now(&world), initial_credit, "credit identity broke at tick {t}");
-            for r in 0..crate::economy::N_RESOURCES {
+            for r in 0..crate::economy::N_GOODS_V1 {
                 let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
                 let in_transit: i64 = world
                     .ships

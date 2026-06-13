@@ -194,19 +194,19 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
     // stocks (18/14/10 against the global 10/20 band) + per-tier destination
     // stations — same interleaved first-burst structure, zero config-surface
     // change.
-    let stock = |ore: i64, fuel: i64| -> [i64; crate::economy::N_RESOURCES] {
-        let mut s = [0i64; crate::economy::N_RESOURCES];
+    let stock = |ore: i64, fuel: i64| -> Vec<i64> {
+        let mut s = vec![0i64; crate::economy::N_GOODS_V1];
         s[Good::ORE.index()]  = ore;
         s[Good::FUEL.index()] = fuel;
         s
     };
     let stations = vec![
-        StationInit { body_index: 1, initial_stock: stock(40, 18), initial_price_micros: [0, 0], sells_upgrades: false },
-        StationInit { body_index: 2, initial_stock: stock(40, 14), initial_price_micros: [0, 0], sells_upgrades: false },
-        StationInit { body_index: 3, initial_stock: stock(40, 10), initial_price_micros: [0, 0], sells_upgrades: false },
-        StationInit { body_index: 4, initial_stock: stock(18, 0), initial_price_micros: [0, 0], sells_upgrades: true },
-        StationInit { body_index: 5, initial_stock: stock(14, 0), initial_price_micros: [0, 0], sells_upgrades: false },
-        StationInit { body_index: 6, initial_stock: stock(10, 0), initial_price_micros: [0, 0], sells_upgrades: true },
+        StationInit { body_index: 1, initial_stock: stock(40, 18), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+        StationInit { body_index: 2, initial_stock: stock(40, 14), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+        StationInit { body_index: 3, initial_stock: stock(40, 10), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+        StationInit { body_index: 4, initial_stock: stock(18, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: true },
+        StationInit { body_index: 5, initial_stock: stock(14, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+        StationInit { body_index: 6, initial_stock: stock(10, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: true },
     ];
     let producers = vec![
         // Ore miners at the sources.
@@ -305,6 +305,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
         media: MediaCfg::default(),
         refuel: crate::config::RefuelCfg::default(),
+        goods: crate::config::GoodsCfg::default(),
     }
 }
 
@@ -393,8 +394,8 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     // and the haven (6). Schmitt stagger carried as per-tier INITIAL stocks
     // (18/14/10 dest Ore + 18/14/10 sink Fuel) against the ONE global 10/20
     // band — the trophic DEVIATION comment applies unchanged.
-    let stock = |ore: i64, fuel: i64| -> [i64; crate::economy::N_RESOURCES] {
-        let mut s = [0i64; crate::economy::N_RESOURCES];
+    let stock = |ore: i64, fuel: i64| -> Vec<i64> {
+        let mut s = vec![0i64; crate::economy::N_GOODS_V1];
         s[Good::ORE.index()]  = ore;
         s[Good::FUEL.index()] = fuel;
         s
@@ -409,7 +410,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     let station = |body_index: usize, ore: i64, fuel: i64, vendor: bool| StationInit {
         body_index,
         initial_stock: stock(ore, fuel),
-        initial_price_micros: [0, fuel_price(fuel)],
+        initial_price_micros: vec![0i64, fuel_price(fuel)],
         sells_upgrades: vendor,
     };
     let stations = vec![
@@ -521,8 +522,8 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
             // 1_000 -> dry 10_000 micros/unit; a full fill ~= the grubstake
             // ~= 10% of a tier-1 reward. cap[Ore] == 0 = the structural-off
             // switch (update_prices skips the row).
-            base_micros: [0, 5_000],
-            cap: [0, 40],
+            base_micros: vec![0i64, 5_000i64],
+            cap: vec![0i64, 40i64],
             slope_milli: 1800,
             reprice_interval: 1,
         },
@@ -540,6 +541,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         // frontier leg); revenue -> the Port corp (index 4, treasury 0) —
         // generator AND consumer land in one rung (the OD-5b two-sided law).
         refuel: RefuelCfg { lot_mass: 5.0e-11, corp_index: 4 },
+        goods: crate::config::GoodsCfg::default(),
     }
 }
 
@@ -1162,8 +1164,8 @@ mod tests {
 
         // PriceCfg: Fuel-only live (spec §5, OD-4). cap[Ore]==0 is the
         // structural-off switch — Ore stays dead by construction.
-        assert_eq!(cfg.price_cfg.base_micros, [0, 5_000], "Fuel-only base");
-        assert_eq!(cfg.price_cfg.cap, [0, 40], "cap[Ore]==0 keeps Ore structurally dead");
+        assert_eq!(cfg.price_cfg.base_micros, vec![0i64, 5_000i64], "Fuel-only base");
+        assert_eq!(cfg.price_cfg.cap, vec![0i64, 40i64], "cap[Ore]==0 keeps Ore structurally dead");
         assert_eq!(cfg.price_cfg.slope_milli, 1800);
         assert_eq!(cfg.price_cfg.reprice_interval, 1);
 
@@ -1220,14 +1222,16 @@ mod tests {
         let mut fuel_updates = 0u32;
         for e in world.recent_events(Tick(0)) {
             if let EventKind::PriceUpdate { resource, price_micros, .. } = e.kind {
-                if resource == Good::ORE {
-                    panic!("Ore price updated — cap[Ore]==0 must keep it dead");
-                } else if resource == Good::FUEL {
-                    fuel_updates += 1;
-                    assert!(
-                        (1_000..=10_000).contains(&price_micros),
-                        "fuel price {price_micros} outside the curve band"
-                    );
+                match resource {
+                    Good::ORE => panic!("Ore price updated — cap[Ore]==0 must keep it dead"),
+                    Good::FUEL => {
+                        fuel_updates += 1;
+                        assert!(
+                            (1_000..=10_000).contains(&price_micros),
+                            "fuel price {price_micros} outside the curve band"
+                        );
+                    }
+                    other => panic!("unexpected good {other:?} in frontier v1"),
                 }
             }
         }

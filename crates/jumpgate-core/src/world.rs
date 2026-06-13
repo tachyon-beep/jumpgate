@@ -162,6 +162,10 @@ pub enum ResetError {
     /// cannot resolve. Refuel settlement is a four-legged transfer, so reject
     /// before tick 0 rather than minting a zero-price or one-legged world.
     BadRefuelCfg { reason: &'static str },
+    /// The `RunConfig.goods` table is invalid: either zero goods, or a station's
+    /// `initial_stock` / `initial_price_micros` Vec length does not equal
+    /// `n_goods`.  Rejected before tick 0.
+    BadGoodsCfg { reason: &'static str },
 }
 
 impl std::fmt::Display for ResetError {
@@ -183,6 +187,9 @@ impl std::fmt::Display for ResetError {
             ResetError::BadRefuelCfg { reason } => {
                 write!(f, "bad refuel config: {reason}")
             }
+            ResetError::BadGoodsCfg { reason } => {
+                write!(f, "bad goods config: {reason}")
+            }
         }
     }
 }
@@ -195,6 +202,30 @@ impl World {
     /// `seed` and `dt` come from `cfg`; nothing is read from the environment.
     pub fn reset(cfg: RunConfig) -> Result<(World, ConfigHash), ResetError> {
         let hash = cfg.config_hash();
+        // Validate goods table (A1b): reject zero-goods configs and length mismatches
+        // before minting any stores.
+        let n_goods = cfg.goods.goods.len();
+        if n_goods == 0 {
+            return Err(ResetError::BadGoodsCfg { reason: "GoodsCfg has zero goods" });
+        }
+        for (si, s) in cfg.stations.iter().enumerate() {
+            if s.initial_stock.len() != n_goods {
+                return Err(ResetError::BadGoodsCfg {
+                    reason: "station initial_stock length != n_goods",
+                });
+            }
+            if s.initial_price_micros.len() != n_goods {
+                return Err(ResetError::BadGoodsCfg {
+                    reason: "station initial_price_micros length != n_goods",
+                });
+            }
+            let _ = si; // si used in error messages if the & str is expanded later
+        }
+        if cfg.price_cfg.base_micros.len() != n_goods || cfg.price_cfg.cap.len() != n_goods {
+            return Err(ResetError::BadGoodsCfg {
+                reason: "PriceCfg base_micros or cap length != n_goods",
+            });
+        }
         // §6 resolvability guard: reject any craft whose worst-case (empty-tank)
         // braking would tunnel the arrival sphere at this dt. Reads only inputs
         // already in config_hash (dt, base_max_thrust, base_dry_mass, guidance.k_brake),
@@ -227,12 +258,12 @@ impl World {
         // Fuel price surface and a resolvable Port corporation row.
         if cfg.refuel.lot_mass > 0.0 {
             let fuel = crate::economy::Good::FUEL.index();
-            if cfg.price_cfg.base_micros[fuel] == 0 {
+            if cfg.price_cfg.base_micros.get(fuel).copied().unwrap_or(0) == 0 {
                 return Err(ResetError::BadRefuelCfg {
                     reason: "lot_mass > 0 but price_cfg.base_micros[Fuel] == 0",
                 });
             }
-            if cfg.stations.iter().any(|s| s.initial_price_micros[fuel] == 0) {
+            if cfg.stations.iter().any(|s| s.initial_price_micros.get(fuel).copied().unwrap_or(0) == 0) {
                 return Err(ResetError::BadRefuelCfg {
                     reason: "lot_mass > 0 but a station's seeded initial_price_micros[Fuel] == 0",
                 });
@@ -352,7 +383,7 @@ impl World {
                 ResetError::BadEconomyRef { what: "station.body_index", index: s.body_index },
             )?;
             let body = BodyId { slot, generation };
-            station_ids.push(stations.push(body, s.initial_stock, s.initial_price_micros));
+            station_ids.push(stations.push(body, s.initial_stock.clone(), s.initial_price_micros.clone()));
         }
 
         let mut producers = crate::economy::ProducerStore::empty();
@@ -481,7 +512,7 @@ impl World {
             producers,
             corporations,
             contracts,
-            econ: crate::economy::EconCounters::zero(),
+            econ: crate::economy::EconCounters::zero(n_goods),
             route_evidence,
             station_gossip,
             next_alert_seq: 0,
@@ -1381,6 +1412,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -1452,6 +1484,7 @@ mod tests {
             shipyard: crate::config::ShipyardCfg::default(),
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
+            goods: crate::config::GoodsCfg::default(),
         }
     }
 
@@ -1794,19 +1827,19 @@ mod tests {
     /// path (distinct from `populated_economy_parity`, which hand-mutates).
     fn one_body_two_stations_one_miner() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Good};
+        use crate::economy::{Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![
             StationInit {
                 body_index: 0,
-                initial_stock: [7, 3],
-                initial_price_micros: [100, 200],
+                initial_stock: vec![7i64, 3i64],
+                initial_price_micros: vec![100i64, 200i64],
                 sells_upgrades: false,
             },
             StationInit {
                 body_index: 0,
-                initial_stock: [0; N_RESOURCES],
-                initial_price_micros: [150, 250],
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![150i64, 250i64],
                 sells_upgrades: false,
             },
         ];
@@ -1832,8 +1865,8 @@ mod tests {
         assert_eq!(wa.stations.ids.len(), 2, "2 stations minted");
         assert_eq!(wa.producers.ids.len(), 1, "1 producer minted");
         // Station 0's opening market came straight from StationInit[0].
-        assert_eq!(wa.stations.stock[0], [7, 3]);
-        assert_eq!(wa.stations.price_micros[0], [100, 200]);
+        assert_eq!(wa.stations.stock[0], vec![7i64, 3i64]);
+        assert_eq!(wa.stations.price_micros[0], vec![100i64, 200i64]);
         // The minted producer points at the minted StationId for station_index 0.
         let st0 = wa.stations.ids.id_at(0).map(|(slot, generation)| crate::ids::StationId {
             slot,
@@ -1841,7 +1874,7 @@ mod tests {
         });
         assert_eq!(Some(wa.producers.station[0]), st0, "producer bound to minted station 0");
         // Flow counters start zero (no firing at reset).
-        assert_eq!(wa.econ, crate::economy::EconCounters::zero());
+        assert_eq!(wa.econ, crate::economy::EconCounters::zero(crate::economy::N_GOODS_V1));
     }
 
     #[test]
@@ -2165,12 +2198,12 @@ mod tests {
     /// Used to prove `run_producers` is wired into `World::step`.
     fn one_body_one_station_one_miner_ore_zero() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Good};
+        use crate::economy::{Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
-            initial_stock: [0; N_RESOURCES],
-            initial_price_micros: [0; N_RESOURCES],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         }];
         cfg.producers = vec![ProducerInit {
@@ -2206,13 +2239,12 @@ mod tests {
     #[test]
     fn reset_rejects_out_of_range_economy_ref() {
         use crate::config::StationInit;
-        use crate::economy::N_RESOURCES;
         let mut cfg = one_body_one_craft();
         // body_index 5 is out of range (only 1 body) -> BadEconomyRef before tick 0.
         cfg.stations = vec![StationInit {
             body_index: 5,
-            initial_stock: [0; N_RESOURCES],
-            initial_price_micros: [0; N_RESOURCES],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         }];
         assert!(matches!(
@@ -2262,15 +2294,15 @@ mod tests {
             // Station A (origin): 10 Fuel in stock to cover the 5-unit load.
             StationInit {
                 body_index: 0,
-                initial_stock: [0, 10],
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 10i64],
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades: false,
             },
             // Station B (the delivery destination).
             StationInit {
                 body_index: 1,
-                initial_stock: [0, 0],
-                initial_price_micros: [0, 0],
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
                 sells_upgrades: false,
             },
         ];
@@ -2317,9 +2349,9 @@ mod tests {
         cfg.craft[0].vel = Vec3::new(0.0, v_circ, 0.0);
         cfg.stations = vec![
             // Station A (origin) on the FAST body: 10 Fuel covers the 5-unit load.
-            StationInit { body_index: 1, initial_stock: [0, 10], initial_price_micros: [0, 0], sells_upgrades: false },
+            StationInit { body_index: 1, initial_stock: vec![0i64, 10i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
             // Station B (destination) on the central star.
-            StationInit { body_index: 0, initial_stock: [0, 0], initial_price_micros: [0, 0], sells_upgrades: false },
+            StationInit { body_index: 0, initial_stock: vec![0i64, 0i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
         ];
         cfg.corporations =
             vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
@@ -2589,22 +2621,22 @@ mod tests {
 
     #[test]
     fn scripted_dispatch_makes_stage1_loop_self_run() {
-        use crate::economy::{ContractStatus, N_RESOURCES, Good};
+        use crate::economy::{ContractStatus, N_GOODS_V1, Good};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
         let fuel = Good::FUEL.index();
 
         // Resource accounting identity baseline: initial[r] = Σ station stock at tick 0
         // (mined == consumed == 0 at reset).
-        let mut initial = [0i64; N_RESOURCES];
-        for r in 0..N_RESOURCES {
+        let mut initial = [0i64; N_GOODS_V1];
+        for r in 0..N_GOODS_V1 {
             initial[r] = world.stations.stock.iter().map(|s| s[r]).sum();
         }
 
         // Identity check helper: Σstock(r) + Σin_transit_cargo(r) == initial(r)
         // + mined(r) - consumed(r), per resource, EVERY tick.
         let check_identity = |w: &World, tag: &str| {
-            for r in 0..N_RESOURCES {
+            for r in 0..N_GOODS_V1 {
                 let stock: i64 = w.stations.stock.iter().map(|s| s[r]).sum();
                 let in_transit: i64 = w
                     .ships
@@ -2867,8 +2899,8 @@ mod tests {
     /// `initial[r]` is the Σ-station-stock-per-resource snapshot captured right after
     /// `World::reset` (tick 0, when mined == consumed == 0). Mirrors the inline check the
     /// T17 self-run test runs through completion.
-    fn assert_resource_identity(world: &World, initial: &[i64; crate::economy::N_RESOURCES]) {
-        for r in 0..crate::economy::N_RESOURCES {
+    fn assert_resource_identity(world: &World, initial: &[i64; crate::economy::N_GOODS_V1]) {
+        for r in 0..crate::economy::N_GOODS_V1 {
             let stock: i64 = world.stations.stock.iter().map(|s| s[r]).sum();
             let in_transit: i64 = world
                 .ships
@@ -2887,12 +2919,12 @@ mod tests {
 
     #[test]
     fn phase1_gate_resource_accounting_identity_holds_every_tick() {
-        use crate::economy::{N_RESOURCES, Good};
+        use crate::economy::{N_GOODS_V1, Good};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
 
         // initial[r] = Σ station stock per resource at tick 0 (mined == consumed == 0).
-        let mut initial = [0i64; N_RESOURCES];
+        let mut initial = [0i64; N_GOODS_V1];
         for (r, slot) in initial.iter_mut().enumerate() {
             *slot = world.stations.stock.iter().map(|s| s[r]).sum();
         }
@@ -2969,12 +3001,12 @@ mod tests {
     /// spurious change there).
     fn one_station_growing_fuel_reprice_4() -> RunConfig {
         use crate::config::{PriceCfg, ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Good};
+        use crate::economy::{Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
-            initial_stock: [0; N_RESOURCES],
-            initial_price_micros: [0; N_RESOURCES],
+            initial_stock: vec![0i64, 0i64],
+            initial_price_micros: vec![0i64, 0i64],
             sells_upgrades: false,
         }];
         cfg.producers = vec![ProducerInit {
@@ -2982,8 +3014,8 @@ mod tests {
             recipe: Recipe { input: None, output: Some((Good::FUEL, 5)), interval: 1 },
         }];
         cfg.price_cfg = PriceCfg {
-            base_micros: [0, 100_000],
-            cap: [0, 100],
+            base_micros: vec![0i64, 100_000i64],
+            cap: vec![0i64, 100i64],
             slope_milli: 1000,
             reprice_interval: 4,
         };
@@ -3097,9 +3129,9 @@ mod tests {
         }
         cfg.stations = vec![
             // Station A (origin): deep Fuel stock + producers keep it restocked.
-            StationInit { body_index: 0, initial_stock: [0, 1000], initial_price_micros: [0, 0], sells_upgrades: false },
+            StationInit { body_index: 0, initial_stock: vec![0i64, 1000i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
             // Station B (destination): a Fuel demand sink drains it each tick.
-            StationInit { body_index: 1, initial_stock: [0, 0], initial_price_micros: [0, 0], sells_upgrades: false },
+            StationInit { body_index: 1, initial_stock: vec![0i64, 0i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
         ];
         cfg.producers = vec![
             ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 20)), interval: 1 } },
@@ -3309,7 +3341,7 @@ mod tests {
 
     #[test]
     fn phase2_gate_full_demand_deflation_harness_conserves() {
-        use crate::economy::{N_RESOURCES, Good};
+        use crate::economy::{N_GOODS_V1, Good};
         // Conservation is config-independent; use the damped (30, 4) config so the full
         // post -> dispatch -> deliver -> sink-consume wave fires within the window
         // (first delivery ~tick 58), making the `consumed Fuel > 0` leg reachable.
@@ -3317,7 +3349,7 @@ mod tests {
             World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
 
         // initial[r] = Σ station stock per resource at tick 0 (mined == consumed == 0).
-        let mut initial = [0i64; N_RESOURCES];
+        let mut initial = [0i64; N_GOODS_V1];
         for (r, slot) in initial.iter_mut().enumerate() {
             *slot = world.stations.stock.iter().map(|s| s[r]).sum();
         }
@@ -3405,5 +3437,32 @@ mod tests {
         // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
         // constant sequences would compare equal trivially.
         assert_ne!(last, h0, "state_hash evolved over the 1000-tick run (not a constant)");
+    }
+
+    #[test]
+    fn bad_goods_cfg_zero_goods_is_rejected() {
+        let mut cfg = one_body_one_craft();
+        cfg.goods.goods.clear();
+        assert!(matches!(
+            World::reset(cfg),
+            Err(ResetError::BadGoodsCfg { .. })
+        ));
+    }
+
+    #[test]
+    fn bad_goods_cfg_stock_length_mismatch_is_rejected() {
+        use crate::config::StationInit;
+        let mut cfg = one_body_one_craft();
+        // Stock vec length 1 but GoodsCfg has 2 goods -> mismatch
+        cfg.stations = vec![StationInit {
+            body_index: 0,
+            initial_stock: vec![0i64],
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: false,
+        }];
+        assert!(matches!(
+            World::reset(cfg),
+            Err(ResetError::BadGoodsCfg { .. })
+        ));
     }
 }
