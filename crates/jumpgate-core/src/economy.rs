@@ -32,7 +32,7 @@ impl Good {
     }
 
     /// v1 pinned goods.  Indices are VERIFIED by `good_ore_and_fuel_pinned_indices`.
-    pub const ORE:  Good = Good(0);
+    pub const ORE: Good = Good(0);
     pub const FUEL: Good = Good(1);
     /// Food: Good(2). Exists globally; consumed at bazaar sink stations.
     /// No production recipe on trophic/frontier — those scenarios leave it at zero.
@@ -81,12 +81,7 @@ impl StationStore {
         }
     }
     /// Append a station; returns its StationId. Enforces slot == row.
-    pub fn push(
-        &mut self,
-        body: BodyId,
-        stock: Vec<i64>,
-        price_micros: Vec<i64>,
-    ) -> StationId {
+    pub fn push(&mut self, body: BodyId, stock: Vec<i64>, price_micros: Vec<i64>) -> StationId {
         let (slot, generation) = self.ids.insert(());
         debug_assert_eq!(slot as usize, self.body.len(), "station slot == row");
         self.body.push(body);
@@ -245,7 +240,10 @@ pub struct EconCounters {
 impl EconCounters {
     /// All-zero counters sized for `n_goods`.
     pub fn zero(n_goods: usize) -> Self {
-        EconCounters { mined: vec![0i64; n_goods], consumed: vec![0i64; n_goods] }
+        EconCounters {
+            mined: vec![0i64; n_goods],
+            consumed: vec![0i64; n_goods],
+        }
     }
 }
 
@@ -299,11 +297,18 @@ pub fn run_producers(
         if let Some((r_out, q)) = recipe.output {
             stations.stock[srow][r_out.index()] += q as i64;
             counters.mined[r_out.index()] += q as i64;
-            let producer = producers.ids.id_at(idx).map(|(slot, generation)| ProducerId { slot, generation });
+            let producer = producers
+                .ids
+                .id_at(idx)
+                .map(|(slot, generation)| ProducerId { slot, generation });
             if let Some(producer) = producer {
                 events.emit(Event {
                     tick,
-                    kind: EventKind::Production { producer, resource: r_out, qty: q },
+                    kind: EventKind::Production {
+                        producer,
+                        resource: r_out,
+                        qty: q,
+                    },
                 });
             }
         }
@@ -336,13 +341,16 @@ pub fn update_prices(
                 continue;
             }
             let s = stations.stock[row][r].max(0).min(price_cfg.cap[r]);
-            let p = (price_cfg.base_micros[r] * (2000 - s * price_cfg.slope_milli / price_cfg.cap[r])
+            let p = (price_cfg.base_micros[r]
+                * (2000 - s * price_cfg.slope_milli / price_cfg.cap[r])
                 / 1000)
                 .max(0);
             if p != stations.price_micros[row][r] {
                 stations.price_micros[row][r] = p;
-                if let Some(station) =
-                    stations.ids.id_at(row).map(|(slot, generation)| StationId { slot, generation })
+                if let Some(station) = stations
+                    .ids
+                    .id_at(row)
+                    .map(|(slot, generation)| StationId { slot, generation })
                 {
                     events.emit(Event {
                         tick,
@@ -463,85 +471,95 @@ pub fn run_scripted_dispatch(
     // spread across ticks. Bind `n` BEFORE the loop so freshly-pushed rows are not
     // reprocessed; the per-route representative is the LATEST row (skip if a later row
     // shares the route), and the in-flight sum spans ALL rows of the route.
-    let n = contracts.ids.len();
-    // Backstop bound on posts-per-tick-per-route (the `projected` guard already
-    // terminates the loop; this caps it even on a degenerate config).
-    const MAX_POSTS_PER_ROUTE: usize = 64;
-    for i in 0..n {
-        // Route key for row i (corp+from+to+resource). Skip if a LATER row shares it
-        // (only the latest contract per route is the repost representative).
-        let later_dup = (i + 1..n).any(|j| {
-            contracts.corp[j] == contracts.corp[i]
-                && contracts.from_station[j] == contracts.from_station[i]
-                && contracts.to_station[j] == contracts.to_station[i]
-                && contracts.resource[j] == contracts.resource[i]
-        });
-        if later_dup {
-            continue;
-        }
-        let resource = contracts.resource[i];
-        let to = contracts.to_station[i];
-        let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
-            continue;
-        };
-        // A degenerate qty would never raise `projected` -> guard the order-up-to loop.
-        let qty = contracts.qty[i];
-        if qty == 0 {
-            continue;
-        }
-        // In-flight pipeline for this route: Σ qty of its NON-terminal contracts, and
-        // the count of them (the regime selector). Spans EVERY row of the route (sorted
-        // dense order, integer).
-        let mut in_flight: i64 = 0;
-        let mut in_flight_count: u32 = 0;
-        for j in 0..n {
-            let same_route = contracts.corp[j] == contracts.corp[i]
-                && contracts.from_station[j] == contracts.from_station[i]
-                && contracts.to_station[j] == contracts.to_station[i]
-                && contracts.resource[j] == contracts.resource[i];
-            if !same_route {
+    // REPOST structural off (goods-as-goods A4): when demand_low == demand_high == 0,
+    // the Schmitt trigger can never fire (burst needs stock < demand_low; order-up-to
+    // needs projected < max(high,low); both impossible with non-negative stock). The
+    // O(n^2) route-key scan would still execute over a growing arbitrage board — skip
+    // it explicitly. Behavior-identical (the trigger never fires either way); proven by
+    // within-build digest on trophic+frontier seed 7. ASSIGN below still runs.
+    if dispatch.demand_low == 0 && dispatch.demand_high == 0 {
+        // Skip the REPOST body; fall through to ASSIGN (stagger_period gate next).
+    } else {
+        let n = contracts.ids.len();
+        // Backstop bound on posts-per-tick-per-route (the `projected` guard already
+        // terminates the loop; this caps it even on a degenerate config).
+        const MAX_POSTS_PER_ROUTE: usize = 64;
+        for i in 0..n {
+            // Route key for row i (corp+from+to+resource). Skip if a LATER row shares it
+            // (only the latest contract per route is the repost representative).
+            let later_dup = (i + 1..n).any(|j| {
+                contracts.corp[j] == contracts.corp[i]
+                    && contracts.from_station[j] == contracts.from_station[i]
+                    && contracts.to_station[j] == contracts.to_station[i]
+                    && contracts.resource[j] == contracts.resource[i]
+            });
+            if later_dup {
                 continue;
             }
-            let terminal = matches!(
-                contracts.status[j],
-                ContractStatus::Completed | ContractStatus::Failed
-            );
-            if !terminal {
-                in_flight += contracts.qty[j] as i64;
-                in_flight_count += 1;
+            let resource = contracts.resource[i];
+            let to = contracts.to_station[i];
+            let Some(to_row) = stations.ids.dense_index(to.slot, to.generation) else {
+                continue;
+            };
+            // A degenerate qty would never raise `projected` -> guard the order-up-to loop.
+            let qty = contracts.qty[i];
+            if qty == 0 {
+                continue;
+            }
+            // In-flight pipeline for this route: Σ qty of its NON-terminal contracts, and
+            // the count of them (the regime selector). Spans EVERY row of the route (sorted
+            // dense order, integer).
+            let mut in_flight: i64 = 0;
+            let mut in_flight_count: u32 = 0;
+            for j in 0..n {
+                let same_route = contracts.corp[j] == contracts.corp[i]
+                    && contracts.from_station[j] == contracts.from_station[i]
+                    && contracts.to_station[j] == contracts.to_station[i]
+                    && contracts.resource[j] == contracts.resource[i];
+                if !same_route {
+                    continue;
+                }
+                let terminal = matches!(
+                    contracts.status[j],
+                    ContractStatus::Completed | ContractStatus::Failed
+                );
+                if !terminal {
+                    in_flight += contracts.qty[j] as i64;
+                    in_flight_count += 1;
+                }
+            }
+            let stock = stations.stock[to_row][resource.index()];
+            // Hysteresis regime: an IDLE route starts a burst only below the LOW edge; a
+            // route with live contracts is already in a burst.
+            let bursting = in_flight_count > 0 || stock < dispatch.demand_low;
+            if !bursting {
+                continue;
+            }
+            // Order-up-to: post (one clone per loop) while projected supply is below the
+            // HIGH edge (the ceiling). `demand_high == demand_low` -> a single post brings
+            // projected to/over the low edge and the loop stops (undamped one-shot).
+            let mut projected = stock + in_flight;
+            let mut posts = 0usize;
+            while projected < dispatch.demand_high.max(dispatch.demand_low)
+                && posts < MAX_POSTS_PER_ROUTE
+            {
+                let new_id = contracts.push(
+                    contracts.corp[i],
+                    resource,
+                    qty,
+                    contracts.from_station[i],
+                    to,
+                    contracts.reward_micros[i],
+                );
+                events.emit(Event {
+                    tick,
+                    kind: EventKind::ContractOffered { contract: new_id },
+                });
+                projected += qty as i64;
+                posts += 1;
             }
         }
-        let stock = stations.stock[to_row][resource.index()];
-        // Hysteresis regime: an IDLE route starts a burst only below the LOW edge; a
-        // route with live contracts is already in a burst.
-        let bursting = in_flight_count > 0 || stock < dispatch.demand_low;
-        if !bursting {
-            continue;
-        }
-        // Order-up-to: post (one clone per loop) while projected supply is below the
-        // HIGH edge (the ceiling). `demand_high == demand_low` -> a single post brings
-        // projected to/over the low edge and the loop stops (undamped one-shot).
-        let mut projected = stock + in_flight;
-        let mut posts = 0usize;
-        while projected < dispatch.demand_high.max(dispatch.demand_low)
-            && posts < MAX_POSTS_PER_ROUTE
-        {
-            let new_id = contracts.push(
-                contracts.corp[i],
-                resource,
-                qty,
-                contracts.from_station[i],
-                to,
-                contracts.reward_micros[i],
-            );
-            events.emit(Event {
-                tick,
-                kind: EventKind::ContractOffered { contract: new_id },
-            });
-            projected += qty as i64;
-            posts += 1;
-        }
-    }
+    } // end REPOST else block (A4.3 structural-off prelude)
 
     // ASSIGN GATE (trader rung 1): `stagger_period == 0` turns scripted acceptance
     // OFF entirely — manual / RL-issued `AcceptContract` only. REPOST above is
@@ -652,17 +670,14 @@ pub fn run_scripted_dispatch(
                     (active, ring)
                 });
             diag.candidate_counts[(count as usize).min(6)] += 1;
-            let penalty =
-                (count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
-            let score =
-                contracts.reward_micros[kidx].saturating_mul(1000 - penalty) / 1000;
+            let penalty = (count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
+            let score = contracts.reward_micros[kidx].saturating_mul(1000 - penalty) / 1000;
             if pick.is_none_or(|(_, best)| score > best) {
                 pick = Some((kidx, score));
             }
             if media_live {
-                let ring_penalty = (ring_count
-                    .saturating_mul(trophic.evidence_penalty_milli))
-                .min(900) as i64;
+                let ring_penalty =
+                    (ring_count.saturating_mul(trophic.evidence_penalty_milli)).min(900) as i64;
                 let ring_score =
                     contracts.reward_micros[kidx].saturating_mul(1000 - ring_penalty) / 1000;
                 if ring_pick.is_none_or(|(_, best)| ring_score > best) {
@@ -729,8 +744,8 @@ pub fn resolve_contracts(
                 // `contract` column, lowest dense row first (sorted, no RNG). No such
                 // craft -> the offer is unclaimed this tick.
                 let contract = contract_id(contracts, kidx);
-                let Some(crow) = (0..ships.ids.len())
-                    .find(|&r| ships.contract[r] == Some(contract))
+                let Some(crow) =
+                    (0..ships.ids.len()).find(|&r| ships.contract[r] == Some(contract))
                 else {
                     continue;
                 };
@@ -746,7 +761,8 @@ pub fn resolve_contracts(
                 let corp = contracts.corp[kidx];
                 let reward = contracts.reward_micros[kidx];
                 let corp_row = corporations.ids.dense_index(corp.slot, corp.generation);
-                let funded = matches!(corp_row, Some(r) if corporations.treasury_micros[r] >= reward);
+                let funded =
+                    matches!(corp_row, Some(r) if corporations.treasury_micros[r] >= reward);
                 if !funded || contracts.qty[kidx] > capacity {
                     // Deterministic revert: release the craft, leave the offer open.
                     ships.contract[crow] = None;
@@ -831,7 +847,10 @@ fn try_load(
     // a 1-M_sun orbit moves ~73x ARRIVAL_RADIUS per tick (0.029 AU/day × 0.25 day),
     // so a hauler PERFECTLY tracking its pickup body could never pass the gate and
     // the load starved forever (found by the trader-rung scenario).
-    let body_pos = eph.body_pos(bodies.eph_index[from_body_row], Tick(tick.0.saturating_sub(1)));
+    let body_pos = eph.body_pos(
+        bodies.eph_index[from_body_row],
+        Tick(tick.0.saturating_sub(1)),
+    );
     if ships.pos[crow].sub(body_pos).length() > crate::autopilot::ARRIVAL_RADIUS {
         // Not at the pickup yet: WALK TO THE FOOD. Dispatch the hauler to Seek the
         // origin body so a hauler that just delivered elsewhere (now Idle but bound to
@@ -846,9 +865,15 @@ fn try_load(
         );
         if !already_seeking_origin {
             let eff = effective_params(&ships.spec[crow], &ships.mods[crow]);
-            let dv =
-                crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, ships.fuel_mass[crow]);
-            ships.nav[crow] = NavState::Seeking { dest: from_dest, dv_remaining: dv };
+            let dv = crate::math::tsiolkovsky_dv(
+                eff.exhaust_velocity,
+                eff.dry_mass,
+                ships.fuel_mass[crow],
+            );
+            ships.nav[crow] = NavState::Seeking {
+                dest: from_dest,
+                dv_remaining: dv,
+            };
         }
         return;
     }
@@ -957,7 +982,12 @@ pub fn resolve_purchases(
         let craft = ships.ids_at(crow);
         events.emit(Event {
             tick,
-            kind: EventKind::UpgradePurchased { craft, kind, level: new_level, price_micros: price },
+            kind: EventKind::UpgradePurchased {
+                craft,
+                kind,
+                level: new_level,
+                price_micros: price,
+            },
         });
     }
 }
@@ -1140,7 +1170,10 @@ pub fn resolve_refuels(
                 eff.dry_mass,
                 ships.fuel_mass[crow],
             );
-            ships.nav[crow] = NavState::Seeking { dest, dv_remaining: dv };
+            ships.nav[crow] = NavState::Seeking {
+                dest,
+                dv_remaining: dv,
+            };
         }
         if let Some(station) = station_id {
             events.emit(Event {
@@ -1279,11 +1312,9 @@ pub fn run_purchase_policies(
                 if !docked_at_vendor(ships, crow, stations, stations_cfg, bodies, eph, prev) {
                     continue;
                 }
-                let Some(kind) = next_ladder_rung(
-                    ships.upgrades[crow],
-                    trophic.hauler_buy_policy,
-                    shipyard,
-                ) else {
+                let Some(kind) =
+                    next_ladder_rung(ships.upgrades[crow], trophic.hauler_buy_policy, shipyard)
+                else {
                     continue;
                 };
                 let (level, ladder) = match kind {
@@ -1408,11 +1439,10 @@ pub fn run_trade_policies(
 
         // SELL PATH: if hold is non-empty, deliver goods at this station.
         if !ships.hold[crow].is_empty() {
-            if let Some(sid) = stations
-                .ids
-                .id_at(srow)
-                .map(|(s, g)| StationId { slot: s, generation: g })
-            {
+            if let Some(sid) = stations.ids.id_at(srow).map(|(s, g)| StationId {
+                slot: s,
+                generation: g,
+            }) {
                 ships.pending_trade_sell[crow] = Some(sid);
             }
             continue; // sell intent written; do not also write a buy intent
@@ -1468,10 +1498,10 @@ pub fn run_trade_policies(
             }
         }
         if let Some((good, qty, _)) = best_good
-            && let Some(sid) = stations
-                .ids
-                .id_at(srow)
-                .map(|(s, g)| StationId { slot: s, generation: g })
+            && let Some(sid) = stations.ids.id_at(srow).map(|(s, g)| StationId {
+                slot: s,
+                generation: g,
+            })
         {
             ships.pending_trade_buy[crow] = Some((good, qty, sid));
         }
@@ -1518,11 +1548,10 @@ pub fn resolve_trade_buys(
             continue;
         };
         // Verify the dock matches the intended source station.
-        let Some(dock_sid) = stations
-            .ids
-            .id_at(srow)
-            .map(|(s, g)| StationId { slot: s, generation: g })
-        else {
+        let Some(dock_sid) = stations.ids.id_at(srow).map(|(s, g)| StationId {
+            slot: s,
+            generation: g,
+        }) else {
             continue;
         };
         if dock_sid != src_sid {
@@ -1640,11 +1669,10 @@ pub fn resolve_trade_sells(
         let Some(srow) = docked_station_row(ships, crow, stations, bodies, eph, prev) else {
             continue;
         };
-        let Some(dock_sid) = stations
-            .ids
-            .id_at(srow)
-            .map(|(s, g)| StationId { slot: s, generation: g })
-        else {
+        let Some(dock_sid) = stations.ids.id_at(srow).map(|(s, g)| StationId {
+            slot: s,
+            generation: g,
+        }) else {
             continue;
         };
         if dock_sid != dest_sid {
@@ -1677,8 +1705,7 @@ pub fn resolve_trade_sells(
             let revenue = (qty as i64).saturating_mul(unit_price);
 
             // GOODS LEG (TRANSFER — no consumed[] counter):
-            stations.stock[srow][good_r] =
-                stations.stock[srow][good_r].saturating_add(qty as i64);
+            stations.stock[srow][good_r] = stations.stock[srow][good_r].saturating_add(qty as i64);
 
             // MONEY LEG (saturating — Exchange may be broke):
             let pay = revenue.min(corporations.treasury_micros[ex_row].max(0));
@@ -1883,9 +1910,7 @@ pub(crate) fn settle_contract_failure(
             // statuses are legal sources here.
             FailureCause::FuelEmpty => matches!(
                 contracts.status[kidx],
-                ContractStatus::Accepted
-                    | ContractStatus::CargoLoaded
-                    | ContractStatus::InTransit
+                ContractStatus::Accepted | ContractStatus::CargoLoaded | ContractStatus::InTransit
             ),
             FailureCause::Robbed => matches!(
                 contracts.status[kidx],
@@ -1978,26 +2003,127 @@ mod tests {
     /// read by StationId row, not body).
     fn one_station(stock: Vec<i64>) -> StationStore {
         let mut s = StationStore::empty();
-        s.push(BodyId { slot: 0, generation: 0 }, stock, vec![0i64; N_GOODS_V1]);
+        s.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            stock,
+            vec![0i64; N_GOODS_V1],
+        );
         s
+    }
+
+    #[test]
+    fn repost_structural_off_posts_nothing_when_demand_zero() {
+        use crate::config::{DispatchCfg, ShipyardCfg};
+        // demand_low == demand_high == 0 -> the Schmitt trigger can never fire
+        // (burst needs stock < demand_low; order-up-to needs projected <
+        // max(high,low)); both impossible with non-negative stock. The early-
+        // return prelude makes that explicit. The test documents the invariant.
+        let mut contracts = ContractStore::empty();
+        let corp = CorporationId {
+            slot: 0,
+            generation: 0,
+        };
+        let from = StationId {
+            slot: 0,
+            generation: 0,
+        };
+        let to = StationId {
+            slot: 1,
+            generation: 0,
+        };
+        // Seed one Completed contract on the route (the repost representative).
+        let cid = contracts.push(corp, Good::ORE, 5, from, to, 1_000_000);
+        let kidx = contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
+        contracts.status[kidx] = ContractStatus::Completed;
+        let n_before = contracts.ids.len();
+        // Two stations (the `to` lookup needs row 1), both with non-negative stock.
+        let mut stations = one_station(vec![0i64, 0i64]);
+        stations.push(
+            BodyId {
+                slot: 99,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64, 0i64],
+        );
+        let mut ships = CraftStore::empty();
+        let mut diag = AssignDiag::default();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 1,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let shipyard = ShipyardCfg::default();
+        let trophic = crate::config::TrophicCfg::default();
+        let route_evidence = crate::world::RouteEvidence {
+            robs: Vec::new(),
+            cursor: Vec::new(),
+        };
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &shipyard,
+            &trophic,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(
+            contracts.ids.len(),
+            n_before,
+            "REPOST structural off: no new rows when demand_low==demand_high==0"
+        );
+        assert!(
+            events.events.is_empty(),
+            "no ContractOffered events when demand is 0/0"
+        );
     }
 
     #[test]
     fn run_producers_miner_mines_ore_and_counts() {
         // Miner: ∅ -> Ore(5), interval 1. Source leg only: mined[Ore]+=5.
         let mut stations = one_station(vec![0i64, 0i64]);
-        let st = StationId { slot: 0, generation: 0 };
+        let st = StationId {
+            slot: 0,
+            generation: 0,
+        };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
-            Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
+            Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 1,
+            },
         );
         let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(1),
+            &mut events,
+        );
 
-        assert_eq!(stations.stock[0][Good::ORE.index()], 5, "ore stock rose by 5");
+        assert_eq!(
+            stations.stock[0][Good::ORE.index()],
+            5,
+            "ore stock rose by 5"
+        );
         assert_eq!(counters.mined[Good::ORE.index()], 5, "mined[Ore]==5");
         assert_eq!(counters.consumed[Good::ORE.index()], 0);
         assert_eq!(producers.last_fired[0], Tick(1), "last_fired advanced");
@@ -2010,7 +2136,11 @@ mod tests {
         assert_eq!(prod.len(), 1);
         assert!(matches!(
             prod[0].kind,
-            EventKind::Production { resource: Good::ORE, qty: 5, .. }
+            EventKind::Production {
+                resource: Good::ORE,
+                qty: 5,
+                ..
+            }
         ));
     }
 
@@ -2019,7 +2149,10 @@ mod tests {
         // Refiner: Ore(3) -> Fuel(2), interval 1. PER-LEG: consumed[Ore]+=3 AND
         // mined[Fuel]+=2 (the dual-bump the T18 identity depends on).
         let mut stations = one_station(vec![10i64, 0i64]);
-        let st = StationId { slot: 0, generation: 0 };
+        let st = StationId {
+            slot: 0,
+            generation: 0,
+        };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
@@ -2032,7 +2165,13 @@ mod tests {
         let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(1),
+            &mut events,
+        );
 
         assert_eq!(stations.stock[0][Good::ORE.index()], 7, "ore -3");
         assert_eq!(stations.stock[0][Good::FUEL.index()], 2, "fuel +2");
@@ -2049,7 +2188,11 @@ mod tests {
         assert_eq!(prod.len(), 1);
         assert!(matches!(
             prod[0].kind,
-            EventKind::Production { resource: Good::FUEL, qty: 2, .. }
+            EventKind::Production {
+                resource: Good::FUEL,
+                qty: 2,
+                ..
+            }
         ));
     }
 
@@ -2058,7 +2201,10 @@ mod tests {
         // Refiner needs Ore(5) but station has 2 -> skip: no stock change, no
         // counter change, no event, last_fired NOT advanced (retries next tick).
         let mut stations = one_station(vec![2i64, 0i64]);
-        let st = StationId { slot: 0, generation: 0 };
+        let st = StationId {
+            slot: 0,
+            generation: 0,
+        };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
@@ -2071,11 +2217,29 @@ mod tests {
         let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(1),
+            &mut events,
+        );
 
-        assert_eq!(stations.stock[0], vec![2i64, 0i64], "no stock change on skip");
-        assert_eq!(counters, EconCounters::zero(N_GOODS_V1), "no counter change on skip");
-        assert_eq!(producers.last_fired[0], Tick(0), "last_fired NOT advanced on skip");
+        assert_eq!(
+            stations.stock[0],
+            vec![2i64, 0i64],
+            "no stock change on skip"
+        );
+        assert_eq!(
+            counters,
+            EconCounters::zero(N_GOODS_V1),
+            "no counter change on skip"
+        );
+        assert_eq!(
+            producers.last_fired[0],
+            Tick(0),
+            "last_fired NOT advanced on skip"
+        );
         assert!(events.events.is_empty(), "no Production on skip");
     }
 
@@ -2083,20 +2247,49 @@ mod tests {
     fn run_producers_respects_interval() {
         // Miner interval 3: fires at tick 3 (3-0>=3), not at tick 1 or 2.
         let mut stations = one_station(vec![0i64, 0i64]);
-        let st = StationId { slot: 0, generation: 0 };
+        let st = StationId {
+            slot: 0,
+            generation: 0,
+        };
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
-            Recipe { input: None, output: Some((Good::ORE, 1)), interval: 3 },
+            Recipe {
+                input: None,
+                output: Some((Good::ORE, 1)),
+                interval: 3,
+            },
         );
         let mut counters = EconCounters::zero(N_GOODS_V1);
         let mut events = EventStream::new();
 
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(2), &mut events);
-        assert_eq!(stations.stock[0][Good::ORE.index()], 0, "not yet (interval gate)");
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(1),
+            &mut events,
+        );
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(2),
+            &mut events,
+        );
+        assert_eq!(
+            stations.stock[0][Good::ORE.index()],
+            0,
+            "not yet (interval gate)"
+        );
 
-        run_producers(&mut stations, &mut producers, &mut counters, Tick(3), &mut events);
+        run_producers(
+            &mut stations,
+            &mut producers,
+            &mut counters,
+            Tick(3),
+            &mut events,
+        );
         assert_eq!(stations.stock[0][Good::ORE.index()], 1, "fires at tick 3");
         assert_eq!(producers.last_fired[0], Tick(3));
     }
@@ -2119,7 +2312,10 @@ mod tests {
         let mut stations = StationStore::empty();
         for (i, &fstock) in fuel_stocks.iter().enumerate() {
             stations.push(
-                BodyId { slot: i as u32, generation: 0 },
+                BodyId {
+                    slot: i as u32,
+                    generation: 0,
+                },
                 vec![0i64, fstock],
                 vec![777i64, 0i64],
             );
@@ -2138,7 +2334,10 @@ mod tests {
         //   s=8  -> 100_000*(2000-1440)/1000 =  56_000
         //   s=10 -> 100_000*(2000-1800)/1000 =  20_000  (= base*(2-1.8))
         assert_eq!(stations.price_micros[0][fi], 200_000, "stock 0 -> base*2");
-        assert_eq!(stations.price_micros[4][fi], 20_000, "stock cap -> base*0.2");
+        assert_eq!(
+            stations.price_micros[4][fi], 20_000,
+            "stock cap -> base*0.2"
+        );
         assert_eq!(stations.price_micros[1][fi], 146_000);
         assert_eq!(stations.price_micros[2][fi], 110_000);
         assert_eq!(stations.price_micros[3][fi], 56_000);
@@ -2153,7 +2352,10 @@ mod tests {
 
         // cap==0 resource (Ore) is SKIPPED: its pushed price is untouched.
         for row in 0..stations.ids.len() {
-            assert_eq!(stations.price_micros[row][oi], 777, "Ore (cap==0) price unchanged");
+            assert_eq!(
+                stations.price_micros[row][oi], 777,
+                "Ore (cap==0) price unchanged"
+            );
         }
 
         // Exactly one PriceUpdate per row (Fuel changed 0 -> p on every row),
@@ -2163,10 +2365,17 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.kind, EventKind::PriceUpdate { .. }))
             .collect();
-        assert_eq!(updates.len(), fuel_stocks.len(), "one PriceUpdate per row (Fuel)");
+        assert_eq!(
+            updates.len(),
+            fuel_stocks.len(),
+            "one PriceUpdate per row (Fuel)"
+        );
         assert!(updates.iter().all(|e| matches!(
             e.kind,
-            EventKind::PriceUpdate { resource: Good::FUEL, .. }
+            EventKind::PriceUpdate {
+                resource: Good::FUEL,
+                ..
+            }
         )));
     }
 
@@ -2181,7 +2390,10 @@ mod tests {
         assert_eq!(k.status.len(), 0);
         // status rank is total + distinct (used by the state hash).
         assert_eq!(ContractStatus::Offered.rank(), 0);
-        assert_ne!(ContractStatus::Failed.rank(), ContractStatus::Completed.rank());
+        assert_ne!(
+            ContractStatus::Failed.rank(),
+            ContractStatus::Completed.rank()
+        );
     }
 
     #[test]
@@ -2222,11 +2434,21 @@ mod tests {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 256,
             bodies: vec![BodyInit {
                 mass: 1e-9, // near-massless: the docked craft is not gravity-trapped
-                elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+                elements: OrbitalElements {
+                    a: 0.0,
+                    e: 0.0,
+                    i: 0.0,
+                    raan: 0.0,
+                    argp: 0.0,
+                    m0: 0.0,
+                },
             }],
             craft: vec![CraftInit {
                 spec: BaseSpec {
@@ -2250,7 +2472,11 @@ mod tests {
                 sells_upgrades,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
+            corporations: vec![CorporationInit {
+                treasury_micros: 0,
+                home_station_index: 0,
+                arb_premium_micros: 0,
+            }],
             contracts: vec![],
             price_cfg: crate::config::PriceCfg::default(),
             dispatch_cfg: crate::config::DispatchCfg::default(),
@@ -2264,7 +2490,10 @@ mod tests {
         }
     }
 
-    fn buy_cmd(craft: crate::ids::CraftId, kind: crate::stores::UpgradeKind) -> crate::contract::Command {
+    fn buy_cmd(
+        craft: crate::ids::CraftId,
+        kind: crate::stores::UpgradeKind,
+    ) -> crate::contract::Command {
         use crate::types::{EntityRef, Target};
         crate::contract::Command {
             target: Target::Entity(EntityRef::Craft(craft)),
@@ -2280,10 +2509,22 @@ mod tests {
         upgrades_before: crate::stores::UpgradeLevels,
         arm: &str,
     ) {
-        assert_eq!(world.ships.upgrades[0], upgrades_before, "{arm}: no level change");
-        assert_eq!(world.ships.credits_micros[0], credits_before, "{arm}: zero wallet movement");
-        assert_eq!(world.corporations.treasury_micros[0], 0, "{arm}: Yard treasury untouched");
-        assert_eq!(world.ships.pending_upgrade[0], None, "{arm}: intent cleared");
+        assert_eq!(
+            world.ships.upgrades[0], upgrades_before,
+            "{arm}: no level change"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], credits_before,
+            "{arm}: zero wallet movement"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 0,
+            "{arm}: Yard treasury untouched"
+        );
+        assert_eq!(
+            world.ships.pending_upgrade[0], None,
+            "{arm}: intent cleared"
+        );
         assert!(
             !world
                 .events_mut()
@@ -2304,10 +2545,19 @@ mod tests {
 
         // Arm: Escort L1 — debit EXACTLY escort_price_micros[0] == 5_000_000.
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
-        assert_eq!(world.ships.upgrades[0].escorts, 1, "escort count bumped to 1");
+        assert_eq!(
+            world.ships.upgrades[0].escorts, 1,
+            "escort count bumped to 1"
+        );
         assert_eq!(world.ships.upgrades[0].hulls, 0, "hull count untouched");
-        assert_eq!(world.ships.credits_micros[0], 45_000_000, "debited EXACTLY 5_000_000");
-        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "Yard credited the same");
+        assert_eq!(
+            world.ships.credits_micros[0], 45_000_000,
+            "debited EXACTLY 5_000_000"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 5_000_000,
+            "Yard credited the same"
+        );
         assert_eq!(world.ships.pending_upgrade[0], None, "intent consumed");
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
@@ -2325,19 +2575,28 @@ mod tests {
         // Arm: Escort L2 — EXACTLY escort_price_micros[1] == 12_000_000.
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
         assert_eq!(world.ships.upgrades[0].escorts, 2);
-        assert_eq!(world.ships.credits_micros[0], 33_000_000, "debited EXACTLY 12_000_000");
+        assert_eq!(
+            world.ships.credits_micros[0], 33_000_000,
+            "debited EXACTLY 12_000_000"
+        );
         assert_eq!(world.corporations.treasury_micros[0], 17_000_000);
 
         // Arm: Hull L1 — EXACTLY hull_price_micros[0] == 8_000_000.
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Hull)]);
         assert_eq!(world.ships.upgrades[0].hulls, 1);
-        assert_eq!(world.ships.credits_micros[0], 25_000_000, "debited EXACTLY 8_000_000");
+        assert_eq!(
+            world.ships.credits_micros[0], 25_000_000,
+            "debited EXACTLY 8_000_000"
+        );
         assert_eq!(world.corporations.treasury_micros[0], 25_000_000);
 
         // Arm: Hull L2 — EXACTLY hull_price_micros[1] == 20_000_000.
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Hull)]);
         assert_eq!(world.ships.upgrades[0].hulls, 2);
-        assert_eq!(world.ships.credits_micros[0], 5_000_000, "debited EXACTLY 20_000_000");
+        assert_eq!(
+            world.ships.credits_micros[0], 5_000_000,
+            "debited EXACTLY 20_000_000"
+        );
         assert_eq!(world.corporations.treasury_micros[0], 45_000_000);
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
@@ -2366,14 +2625,24 @@ mod tests {
         world.ships.pos[0] = Vec3::new(1.0, 0.0, 0.0);
         world.ships.prev_pos[0] = world.ships.pos[0];
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
-        assert_purchase_skipped(&mut world, 50_000_000, UpgradeLevels::default(), "not-docked");
+        assert_purchase_skipped(
+            &mut world,
+            50_000_000,
+            UpgradeLevels::default(),
+            "not-docked",
+        );
 
         // (b) UNDERFUNDED: docked, but one micro short of the Escort L1 price.
         let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
         let craft = world.ships.ids_at(0);
         world.ships.credits_micros[0] = 4_999_999;
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
-        assert_purchase_skipped(&mut world, 4_999_999, UpgradeLevels::default(), "underfunded");
+        assert_purchase_skipped(
+            &mut world,
+            4_999_999,
+            UpgradeLevels::default(),
+            "underfunded",
+        );
 
         // (c) AT CAP: escorts already at max_escorts == 2 (structural, spec §6).
         let (mut world, _h) = World::reset(vendor_world_fixture(true)).expect("resolvable cfg");
@@ -2384,7 +2653,10 @@ mod tests {
         assert_purchase_skipped(
             &mut world,
             50_000_000,
-            UpgradeLevels { hulls: 0, escorts: 2 },
+            UpgradeLevels {
+                hulls: 0,
+                escorts: 2,
+            },
             "at-cap",
         );
 
@@ -2393,7 +2665,12 @@ mod tests {
         let craft = world.ships.ids_at(0);
         world.ships.credits_micros[0] = 50_000_000;
         world.step(&mut vec![buy_cmd(craft, UpgradeKind::Escort)]);
-        assert_purchase_skipped(&mut world, 50_000_000, UpgradeLevels::default(), "non-vendor");
+        assert_purchase_skipped(
+            &mut world,
+            50_000_000,
+            UpgradeLevels::default(),
+            "non-vendor",
+        );
     }
 
     /// Refuel fixture: the vendor fixture's one-body/one-station/one-craft dock
@@ -2411,7 +2688,10 @@ mod tests {
             slope_milli: 1800,
             reprice_interval: 0,
         };
-        cfg.refuel = crate::config::RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 };
+        cfg.refuel = crate::config::RefuelCfg {
+            lot_mass: 2.5e-10,
+            corp_index: 0,
+        };
         cfg
     }
 
@@ -2427,10 +2707,22 @@ mod tests {
 
         let f = Good::FUEL.index();
         assert_eq!(world.stations.stock[0][f], 38, "stock leg: -= units");
-        assert_eq!(world.econ.consumed[f], 2, "sink leg: consumed[Fuel] += units");
-        assert_eq!(world.ships.credits_micros[0], 2_000, "wallet leg: debited units*price");
-        assert_eq!(world.corporations.treasury_micros[0], 10_000, "Port treasury credited");
-        assert_eq!(world.ships.fuel_mass[0], 5.0e-10, "tank leg: fuel += units*lot");
+        assert_eq!(
+            world.econ.consumed[f], 2,
+            "sink leg: consumed[Fuel] += units"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], 2_000,
+            "wallet leg: debited units*price"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 10_000,
+            "Port treasury credited"
+        );
+        assert_eq!(
+            world.ships.fuel_mass[0], 5.0e-10,
+            "tank leg: fuel += units*lot"
+        );
         assert_eq!(world.ships.pending_refuel[0], None, "intent consumed");
         let stock_now: i64 = world.stations.stock.iter().map(|s| s[f]).sum();
         assert_eq!(
@@ -2488,12 +2780,27 @@ mod tests {
         arm: &str,
     ) {
         let f = Good::FUEL.index();
-        assert_eq!(world.ships.fuel_mass[0], fuel_before, "{arm}: tank untouched");
-        assert_eq!(world.ships.credits_micros[0], credits_before, "{arm}: zero wallet movement");
-        assert_eq!(world.stations.stock[0][f], stock_before, "{arm}: stock untouched");
+        assert_eq!(
+            world.ships.fuel_mass[0], fuel_before,
+            "{arm}: tank untouched"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], credits_before,
+            "{arm}: zero wallet movement"
+        );
+        assert_eq!(
+            world.stations.stock[0][f], stock_before,
+            "{arm}: stock untouched"
+        );
         assert_eq!(world.econ.consumed[f], 0, "{arm}: no sink leg");
-        assert_eq!(world.corporations.treasury_micros[0], 0, "{arm}: Port treasury untouched");
-        assert_eq!(world.ships.pending_refuel[0], None, "{arm}: intent consumed");
+        assert_eq!(
+            world.corporations.treasury_micros[0], 0,
+            "{arm}: Port treasury untouched"
+        );
+        assert_eq!(
+            world.ships.pending_refuel[0], None,
+            "{arm}: intent consumed"
+        );
         assert!(
             !world
                 .events_mut()
@@ -2527,7 +2834,10 @@ mod tests {
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
                 e.kind,
-                EventKind::RefuelDenied { reason: RefuelDeniedReason::NoStock, .. }
+                EventKind::RefuelDenied {
+                    reason: RefuelDeniedReason::NoStock,
+                    ..
+                }
             )),
             "stock-0: RefuelDenied(NoStock) must be emitted"
         );
@@ -2540,7 +2850,10 @@ mod tests {
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
                 e.kind,
-                EventKind::RefuelDenied { reason: RefuelDeniedReason::CannotAfford, .. }
+                EventKind::RefuelDenied {
+                    reason: RefuelDeniedReason::CannotAfford,
+                    ..
+                }
             )),
             "wallet-short: RefuelDenied(CannotAfford) must be emitted"
         );
@@ -2555,7 +2868,10 @@ mod tests {
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
                 e.kind,
-                EventKind::RefuelDenied { reason: RefuelDeniedReason::TankFull, .. }
+                EventKind::RefuelDenied {
+                    reason: RefuelDeniedReason::TankFull,
+                    ..
+                }
             )),
             "tank-full: RefuelDenied(TankFull) must be emitted"
         );
@@ -2593,7 +2909,11 @@ mod tests {
         let mut empty: Vec<Command> = Vec::new();
         for _ in 0..50 {
             world.step(&mut empty);
-            assert_eq!(total(&world), t0, "Σtreasury+Σcredits+Σescrow invariant every tick");
+            assert_eq!(
+                total(&world),
+                t0,
+                "Σtreasury+Σcredits+Σescrow invariant every tick"
+            );
         }
         assert!(
             world
@@ -2603,8 +2923,15 @@ mod tests {
                 .any(|e| matches!(e.kind, EventKind::Refueled { units: 4, .. })),
             "policy-driven top-to-full refuel happened (4 lots, dry -> full)"
         );
-        assert_eq!(world.ships.fuel_mass[0], 1.0e-9, "topped to capacity: 4 * 2.5e-10");
-        assert_eq!(world.ships.credits_micros[0], 1_000_000 - 20_000, "4 units at 5_000");
+        assert_eq!(
+            world.ships.fuel_mass[0], 1.0e-9,
+            "topped to capacity: 4 * 2.5e-10"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0],
+            1_000_000 - 20_000,
+            "4 units at 5_000"
+        );
     }
 
     #[test]
@@ -2702,10 +3029,16 @@ mod tests {
         world.ships.credits_micros[0] = 1_000_000;
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
-        assert_eq!(world.ships.pending_refuel[0], None, "stray intent consumed on lot-0 world");
+        assert_eq!(
+            world.ships.pending_refuel[0], None,
+            "stray intent consumed on lot-0 world"
+        );
         assert_eq!(world.ships.fuel_mass[0], 1e-9, "tank untouched");
         assert_eq!(world.ships.credits_micros[0], 1_000_000, "wallet untouched");
-        assert_eq!(world.corporations.treasury_micros[0], 0, "no treasury movement");
+        assert_eq!(
+            world.corporations.treasury_micros[0], 0,
+            "no treasury movement"
+        );
         assert!(
             !world
                 .events_mut()
@@ -2722,11 +3055,20 @@ mod tests {
     /// qty-10 Fuel contract A->B. `stagger_period == 0` keeps scripted ASSIGN off
     /// (this test drives the manual AcceptContract path the gate backstops).
     fn capacity_world_fixture() -> crate::config::RunConfig {
-        use crate::config::{BodyInit, ContractInit, CorporationInit, OrbitalElements, StationInit};
+        use crate::config::{
+            BodyInit, ContractInit, CorporationInit, OrbitalElements, StationInit,
+        };
         let mut cfg = vendor_world_fixture(false);
         cfg.bodies.push(BodyInit {
             mass: 1e-12,
-            elements: OrbitalElements { a: 0.3, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            elements: OrbitalElements {
+                a: 0.3,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
         });
         cfg.stations = vec![
             StationInit {
@@ -2742,8 +3084,11 @@ mod tests {
                 sells_upgrades: false,
             },
         ];
-        cfg.corporations =
-            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }];
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 5_000_000,
+            home_station_index: 0,
+            arb_premium_micros: 0,
+        }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
             resource: Good::FUEL,
@@ -2778,10 +3123,17 @@ mod tests {
         // underfunded-escrow precedent (craft released, offer left open, zero
         // credit movement).
         world.step(&mut vec![accept]);
-        assert_eq!(world.contracts.status[0], ContractStatus::Offered, "contract stays Offered");
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::Offered,
+            "contract stays Offered"
+        );
         assert_eq!(world.contracts.hauler[0], None, "no hauler bound");
         assert_eq!(world.contracts.escrow_micros[0], 0, "no escrow movement");
-        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "treasury untouched");
+        assert_eq!(
+            world.corporations.treasury_micros[0], 5_000_000,
+            "treasury untouched"
+        );
         assert_eq!(world.ships.contract[0], None, "craft released");
         assert_eq!(world.ships.role[0], CraftRole::Idle, "craft Idle");
         assert_eq!(world.ships.cargo[0], None, "nothing loaded");
@@ -2790,11 +3142,25 @@ mod tests {
         // (escrow + same-tick load at the stocked, co-located origin).
         world.ships.upgrades[0].hulls = 1;
         world.step(&mut vec![accept]);
-        assert_eq!(world.contracts.status[0], ContractStatus::CargoLoaded, "settles after hull L1");
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::CargoLoaded,
+            "settles after hull L1"
+        );
         assert_eq!(world.contracts.hauler[0], Some(craft), "hauler bound");
-        assert_eq!(world.contracts.escrow_micros[0], 1_000_000, "reward escrowed");
-        assert_eq!(world.corporations.treasury_micros[0], 4_000_000, "treasury debited");
-        assert_eq!(world.ships.cargo[0], Some((Good::FUEL, 10)), "qty-10 lot loaded");
+        assert_eq!(
+            world.contracts.escrow_micros[0], 1_000_000,
+            "reward escrowed"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 4_000_000,
+            "treasury debited"
+        );
+        assert_eq!(
+            world.ships.cargo[0],
+            Some((Good::FUEL, 10)),
+            "qty-10 lot loaded"
+        );
     }
 
     #[test]
@@ -2805,8 +3171,22 @@ mod tests {
         use crate::math::Vec3;
 
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 100i64], vec![0i64; N_GOODS_V1]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
+        let from = stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64, 100i64],
+            vec![0i64; N_GOODS_V1],
+        );
+        let to = stations.push(
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64; N_GOODS_V1],
+        );
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
@@ -2836,8 +3216,10 @@ mod tests {
         let shipyard = ShipyardCfg::default();
         let mut events = EventStream::new();
 
-        let no_evidence =
-            crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let no_evidence = crate::world::RouteEvidence {
+            robs: Vec::new(),
+            cursor: Vec::new(),
+        };
         // hulls 0 -> capacity 5 < qty 10: ASSIGN must NOT claim.
         run_scripted_dispatch(
             &mut contracts,
@@ -2891,7 +3273,11 @@ mod tests {
         for _ in 0..8 {
             world.step(&mut empty);
         }
-        assert_eq!(world.contracts.status[0], ContractStatus::Offered, "dry tank: never claimed");
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::Offered,
+            "dry tank: never claimed"
+        );
         assert_eq!(world.ships.role[0], CraftRole::Idle, "stays Idle forever");
         assert_eq!(world.ships.contract[0], None, "no binding written");
 
@@ -2902,7 +3288,11 @@ mod tests {
         for _ in 0..8 {
             world.step(&mut empty);
         }
-        assert_ne!(world.contracts.status[0], ContractStatus::Offered, "live tank: claimed");
+        assert_ne!(
+            world.contracts.status[0],
+            ContractStatus::Offered,
+            "live tank: claimed"
+        );
     }
 
     #[test]
@@ -2943,9 +3333,30 @@ mod tests {
         use crate::config::BaseSpec;
         use crate::math::Vec3;
         let mut stations = StationStore::empty();
-        let a = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
-        let b = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
-        let c = stations.push(BodyId { slot: 2, generation: 0 }, vec![0i64; N_GOODS_V1], vec![0i64; N_GOODS_V1]);
+        let a = stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64; N_GOODS_V1],
+            vec![0i64; N_GOODS_V1],
+        );
+        let b = stations.push(
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
+            vec![0i64; N_GOODS_V1],
+            vec![0i64; N_GOODS_V1],
+        );
+        let c = stations.push(
+            BodyId {
+                slot: 2,
+                generation: 0,
+            },
+            vec![0i64; N_GOODS_V1],
+            vec![0i64; N_GOODS_V1],
+        );
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, a);
         let mut contracts = ContractStore::empty();
@@ -2986,7 +3397,10 @@ mod tests {
             contract_qty: 0,
         };
         let shipyard = ShipyardCfg::default();
-        let scoring = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
+        let scoring = TrophicCfg {
+            hauler_belief_scoring: true,
+            ..TrophicCfg::default()
+        };
 
         // CONTROL (scoring OFF): hot evidence is ignored; lowest ContractId wins.
         let (mut contracts, stations, mut ships, mut re, c0, _c1) = scoring_fix();
@@ -3007,7 +3421,11 @@ mod tests {
             Tick(1),
             &mut EventStream::new(),
         );
-        assert_eq!(ships.contract[0], Some(c0), "scoring off: lowest ContractId, evidence ignored");
+        assert_eq!(
+            ships.contract[0],
+            Some(c0),
+            "scoring off: lowest ContractId, evidence ignored"
+        );
 
         // SCORING ON: a fresh rob on A->B flips the scripted claim to A->C.
         let (mut contracts, stations, mut ships, mut re, _c0, c1) = scoring_fix();
@@ -3028,7 +3446,11 @@ mod tests {
             Tick(1),
             &mut EventStream::new(),
         );
-        assert_eq!(ships.contract[0], Some(c1), "scoring on: the hot route is avoided");
+        assert_eq!(
+            ships.contract[0],
+            Some(c1),
+            "scoring on: the hot route is avoided"
+        );
         assert_eq!(ships.role[0], CraftRole::Hauler);
 
         // DECAYS BACK: far past the evidence window the route reads cold again;
@@ -3051,7 +3473,11 @@ mod tests {
             Tick(1),
             &mut EventStream::new(),
         );
-        assert_eq!(ships.contract[0], Some(c0), "aged evidence decays the avoidance away");
+        assert_eq!(
+            ships.contract[0],
+            Some(c0),
+            "aged evidence decays the avoidance away"
+        );
     }
 
     #[test]
@@ -3070,7 +3496,10 @@ mod tests {
             contract_qty: 0,
         };
         let shipyard = ShipyardCfg::default();
-        let scoring = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
+        let scoring = TrophicCfg {
+            hauler_belief_scoring: true,
+            ..TrophicCfg::default()
+        };
         let hot_route_1 = GossipAlert {
             alert_seq: 0,
             route: 1, // directed A->B (0*3 + 1) — c0's route
@@ -3102,7 +3531,11 @@ mod tests {
             Tick(1),
             &mut EventStream::new(),
         );
-        assert_eq!(ships.contract[0], Some(c1), "live media: own gossip flags the hot route");
+        assert_eq!(
+            ships.contract[0],
+            Some(c1),
+            "live media: own gossip flags the hot route"
+        );
 
         // (2) Ring-hot route 1, comms-log EMPTY, media live: the ring no
         // longer reaches the score — lowest ContractId wins.
@@ -3175,7 +3608,10 @@ mod tests {
             Tick(1),
             &mut EventStream::new(),
         );
-        assert_eq!(ships.contract[0], None, "ASSIGN never claims for a !scripted craft");
+        assert_eq!(
+            ships.contract[0], None,
+            "ASSIGN never claims for a !scripted craft"
+        );
         assert_eq!(ships.role[0], CraftRole::Idle);
     }
 
@@ -3209,9 +3645,12 @@ mod tests {
             .since(Tick(0))
             .iter()
             .filter_map(|e| match e.kind {
-                EventKind::UpgradePurchased { craft, kind: UpgradeKind::Escort, level: 1, .. } => {
-                    Some((craft, e.tick))
-                }
+                EventKind::UpgradePurchased {
+                    craft,
+                    kind: UpgradeKind::Escort,
+                    level: 1,
+                    ..
+                } => Some((craft, e.tick)),
                 _ => None,
             })
             .collect();
@@ -3219,7 +3658,10 @@ mod tests {
         let mut ticks: Vec<u64> = buys.iter().map(|(_, t)| t.0).collect();
         ticks.sort_unstable();
         ticks.dedup();
-        assert!(ticks.len() > 1, "purchase ticks must DISPERSE, got a synchronized buy at {ticks:?}");
+        assert!(
+            ticks.len() > 1,
+            "purchase ticks must DISPERSE, got a synchronized buy at {ticks:?}"
+        );
     }
 
     #[test]
@@ -3236,15 +3678,27 @@ mod tests {
         world.ships.credits_micros[0] = 5_000_000;
         world.ships.pirate[0].as_mut().unwrap().lie_low_until = Tick(10_000);
         world.step(&mut Vec::new());
-        assert_eq!(world.ships.upgrades[0].escorts, 1, "lying-low pirate bought the escort");
-        assert_eq!(world.ships.credits_micros[0], 0, "debited the full L1 price (no headroom)");
-        assert_eq!(world.corporations.treasury_micros[0], 5_000_000, "Yard credited");
+        assert_eq!(
+            world.ships.upgrades[0].escorts, 1,
+            "lying-low pirate bought the escort"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], 0,
+            "debited the full L1 price (no headroom)"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 5_000_000,
+            "Yard credited"
+        );
 
         // Control: an ACTIVE pirate does not shop.
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         world.ships.credits_micros[0] = 5_000_000;
         world.step(&mut Vec::new());
-        assert_eq!(world.ships.upgrades[0].escorts, 0, "active pirate does not shop");
+        assert_eq!(
+            world.ships.upgrades[0].escorts, 0,
+            "active pirate does not shop"
+        );
         assert_eq!(world.ships.credits_micros[0], 5_000_000, "wallet untouched");
     }
 
@@ -3306,13 +3760,30 @@ mod tests {
         use crate::math::Vec3;
 
         let mut stations = StationStore::empty();
-        let from = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 100i64], vec![0i64; N_GOODS_V1]);
-        let to = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
+        let from = stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64, 100i64],
+            vec![0i64; N_GOODS_V1],
+        );
+        let to = stations.push(
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64; N_GOODS_V1],
+        );
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
         let seed = contracts.push(corp, Good::FUEL, 5, from, to, 1_000);
-        let srow = contracts.ids.dense_index(seed.slot, seed.generation).unwrap();
+        let srow = contracts
+            .ids
+            .dense_index(seed.slot, seed.generation)
+            .unwrap();
         contracts.status[srow] = ContractStatus::Completed;
         let mut ships = CraftStore::empty();
         ships.push(
@@ -3344,7 +3815,10 @@ mod tests {
             &stations,
             &mut ships,
             &[],
-            &crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() },
+            &crate::world::RouteEvidence {
+                robs: Vec::new(),
+                cursor: Vec::new(),
+            },
             false,
             false,
             &mut AssignDiag::default(),
@@ -3398,7 +3872,10 @@ mod tests {
             master_seed: 42,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 4096,
             bodies: vec![
                 BodyInit {
@@ -3528,7 +4005,10 @@ mod tests {
             ContractStatus::Accepted,
             "escrowed off-station on step 1; the load never fires (origin 0.3 AU away)"
         );
-        assert_eq!(world.contracts.escrow_micros[0], 1_000_000, "escrow == reward");
+        assert_eq!(
+            world.contracts.escrow_micros[0], 1_000_000,
+            "escrow == reward"
+        );
 
         // Step until FuelEmpty fires mid-deadhead and stage 3c settles the failure.
         let mut empty: Vec<Command> = Vec::new();
@@ -3540,7 +4020,10 @@ mod tests {
                 break;
             }
         }
-        assert!(failed, "Accepted contract reached Failed within the step bound");
+        assert!(
+            failed,
+            "Accepted contract reached Failed within the step bound"
+        );
         assert_eq!(world.contracts.escrow_micros[0], 0, "escrow zeroed on fail");
         assert_eq!(
             world.corporations.treasury_micros[0], initial_treasury,
@@ -3548,14 +4031,25 @@ mod tests {
         );
         let crow = world.ships.index_of(craft).unwrap();
         assert_eq!(world.ships.cargo[crow], None, "no cargo was ever loaded");
-        assert_eq!(world.ships.contract[crow], None, "hauler released: handle cleared");
-        assert_eq!(world.ships.role[crow], CraftRole::Idle, "hauler released: role Idle");
+        assert_eq!(
+            world.ships.contract[crow], None,
+            "hauler released: handle cleared"
+        );
+        assert_eq!(
+            world.ships.role[crow],
+            CraftRole::Idle,
+            "hauler released: role Idle"
+        );
         // NO cargo sink leg: there was no cargo on the deadhead.
         assert_eq!(
             world.econ.consumed[fuel], consumed_before,
             "consumed[Fuel] unchanged (deadhead carried no cargo)"
         );
-        assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+        assert_eq!(
+            total_credit(&world),
+            initial_credit,
+            "Σtreasury+Σcredits+Σescrow invariant"
+        );
 
         // ---- Arm 2: status `CargoLoaded` (the one-tick load window). Standard
         // direction (origin = the co-located station 0): the step-1 accept loads
@@ -3609,16 +4103,30 @@ mod tests {
             world.corporations.treasury_micros[0], initial_treasury,
             "escrow refunded exactly the reward to the corp treasury"
         );
-        assert_eq!(world.ships.cargo[crow], None, "cargo cleared (lost) on fail");
-        assert_eq!(world.ships.contract[crow], None, "hauler released: handle cleared");
-        assert_eq!(world.ships.role[crow], CraftRole::Idle, "hauler released: role Idle");
+        assert_eq!(
+            world.ships.cargo[crow], None,
+            "cargo cleared (lost) on fail"
+        );
+        assert_eq!(
+            world.ships.contract[crow], None,
+            "hauler released: handle cleared"
+        );
+        assert_eq!(
+            world.ships.role[crow],
+            CraftRole::Idle,
+            "hauler released: role Idle"
+        );
         // Cargo sink leg: the loaded cargo is LOST and accounted.
         assert_eq!(
             world.econ.consumed[fuel],
             consumed_before + lost_qty as i64,
             "lost cargo accounted into consumed[Fuel]"
         );
-        assert_eq!(total_credit(&world), initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+        assert_eq!(
+            total_credit(&world),
+            initial_credit,
+            "Σtreasury+Σcredits+Σescrow invariant"
+        );
     }
 
     #[test]
@@ -3635,7 +4143,11 @@ mod tests {
             kind: CommandKind::AcceptContract { contract: cid },
         }];
         world.step(&mut cmds);
-        assert_eq!(world.contracts.status[0], ContractStatus::Accepted, "deadhead leg armed");
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::Accepted,
+            "deadhead leg armed"
+        );
         let escrow_before = world.contracts.escrow_micros[0];
         assert!(escrow_before > 0, "escrow held");
 
@@ -3666,15 +4178,24 @@ mod tests {
             kind: CommandKind::AcceptContract { contract: cid },
         }];
         world.step(&mut cmds);
-        world.contracts.corp[0] = CorporationId { slot: 99, generation: 0 };
+        world.contracts.corp[0] = CorporationId {
+            slot: 99,
+            generation: 0,
+        };
         world.ships.fuel_mass[0] = 0.0;
         world.step(&mut Vec::new());
         assert_eq!(world.contracts.status[0], ContractStatus::Failed);
-        assert!(world.contracts.escrow_micros[0] > 0, "escrow stays put on the degrade arm");
+        assert!(
+            world.contracts.escrow_micros[0] > 0,
+            "escrow stays put on the degrade arm"
+        );
         assert!(
             world.events_mut().since(Tick(0)).iter().any(|e| matches!(
                 e.kind,
-                EventKind::ContractFailed { escrow_refunded_micros: 0, .. }
+                EventKind::ContractFailed {
+                    escrow_refunded_micros: 0,
+                    ..
+                }
             )),
             "degrade arm reports the actual 0 refund"
         );
@@ -3694,7 +4215,11 @@ mod tests {
             kind: CommandKind::AcceptContract { contract: cid },
         }];
         world.step(&mut cmds);
-        assert_eq!(world.contracts.status[0], ContractStatus::CargoLoaded, "the load-tick window");
+        assert_eq!(
+            world.contracts.status[0],
+            ContractStatus::CargoLoaded,
+            "the load-tick window"
+        );
 
         let mut ev = EventStream::default();
         settle_contract_failure(
@@ -3709,7 +4234,9 @@ mod tests {
         );
         assert_eq!(world.contracts.status[0], ContractStatus::Failed);
         assert!(
-            !ev.since(Tick(0)).iter().any(|e| matches!(e.kind, EventKind::ContractFailed { .. })),
+            !ev.since(Tick(0))
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::ContractFailed { .. })),
             "Robbed teardown emits no ContractFailed"
         );
     }
@@ -3734,8 +4261,22 @@ mod tests {
         // Two stations, two equal-reward offers on opposite directed routes
         // (dense 2-station layout: s0->s1 = route 1, s1->s0 = route 2).
         let mut stations = StationStore::empty();
-        let s0 = stations.push(BodyId { slot: 0, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
-        let s1 = stations.push(BodyId { slot: 1, generation: 0 }, vec![0i64, 0i64], vec![0i64; N_GOODS_V1]);
+        let s0 = stations.push(
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64; N_GOODS_V1],
+        );
+        let s1 = stations.push(
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
+            vec![0i64, 0i64],
+            vec![0i64; N_GOODS_V1],
+        );
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, s0);
         let mut contracts = ContractStore::empty();
@@ -3756,11 +4297,20 @@ mod tests {
         });
         ships.gossip[0] = Some(buf);
         // ...while the legacy ring says route 2 (k1) is hot.
-        let mut ring = RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] };
+        let mut ring = RouteEvidence {
+            robs: vec![[Tick(0); 8]; 4],
+            cursor: vec![0; 4],
+        };
         ring.robs[2][0] = Tick(90);
         ships.info_tick[0] = Tick(100); // ring read is dock-fresh
-        let trophic = TrophicCfg { hauler_belief_scoring: true, ..TrophicCfg::default() };
-        let dispatch = DispatchCfg { stagger_period: 1, ..DispatchCfg::default() };
+        let trophic = TrophicCfg {
+            hauler_belief_scoring: true,
+            ..TrophicCfg::default()
+        };
+        let dispatch = DispatchCfg {
+            stagger_period: 1,
+            ..DispatchCfg::default()
+        };
         let mut diag = AssignDiag::default();
         let mut events = EventStream::new();
         run_scripted_dispatch(
@@ -3780,9 +4330,16 @@ mod tests {
         );
         // Gossip avoids route 1 -> picks k1 (slot 1); the ring would have
         // avoided route 2 and picked k0 -> an argmax flip, counted.
-        assert_eq!(ships.contract[0].map(|c| c.slot), Some(1), "gossip pick is k1");
+        assert_eq!(
+            ships.contract[0].map(|c| c.slot),
+            Some(1),
+            "gossip pick is k1"
+        );
         assert_eq!(diag.decisions, 1, "one belief-scored pick");
-        assert_eq!(diag.flips, 1, "gossip vs ring argmax disagreement is a flip");
+        assert_eq!(
+            diag.flips, 1,
+            "gossip vs ring argmax disagreement is a flip"
+        );
         // Candidate histogram: k0's active (gossip) count 1, k1's count 0.
         assert_eq!(diag.candidate_counts[0], 1, "one zero-count candidate");
         assert_eq!(diag.candidate_counts[1], 1, "one count-1 candidate");
@@ -3795,7 +4352,10 @@ mod tests {
         let mut contracts2 = ContractStore::empty();
         contracts2.push(corp, Good::FUEL, 5, s0, s1, 1_000_000);
         contracts2.push(corp, Good::FUEL, 5, s1, s0, 1_000_000);
-        let empty_ring = RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] };
+        let empty_ring = RouteEvidence {
+            robs: vec![[Tick(0); 8]; 4],
+            cursor: vec![0; 4],
+        };
         let mut diag2 = AssignDiag::default();
         run_scripted_dispatch(
             &mut contracts2,
@@ -3825,15 +4385,27 @@ mod tests {
         // Three goods: Ore(0), Fuel(1), Widget(2). Widget has cap==0 (dead).
         let goods_cfg = GoodsCfg {
             goods: vec![
-                GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
-                GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
-                GoodSpec { name: "Widget".to_string(), unit_mass_milli: 1000 },
+                GoodSpec {
+                    name: "Ore".to_string(),
+                    unit_mass_milli: 1000,
+                },
+                GoodSpec {
+                    name: "Fuel".to_string(),
+                    unit_mass_milli: 1000,
+                },
+                GoodSpec {
+                    name: "Widget".to_string(),
+                    unit_mass_milli: 1000,
+                },
             ],
         };
         let n = goods_cfg.goods.len();
         let mut station = StationStore::empty();
         station.push(
-            BodyId { slot: 0, generation: 0 },
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
             vec![0i64; n],
             // Ore/Fuel start at 0 (will be repriced); Widget at sentinel 1.
             vec![0i64, 0i64, 1i64],
@@ -3841,7 +4413,7 @@ mod tests {
 
         let price_cfg = PriceCfg {
             base_micros: vec![100_000, 50_000, 99_999], // Widget base irrelevant
-            cap: vec![100, 100, 0],                      // Widget cap==0 → NEVER priced
+            cap: vec![100, 100, 0],                     // Widget cap==0 → NEVER priced
             slope_milli: 1800,
             reprice_interval: 1,
         };
@@ -3850,11 +4422,20 @@ mod tests {
         update_prices(&mut station, &price_cfg, &goods_cfg, Tick(1), &mut events);
 
         // Ore (cap>0, stock=0): should update to base*2 = 200_000.
-        assert_eq!(station.price_micros[0][0], 200_000, "Ore price should update at stock=0");
+        assert_eq!(
+            station.price_micros[0][0], 200_000,
+            "Ore price should update at stock=0"
+        );
         // Fuel (cap>0, stock=0): should update to base*2 = 100_000.
-        assert_eq!(station.price_micros[0][1], 100_000, "Fuel price should update at stock=0");
+        assert_eq!(
+            station.price_micros[0][1], 100_000,
+            "Fuel price should update at stock=0"
+        );
         // Widget (cap==0): must remain at the initial sentinel value 1 — never priced.
-        assert_eq!(station.price_micros[0][2], 1, "Widget (cap=0) must not be re-priced");
+        assert_eq!(
+            station.price_micros[0][2], 1,
+            "Widget (cap=0) must not be re-priced"
+        );
 
         // Exactly 2 PriceUpdate events emitted (Ore + Fuel), never Widget.
         let price_updates: Vec<_> = events
@@ -3862,7 +4443,11 @@ mod tests {
             .iter()
             .filter(|e| matches!(e.kind, EventKind::PriceUpdate { .. }))
             .collect();
-        assert_eq!(price_updates.len(), 2, "only live-priced goods emit PriceUpdate");
+        assert_eq!(
+            price_updates.len(),
+            2,
+            "only live-priced goods emit PriceUpdate"
+        );
     }
 
     // --- A3.5: run_trade_policies (stage 1c3x) ---
@@ -3890,7 +4475,10 @@ mod tests {
             master_seed: 7,
             dt: Dt::new(0.25),
             softening: 1e-3,
-            substep_cfg: SubstepCfg { accel_ref: 1e-3, max_substeps: 64 },
+            substep_cfg: SubstepCfg {
+                accel_ref: 1e-3,
+                max_substeps: 64,
+            },
             ephemeris_window: 256,
             bodies: vec![
                 BodyInit {
@@ -3966,12 +4554,24 @@ mod tests {
             refuel: crate::config::RefuelCfg::default(),
             goods: GoodsCfg {
                 goods: vec![
-                    GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
-                    GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
-                    GoodSpec { name: "Food".to_string(), unit_mass_milli: 1000 },
+                    GoodSpec {
+                        name: "Ore".to_string(),
+                        unit_mass_milli: 1000,
+                    },
+                    GoodSpec {
+                        name: "Fuel".to_string(),
+                        unit_mass_milli: 1000,
+                    },
+                    GoodSpec {
+                        name: "Food".to_string(),
+                        unit_mass_milli: 1000,
+                    },
                 ],
             },
-            exchange: crate::config::ExchangeCfg { corp_index: 0, active: true },
+            exchange: crate::config::ExchangeCfg {
+                corp_index: 0,
+                active: true,
+            },
             arbitrage: crate::config::ArbitrageCfg {
                 wage_flat_micros: trade_reserve,
                 ..crate::config::ArbitrageCfg::default()
@@ -3986,7 +4586,10 @@ mod tests {
     fn trade_policy_writes_buy_intent_for_capitalized_docked_craft() {
         use crate::time::Tick;
         let mut w = trade_policy_fixture(10_000_000, 50, 200_000, 400_000, 1_000_000);
-        assert!(w.ships.pending_trade_buy[0].is_none(), "precondition: no intent yet");
+        assert!(
+            w.ships.pending_trade_buy[0].is_none(),
+            "precondition: no intent yet"
+        );
         run_trade_policies(
             &mut w.ships,
             &w.config.craft,
@@ -4002,7 +4605,10 @@ mod tests {
             w.ships.pending_trade_buy[0].is_some(),
             "capitalized docked craft with positive spread must write buy intent"
         );
-        assert!(w.ships.pending_trade_sell[0].is_none(), "empty hold → no sell intent");
+        assert!(
+            w.ships.pending_trade_sell[0].is_none(),
+            "empty hold → no sell intent"
+        );
     }
 
     #[test]
@@ -4022,7 +4628,10 @@ mod tests {
             &w.config.goods,
             Tick(1),
         );
-        assert!(w.ships.pending_trade_buy[0].is_none(), "pirate must be skipped");
+        assert!(
+            w.ships.pending_trade_buy[0].is_none(),
+            "pirate must be skipped"
+        );
     }
 
     #[test]
@@ -4041,7 +4650,10 @@ mod tests {
             &w.config.goods,
             Tick(1),
         );
-        assert!(w.ships.pending_trade_buy[0].is_none(), "broke craft must not buy");
+        assert!(
+            w.ships.pending_trade_buy[0].is_none(),
+            "broke craft must not buy"
+        );
     }
 
     // M5: ASSIGN empty-hold gate (L3-M3). A craft carrying own-trade goods in its
@@ -4053,12 +4665,18 @@ mod tests {
 
         let mut stations = StationStore::empty();
         let from = stations.push(
-            BodyId { slot: 0, generation: 0 },
+            BodyId {
+                slot: 0,
+                generation: 0,
+            },
             vec![0i64, 100i64],
             vec![0i64; N_GOODS_V1],
         );
         let to = stations.push(
-            BodyId { slot: 1, generation: 0 },
+            BodyId {
+                slot: 1,
+                generation: 0,
+            },
             vec![0i64, 0i64],
             vec![0i64; N_GOODS_V1],
         );
@@ -4092,7 +4710,10 @@ mod tests {
         };
         let shipyard = ShipyardCfg::default();
         let mut events = EventStream::new();
-        let no_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let no_evidence = crate::world::RouteEvidence {
+            robs: Vec::new(),
+            cursor: Vec::new(),
+        };
 
         run_scripted_dispatch(
             &mut contracts,
@@ -4214,11 +4835,20 @@ mod tests {
             &mut world.events,
         );
 
-        assert!(world.ships.pending_trade_buy[0].is_none(), "intent must be consumed");
-        assert_eq!(world.stations.stock[0][0], 47, "station stock must decrease by 3");
+        assert!(
+            world.ships.pending_trade_buy[0].is_none(),
+            "intent must be consumed"
+        );
+        assert_eq!(
+            world.stations.stock[0][0], 47,
+            "station stock must decrease by 3"
+        );
         assert_eq!(world.ships.hold[0], vec![(Good(0), 3u32)]);
         assert_eq!(world.ships.credits_micros[0], 10_000_000 - 600_000);
-        assert_eq!(world.corporations.treasury_micros[0], ex_treasury_before + 600_000);
+        assert_eq!(
+            world.corporations.treasury_micros[0],
+            ex_treasury_before + 600_000
+        );
         assert_eq!(
             world.econ.consumed, consumed_before,
             "consumed counter must not change on goods transfer"
@@ -4285,7 +4915,14 @@ mod tests {
     #[test]
     fn trade_buy_skips_deterministically() {
         use crate::time::Tick;
-        for arm in ["undocked", "stock-0", "wallet-short", "hold-full", "price-0", "stale-corp"] {
+        for arm in [
+            "undocked",
+            "stock-0",
+            "wallet-short",
+            "hold-full",
+            "price-0",
+            "stale-corp",
+        ] {
             let mut world = trade_buy_skip_fixture(arm);
             let snapshot = world_snapshot(&world);
             resolve_trade_buys(
@@ -4299,8 +4936,15 @@ mod tests {
                 Tick(1),
                 &mut world.events,
             );
-            assert!(world.ships.pending_trade_buy[0].is_none(), "{arm}: intent not consumed");
-            assert_eq!(snapshot, world_snapshot(&world), "{arm}: skip must not move any state");
+            assert!(
+                world.ships.pending_trade_buy[0].is_none(),
+                "{arm}: intent not consumed"
+            );
+            assert_eq!(
+                snapshot,
+                world_snapshot(&world),
+                "{arm}: skip must not move any state"
+            );
             assert!(
                 !world
                     .events
@@ -4347,7 +4991,11 @@ mod tests {
         );
 
         assert!(world.ships.pending_trade_sell[0].is_none());
-        assert_eq!(world.ships.hold[0].len(), 0, "hold must be empty after sell");
+        assert_eq!(
+            world.ships.hold[0].len(),
+            0,
+            "hold must be empty after sell"
+        );
         assert_eq!(world.stations.stock[0][0], 5, "station stock += 5");
         assert_eq!(world.ships.credits_micros[0], credits_before + 1_500_000);
         assert_eq!(world.corporations.treasury_micros[0], 5_000_000 - 1_500_000);
@@ -4378,9 +5026,19 @@ mod tests {
             Tick(1),
             &mut world.events,
         );
-        assert_eq!(world.ships.hold[0].len(), 0, "goods unloaded even when Exchange broke");
-        assert_eq!(world.ships.credits_micros[0], credits_before, "no credit movement when Exchange broke");
-        assert_eq!(world.corporations.treasury_micros[0], 0, "Exchange treasury saturates at 0");
+        assert_eq!(
+            world.ships.hold[0].len(),
+            0,
+            "goods unloaded even when Exchange broke"
+        );
+        assert_eq!(
+            world.ships.credits_micros[0], credits_before,
+            "no credit movement when Exchange broke"
+        );
+        assert_eq!(
+            world.corporations.treasury_micros[0], 0,
+            "Exchange treasury saturates at 0"
+        );
     }
 
     #[test]
