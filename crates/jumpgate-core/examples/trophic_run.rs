@@ -537,7 +537,11 @@ fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> 
         | EventKind::PirateLeft { .. }
         | EventKind::PirateSpawned { .. }
         | EventKind::UpgradePurchased { .. }
-        | EventKind::RefuelDenied { .. } => None,
+        | EventKind::RefuelDenied { .. }
+        // Goods-as-goods rung A: an arbitrage withdrawal is a corp-level event
+        // with no gossip-log row (the "post" row is runner-enriched from
+        // ContractOffered; a withdrawal needs no narration row).
+        | EventKind::OfferWithdrawn { .. } => None,
     }
 }
 
@@ -608,7 +612,10 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         | EventKind::ActionIngested { .. }
         | EventKind::Production { .. }
         | EventKind::PriceUpdate { .. }
-        | EventKind::ContractOffered { .. } => None,
+        | EventKind::ContractOffered { .. }
+        // Goods-as-goods rung A: OfferWithdrawn is a corp-level event — no craft
+        // subject; the chronicle skips it (returns None).
+        | EventKind::OfferWithdrawn { .. } => None,
     }
 }
 

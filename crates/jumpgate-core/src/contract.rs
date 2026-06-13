@@ -15,7 +15,7 @@
 //! them without a contract<->stores cycle; this module imports them.
 
 use crate::economy::Good;
-use crate::ids::{BodyId, ContractId, CraftId, ProducerId, StationId};
+use crate::ids::{BodyId, ContractId, CorporationId, CraftId, ProducerId, StationId};
 use crate::math::Vec3;
 use crate::time::{Dt, Tick};
 use crate::types::{CommandKind, EntityRef, Lod, NavDest, Target};
@@ -205,6 +205,14 @@ pub enum EventKind {
     /// pirate's position; hungry relocation anchors at the old lurk station).
     LurkMoved { pirate: CraftId, to_station: u32, breakout: bool },
     // --- Goods-as-goods events (rung A; hash-neutral like all events) ---
+    /// An Exchange arbitrage posting was withdrawn — either the spread no longer
+    /// clears at current prices (Offered recheck) or the corp cannot fund the
+    /// pending buy after acceptance (Accepted-never-loaded solvency recheck).
+    /// Emitted in stage 1b2 by `run_scripted_dispatch` / the withdrawal sweep.
+    OfferWithdrawn {
+        contract: ContractId,
+        corp: CorporationId,
+    },
     /// A craft's pending refuel was silently skipped because one of three
     /// preconditions failed (A0 instrument; WB4 middle beat). The `craft` is the
     /// one holding `pending_refuel = Some(_)`. `station` is the dock station.
@@ -496,6 +504,23 @@ mod tests {
             kind: accepted,
         };
         assert_eq!(ev, ev);
+    }
+
+    #[test]
+    fn offer_withdrawn_event_is_copy_and_partial_eq() {
+        use crate::ids::CorporationId;
+        use crate::ids::ContractId;
+        let cid = ContractId { slot: 0, generation: 0 };
+        let corp = CorporationId { slot: 1, generation: 0 };
+        let ev = EventKind::OfferWithdrawn { contract: cid, corp };
+        let ev_copy = ev;
+        assert_eq!(ev, ev_copy);
+        let prod = EventKind::Production {
+            producer: crate::ids::ProducerId { slot: 0, generation: 0 },
+            resource: crate::economy::Good::ORE,
+            qty: 1,
+        };
+        assert_ne!(ev, prod);
     }
 
     /// Trivial integrator: forward-Euler-ish, proves the trait is object-safe and
