@@ -176,7 +176,7 @@ pub struct CraftStore {
     pub role: Vec<CraftRole>,
     /// Loaded cargo: `Some((resource, qty))` while carrying a delivery, else `None`.
     /// Distinct from `fuel_mass` (propellant) — traded Fuel is cargo in v1.
-    pub cargo: Vec<Option<(crate::economy::Resource, u32)>>,
+    pub cargo: Vec<Option<(crate::economy::Good, u32)>>,
     /// Earned credits (i64 microcredits). Paid from contract escrow on delivery.
     pub credits_micros: Vec<i64>,
     /// The contract this craft is fulfilling, or `None`.

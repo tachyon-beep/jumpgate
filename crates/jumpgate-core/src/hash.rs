@@ -791,7 +791,7 @@ mod tests {
     /// goldens and the economy-free parity test leave it as dead code otherwise —
     /// the advisor's "vacuous guard" gap). Deterministic: no RNG in population.
     fn populated_world() -> World {
-        use crate::economy::{ContractStatus, Recipe, Resource};
+        use crate::economy::{ContractStatus, Recipe, Good};
         use crate::stores::CraftRole;
         let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
         let body = w.body_ids()[0];
@@ -799,16 +799,16 @@ mod tests {
         let corp = w.corporations.push(1_000_000, st);
         let _prod = w.producers.push(
             st,
-            Recipe { input: Some((Resource::Ore, 1)), output: Some((Resource::Fuel, 2)), interval: 3 },
+            Recipe { input: Some((Good::ORE, 1)), output: Some((Good::FUEL, 2)), interval: 3 },
         );
-        let k = w.contracts.push(corp, Resource::Fuel, 3, st, st, 500_000);
+        let k = w.contracts.push(corp, Good::FUEL, 3, st, st, 500_000);
         w.contracts.status[0] = ContractStatus::Accepted;
         w.contracts.escrow_micros[0] = 250_000;
         w.contracts.hauler[0] = Some(w.craft_ids()[0]);
         w.econ.mined[0] = 5;
         w.econ.consumed[1] = 3;
         w.ships.role[0] = CraftRole::Hauler;
-        w.ships.cargo[0] = Some((Resource::Fuel, 2));
+        w.ships.cargo[0] = Some((Good::FUEL, 2));
         w.ships.credits_micros[0] = 42;
         w.ships.contract[0] = Some(k);
         w
@@ -856,7 +856,7 @@ mod tests {
 
     #[test]
     fn economy_state_is_fully_folded() {
-        use crate::economy::{ContractStatus, Resource};
+        use crate::economy::{ContractStatus, Good};
         use crate::stores::CraftRole;
         // Each single-field mutation MUST move the hash — proving the field is folded
         // (completeness guard: a forgotten field would let two distinct economy states
@@ -870,9 +870,9 @@ mod tests {
             }};
         }
         moves!("craft role", |w: &mut World| w.ships.role[0] = CraftRole::Idle);
-        moves!("cargo qty", |w: &mut World| w.ships.cargo[0] = Some((Resource::Fuel, 99)));
+        moves!("cargo qty", |w: &mut World| w.ships.cargo[0] = Some((Good::FUEL, 99)));
         moves!("cargo presence", |w: &mut World| w.ships.cargo[0] = None);
-        moves!("cargo resource", |w: &mut World| w.ships.cargo[0] = Some((Resource::Ore, 2)));
+        moves!("cargo resource", |w: &mut World| w.ships.cargo[0] = Some((Good::ORE, 2)));
         moves!("craft credits", |w: &mut World| w.ships.credits_micros[0] = 43);
         moves!("craft contract handle", |w: &mut World| w.ships.contract[0] = None);
         moves!("econ.mined", |w: &mut World| w.econ.mined[0] = 6);

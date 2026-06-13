@@ -235,7 +235,7 @@ mod tests {
     use crate::config::{
         BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, RunConfig, SubstepCfg,
     };
-    use crate::economy::Resource;
+    use crate::economy::Good;
     use crate::ids::{CorporationId, CraftId, StationId};
     use crate::stores::CraftRole;
     use crate::time::Dt;
@@ -419,7 +419,7 @@ mod tests {
         let corp = CorporationId { slot: 0, generation: 0 };
         let from = StationId { slot: 0, generation: 0 };
         let to = StationId { slot: 1, generation: 0 };
-        let cid = world.contracts.push(corp, Resource::Ore, 5, from, to, 1_000);
+        let cid = world.contracts.push(corp, Good::ORE, 5, from, to, 1_000);
 
         let mut cmds = vec![Command {
             target: Target::Entity(EntityRef::Craft(id0)),
@@ -510,7 +510,7 @@ mod tests {
         let corp = CorporationId { slot: 0, generation: 0 };
         let from = StationId { slot: 0, generation: 0 };
         let to = StationId { slot: 1, generation: 0 };
-        let cid = world.contracts.push(corp, Resource::Ore, 5, from, to, 1_000);
+        let cid = world.contracts.push(corp, Good::ORE, 5, from, to, 1_000);
         let other = CraftId { slot: 99, generation: 0 };
         let cidx = world.contracts.ids.dense_index(cid.slot, cid.generation).unwrap();
         world.contracts.hauler[cidx] = Some(other);

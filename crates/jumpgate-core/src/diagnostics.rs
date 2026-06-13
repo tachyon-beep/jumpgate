@@ -12,7 +12,7 @@
 
 use crate::autopilot::ARRIVAL_RADIUS;
 use crate::contract::{EventKind, StateView};
-use crate::economy::Resource;
+use crate::economy::Good;
 use crate::ids::{BodyId, ContractId, StationId};
 use crate::math::Vec3;
 use crate::stores::NavState;
@@ -815,13 +815,13 @@ pub fn sample_window(world: &World, window_start: Tick) -> TrophicSample {
             .stations
             .stock
             .iter()
-            .map(|st| st[Resource::Fuel.index()])
+            .map(|st| st[Good::FUEL.index()])
             .collect(),
         per_station_fuel_price: world
             .stations
             .price_micros
             .iter()
-            .map(|pr| pr[Resource::Fuel.index()])
+            .map(|pr| pr[Good::FUEL.index()])
             .collect(),
         per_station_stock: world
             .stations
@@ -865,7 +865,7 @@ pub fn route_of(world: &World, contract: ContractId) -> Option<usize> {
 pub fn contract_resource_reward(
     world: &World,
     contract: ContractId,
-) -> Option<(Resource, i64)> {
+) -> Option<(Good, i64)> {
     let k = world
         .contracts
         .ids
@@ -1595,7 +1595,7 @@ mod tests {
             "per_station_price: one row per station");
         // Each row covers all resources (N_RESOURCES columns today).
         // Fuel column must equal the existing per_station_fuel_stock scalar.
-        let fuel_r = crate::economy::Resource::Fuel.index();
+        let fuel_r = crate::economy::Good::FUEL.index();
         for (row, stock) in s.per_station_stock.iter().enumerate() {
             assert_eq!(stock[fuel_r], s.per_station_fuel_stock[row],
                 "per_station_stock fuel column matches existing fuel scalar at row {row}");

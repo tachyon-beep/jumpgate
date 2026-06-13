@@ -226,7 +226,7 @@ impl World {
         // `lot_mass` opens the verb, settlement must have a config-wide live
         // Fuel price surface and a resolvable Port corporation row.
         if cfg.refuel.lot_mass > 0.0 {
-            let fuel = crate::economy::Resource::Fuel.index();
+            let fuel = crate::economy::Good::FUEL.index();
             if cfg.price_cfg.base_micros[fuel] == 0 {
                 return Err(ResetError::BadRefuelCfg {
                     reason: "lot_mass > 0 but price_cfg.base_micros[Fuel] == 0",
@@ -1794,7 +1794,7 @@ mod tests {
     /// path (distinct from `populated_economy_parity`, which hand-mutates).
     fn one_body_two_stations_one_miner() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        use crate::economy::{N_RESOURCES, Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![
             StationInit {
@@ -1812,7 +1812,7 @@ mod tests {
         ];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
         }];
         cfg
     }
@@ -1875,7 +1875,7 @@ mod tests {
             "lot_mass > 0 with base_micros[Fuel] == 0 must reject"
         );
 
-        let fuel = crate::economy::Resource::Fuel.index();
+        let fuel = crate::economy::Good::FUEL.index();
         cfg.price_cfg.base_micros[fuel] = 5_000;
         cfg.stations[0].initial_price_micros[fuel] = 0;
         assert!(
@@ -2165,7 +2165,7 @@ mod tests {
     /// Used to prove `run_producers` is wired into `World::step`.
     fn one_body_one_station_one_miner_ore_zero() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        use crate::economy::{N_RESOURCES, Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
@@ -2175,14 +2175,14 @@ mod tests {
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
         }];
         cfg
     }
 
     #[test]
     fn step_runs_producers_each_tick() {
-        use crate::economy::Resource;
+        use crate::economy::Good;
         // Miner ∅->Ore(5), interval 1, station Ore starts at 0. Stepping 3 ticks
         // fires the producer at next = 1,2,3 -> stock and mined[Ore] both reach 15.
         let (mut world, _) =
@@ -2192,12 +2192,12 @@ mod tests {
             world.step(&mut empty);
         }
         assert_eq!(
-            world.stations.stock[0][Resource::Ore.index()],
+            world.stations.stock[0][Good::ORE.index()],
             15,
             "3 firings of ∅->Ore(5) raise station Ore stock to 15"
         );
         assert_eq!(
-            world.econ.mined[Resource::Ore.index()],
+            world.econ.mined[Good::ORE.index()],
             15,
             "mined[Ore] counter tracks the 3 firings"
         );
@@ -2232,7 +2232,7 @@ mod tests {
     /// so a 5-unit load is covered. The single craft is Idle.
     fn two_body_contract_fixture() -> RunConfig {
         use crate::config::{ContractInit, CorporationInit, StationInit};
-        use crate::economy::Resource;
+        use crate::economy::Good;
         let mut cfg = one_body_one_thrusting_craft();
         // Drop the central body's mass so (a) the craft co-located at the origin is
         // not gravity-trapped and (b) station B's body is near-stationary — a from-rest
@@ -2280,7 +2280,7 @@ mod tests {
         }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             qty: 5,
             from_station_index: 0,
             to_station_index: 1,
@@ -2302,7 +2302,7 @@ mod tests {
     /// body ~190 arrival-radii ahead and the load starved forever.
     fn fast_orbit_pickup_fixture() -> RunConfig {
         use crate::config::{ContractInit, CorporationInit, StationInit};
-        use crate::economy::Resource;
+        use crate::economy::Good;
         let mut cfg = one_body_one_thrusting_craft();
         // Body 1: the fast-orbit pickup host (negligible-mass marker body).
         let a = 0.05;
@@ -2325,7 +2325,7 @@ mod tests {
             vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             qty: 5,
             from_station_index: 0,
             to_station_index: 1,
@@ -2336,7 +2336,7 @@ mod tests {
 
     #[test]
     fn try_load_compares_craft_and_body_in_the_same_frame() {
-        use crate::economy::{ContractStatus, Resource};
+        use crate::economy::{ContractStatus, Good};
         use crate::types::{EntityRef, Target};
         let (mut world, _h) = World::reset(fast_orbit_pickup_fixture()).expect("resolvable cfg");
         let craft = world.craft_ids()[0];
@@ -2364,7 +2364,7 @@ mod tests {
         let crow = world.ships.index_of(craft).unwrap();
         assert_eq!(
             world.ships.cargo[crow],
-            Some((Resource::Fuel, 5)),
+            Some((Good::FUEL, 5)),
             "cargo transferred from the fast-orbit station"
         );
     }
@@ -2394,14 +2394,14 @@ mod tests {
 
     #[test]
     fn starved_hauler_fails_contract_refunds_escrow_and_accounts_cargo_loss() {
-        use crate::economy::{ContractStatus, Resource};
+        use crate::economy::{ContractStatus, Good};
         use crate::stores::CraftRole;
         use crate::types::{EntityRef, Target};
         let (mut world, _h) =
             World::reset(two_body_starved_contract_fixture()).expect("resolvable cfg");
         let craft = world.craft_ids()[0];
         let cidx = 0usize; // sole contract, dense row 0
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
 
         // Credit identity baseline (escrow is corp money held off-balance-sheet).
         let initial_credit = world.corporations.treasury_micros.iter().sum::<i64>()
@@ -2430,7 +2430,7 @@ mod tests {
         // The loaded cargo qty (debited from A at load); lost when the contract fails.
         let crow0 = world.ships.index_of(craft).unwrap();
         let (lost_res, lost_qty) = world.ships.cargo[crow0].expect("cargo loaded on step 1");
-        assert_eq!((lost_res, lost_qty), (Resource::Fuel, 5));
+        assert_eq!((lost_res, lost_qty), (Good::FUEL, 5));
 
         // Step (no commands) until a FuelEmpty fires while InTransit and the failure
         // stage settles the contract. Bounded loop; break on Failed.
@@ -2475,12 +2475,12 @@ mod tests {
 
     #[test]
     fn accept_contract_escrows_loads_cargo_and_dispatches_hauler() {
-        use crate::economy::{ContractStatus, Resource};
+        use crate::economy::{ContractStatus, Good};
         use crate::types::{EntityRef, Target};
         let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
         let craft = world.craft_ids()[0];
         let cidx = 0usize; // sole contract, dense row 0
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
 
         // Issue AcceptContract for the sole Offered contract.
         let contract = world
@@ -2506,7 +2506,7 @@ mod tests {
         assert_eq!(world.corporations.treasury_micros[0], 4_000_000);
         // Cargo loaded onto the craft; station A Fuel stock dropped by 5.
         let crow = world.ships.index_of(craft).unwrap();
-        assert_eq!(world.ships.cargo[crow], Some((Resource::Fuel, 5)));
+        assert_eq!(world.ships.cargo[crow], Some((Good::FUEL, 5)));
         assert_eq!(world.stations.stock[0][fuel], 5, "station A Fuel 10 -> 5");
         // The craft is now dispatched: Seeking station B's body.
         let to_body = world
@@ -2546,28 +2546,28 @@ mod tests {
     /// trigger and a repost is warranted after the first delivery.
     fn full_stage1_self_running_fixture() -> RunConfig {
         use crate::config::{CorporationInit, ProducerInit};
-        use crate::economy::{Recipe, Resource};
+        use crate::economy::{Recipe, Good};
         let mut cfg = two_body_contract_fixture();
         // Producers on station A (origin) + a demand sink on station B (destination).
         cfg.producers = vec![
             // Miner: ∅ -> Ore(5) every tick.
             ProducerInit {
                 station_index: 0,
-                recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+                recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
             },
             // Refiner: Ore(2) -> Fuel(2) every tick (keeps A restocked with Fuel).
             ProducerInit {
                 station_index: 0,
                 recipe: Recipe {
-                    input: Some((Resource::Ore, 2)),
-                    output: Some((Resource::Fuel, 2)),
+                    input: Some((Good::ORE, 2)),
+                    output: Some((Good::FUEL, 2)),
                     interval: 1,
                 },
             },
             // Demand sink at B: Fuel(1) -> ∅ every tick (consumes delivered Fuel).
             ProducerInit {
                 station_index: 1,
-                recipe: Recipe { input: Some((Resource::Fuel, 1)), output: None, interval: 1 },
+                recipe: Recipe { input: Some((Good::FUEL, 1)), output: None, interval: 1 },
             },
         ];
         // Trigger repost while B's stock sits below demand_low (5-unit deliveries,
@@ -2589,10 +2589,10 @@ mod tests {
 
     #[test]
     fn scripted_dispatch_makes_stage1_loop_self_run() {
-        use crate::economy::{ContractStatus, N_RESOURCES, Resource};
+        use crate::economy::{ContractStatus, N_RESOURCES, Good};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
 
         // Resource accounting identity baseline: initial[r] = Σ station stock at tick 0
         // (mined == consumed == 0 at reset).
@@ -2657,13 +2657,13 @@ mod tests {
 
     #[test]
     fn deliver_on_arrival_settles_escrow_and_holds_credit_identity() {
-        use crate::economy::{ContractStatus, Resource};
+        use crate::economy::{ContractStatus, Good};
         use crate::stores::CraftRole;
         use crate::types::{EntityRef, Target};
         let (mut world, _h) = World::reset(two_body_contract_fixture()).expect("resolvable cfg");
         let craft = world.craft_ids()[0];
         let cidx = 0usize; // sole contract, dense row 0
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
 
         // Credit identity baseline: Σtreasury + Σcredits + Σescrow is invariant
         // (escrow is corp money held off-balance-sheet, paid to the craft on
@@ -2887,7 +2887,7 @@ mod tests {
 
     #[test]
     fn phase1_gate_resource_accounting_identity_holds_every_tick() {
-        use crate::economy::{N_RESOURCES, Resource};
+        use crate::economy::{N_RESOURCES, Good};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
 
@@ -2916,8 +2916,8 @@ mod tests {
         // path (consumed Fuel > 0 proves Fuel reached station B and was consumed there,
         // which is only possible after a contract delivered). (The Failed→consumed leg
         // never fires on this healthy fixture; it is covered by T16's targeted test.)
-        let ore = Resource::Ore.index();
-        let fuel = Resource::Fuel.index();
+        let ore = Good::ORE.index();
+        let fuel = Good::FUEL.index();
         assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
         assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
         assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");
@@ -2969,7 +2969,7 @@ mod tests {
     /// spurious change there).
     fn one_station_growing_fuel_reprice_4() -> RunConfig {
         use crate::config::{PriceCfg, ProducerInit, StationInit};
-        use crate::economy::{N_RESOURCES, Recipe, Resource};
+        use crate::economy::{N_RESOURCES, Recipe, Good};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
@@ -2979,7 +2979,7 @@ mod tests {
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Resource::Fuel, 5)), interval: 1 },
+            recipe: Recipe { input: None, output: Some((Good::FUEL, 5)), interval: 1 },
         }];
         cfg.price_cfg = PriceCfg {
             base_micros: [0, 100_000],
@@ -2992,8 +2992,8 @@ mod tests {
 
     #[test]
     fn step_reprice_clock_is_tick_gated_and_deterministic() {
-        use crate::economy::Resource;
-        let fi = Resource::Fuel.index();
+        use crate::economy::Good;
+        let fi = Good::FUEL.index();
 
         let (mut world, _) =
             World::reset(one_station_growing_fuel_reprice_4()).expect("resolvable config");
@@ -3069,8 +3069,8 @@ mod tests {
     /// A/B levers.
     fn stage2_ab_loop_fixture(demand_high: i64, stagger_period: u32) -> RunConfig {
         use crate::config::{ContractInit, CorporationInit, ProducerInit, StationInit};
-        use crate::economy::{Recipe, Resource};
-        let fuel = Resource::Fuel.index();
+        use crate::economy::{Recipe, Good};
+        let fuel = Good::FUEL.index();
         let mut cfg = one_body_one_thrusting_craft();
         // Negligible central mass so B's body is near-stationary and the from-rest
         // hauler can rendezvous (same trick as two_body_contract_fixture).
@@ -3102,16 +3102,16 @@ mod tests {
             StationInit { body_index: 1, initial_stock: [0, 0], initial_price_micros: [0, 0], sells_upgrades: false },
         ];
         cfg.producers = vec![
-            ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Resource::Ore, 20)), interval: 1 } },
-            ProducerInit { station_index: 0, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 1 } },
+            ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 20)), interval: 1 } },
+            ProducerInit { station_index: 0, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 1 } },
             // Sink at B: consumes 5 Fuel/tick (== qty) so a staggered arrival is fully
             // drained before the next lands -> staggering visibly flattens the peak.
-            ProducerInit { station_index: 1, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 1 } },
+            ProducerInit { station_index: 1, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 1 } },
         ];
         cfg.corporations = vec![CorporationInit { treasury_micros: 100_000_000_000, home_station_index: 0 }];
         // Seeded route template (Fuel A->B, qty 5) — the order-up-to repost clones it.
         cfg.contracts = vec![ContractInit {
-            corp_index: 0, resource: Resource::Fuel, qty: 5,
+            corp_index: 0, resource: Good::FUEL, qty: 5,
             from_station_index: 0, to_station_index: 1, reward_micros: 1_000,
         }];
         // Stage-2 pricing LIVE so price actually moves (named fixture constraint).
@@ -3147,7 +3147,7 @@ mod tests {
     /// Drive the A/B fixture 1000 ticks and reduce it to a [`Stage2Run`].
     fn drive_stage2_loop(cfg: RunConfig) -> Stage2Run {
         use crate::economy::ContractStatus;
-        let fuel = crate::economy::Resource::Fuel.index();
+        let fuel = crate::economy::Good::FUEL.index();
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         let mut empty: Vec<Command> = Vec::new();
         let mut series = Vec::with_capacity(1000);
@@ -3263,8 +3263,8 @@ mod tests {
         // single opening wave (4 haulers x qty 5 == 20 Fuel eaten by the B sink) and jams.
         // With return-routing the hauler walks back to A, reloads, and delivers again, so
         // the loop sustains for many waves.
-        use crate::economy::Resource;
-        let fuel = Resource::Fuel.index();
+        use crate::economy::Good;
+        let fuel = Good::FUEL.index();
         let (mut world, _h) =
             World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
         let mut empty: Vec<Command> = Vec::new();
@@ -3309,7 +3309,7 @@ mod tests {
 
     #[test]
     fn phase2_gate_full_demand_deflation_harness_conserves() {
-        use crate::economy::{N_RESOURCES, Resource};
+        use crate::economy::{N_RESOURCES, Good};
         // Conservation is config-independent; use the damped (30, 4) config so the full
         // post -> dispatch -> deliver -> sink-consume wave fires within the window
         // (first delivery ~tick 58), making the `consumed Fuel > 0` leg reachable.
@@ -3327,7 +3327,7 @@ mod tests {
             + world.ships.credits_micros.iter().sum::<i64>()
             + world.contracts.escrow_micros.iter().sum::<i64>();
 
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
         // Snapshot station B's Fuel price at reset to prove repricing actually fires.
         let price_b_fuel_0 = world.stations.price_micros[1][fuel];
         let mut price_moved = false;
@@ -3359,7 +3359,7 @@ mod tests {
         // every leg actually fired — miner (mined Ore), refiner output (mined Fuel) and input
         // (consumed Ore), and the deliver -> sink-consume path (consumed Fuel > 0 proves Fuel
         // reached station B via a delivered contract and was consumed by the sink there).
-        let ore = Resource::Ore.index();
+        let ore = Good::ORE.index();
         assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
         assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
         assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");

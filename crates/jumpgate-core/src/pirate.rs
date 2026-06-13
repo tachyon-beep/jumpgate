@@ -754,7 +754,7 @@ mod tests {
         OrbitalElements, PriceCfg, ProducerInit, RunConfig, ShipyardCfg, StationInit, SubstepCfg,
     };
     use crate::contract::{Command, EventKind, StateView};
-    use crate::economy::{Recipe, Resource};
+    use crate::economy::{Good, Recipe};
     use crate::ids::{BodyId, ContractId};
     use crate::stores::{NavState, PirateState};
     use crate::time::Dt;
@@ -815,7 +815,7 @@ mod tests {
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, from);
         let mut contracts = ContractStore::empty();
-        let cid = contracts.push(corp, Resource::Fuel, 5, from, to, 1_000_000);
+        let cid = contracts.push(corp, Good::FUEL, 5, from, to, 1_000_000);
         contracts.status[0] = ContractStatus::InTransit;
         contracts.escrow_micros[0] = 1_000_000;
         let mut ships = CraftStore::empty();
@@ -830,7 +830,7 @@ mod tests {
             engage_cooldown_until: Tick(0),
         });
         ships.role[1] = CraftRole::Hauler;
-        ships.cargo[1] = Some((Resource::Fuel, 5));
+        ships.cargo[1] = Some((Good::FUEL, 5));
         ships.contract[1] = Some(cid);
         Fix {
             ships,
@@ -1015,7 +1015,7 @@ mod tests {
             f.ships.credits_micros[1] = wallet;
             run(&mut f, &cfg, Tick(10));
             // Cargo: the accounted SINK leg (the FuelEmpty precedent).
-            assert_eq!(f.counters.consumed[Resource::Fuel.index()], 5, "{status:?}: consumed += qty");
+            assert_eq!(f.counters.consumed[Good::FUEL.index()], 5, "{status:?}: consumed += qty");
             assert_eq!(f.ships.cargo[1], None, "{status:?}: cargo cleared");
             // Contract: Failed; escrow refunded EXACTLY reward to the right corp.
             assert_eq!(f.contracts.status[0], ContractStatus::Failed, "{status:?}");
@@ -1077,8 +1077,8 @@ mod tests {
             "DrivenOff emitted"
         );
         assert_eq!(f.contracts.status[0], ContractStatus::InTransit, "no settlement");
-        assert_eq!(f.ships.cargo[1], Some((Resource::Fuel, 5)), "cargo kept");
-        assert_eq!(f.counters.consumed[Resource::Fuel.index()], 0, "no sink leg");
+        assert_eq!(f.ships.cargo[1], Some((Good::FUEL, 5)), "cargo kept");
+        assert_eq!(f.counters.consumed[Good::FUEL.index()], 0, "no sink leg");
         assert_eq!(f.ships.credits_micros[0], 0, "no ransom");
         let p = f.ships.pirate[0].unwrap();
         assert_eq!(p.notoriety, 0, "no heat on a failed bluff");
@@ -1098,7 +1098,7 @@ mod tests {
             f.contracts.escrow_micros[0] = 1_000_000;
             f.contracts.hauler[0] = Some(f.ships.ids_at(1));
             f.ships.role[1] = CraftRole::Hauler;
-            f.ships.cargo[1] = Some((Resource::Fuel, 5));
+            f.ships.cargo[1] = Some((Good::FUEL, 5));
             f.ships.contract[1] = Some(f.cid);
         };
         rearm(&mut f);
@@ -1254,7 +1254,7 @@ mod tests {
             corporations: vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }],
             contracts: vec![ContractInit {
                 corp_index: 0,
-                resource: Resource::Fuel,
+                resource: Good::FUEL,
                 qty: 5,
                 from_station_index: 0,
                 to_station_index: 1,
@@ -1417,7 +1417,7 @@ mod tests {
             crate::economy::ContractStatus::Failed,
             "contract failed by robbery"
         );
-        assert_eq!(world.econ.consumed[Resource::Fuel.index()], 5, "cargo sink leg accounted");
+        assert_eq!(world.econ.consumed[Good::FUEL.index()], 5, "cargo sink leg accounted");
         assert_eq!(
             world.corporations.treasury_micros[0], 5_000_000,
             "escrow refunded same tick (escrowed 1M at 1c, refunded at 3b2)"
@@ -1445,7 +1445,7 @@ mod tests {
         world.contracts.escrow_micros[0] = 1_000_000;
         world.corporations.treasury_micros[0] -= 1_000_000;
         world.ships.role[0] = CraftRole::Hauler;
-        world.ships.cargo[0] = Some((Resource::Fuel, 5));
+        world.ships.cargo[0] = Some((Good::FUEL, 5));
         world.ships.contract[0] = Some(cid);
     }
 
@@ -1534,19 +1534,19 @@ mod tests {
         cfg.producers = vec![
             ProducerInit {
                 station_index: 0,
-                recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+                recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
             },
             ProducerInit {
                 station_index: 0,
                 recipe: Recipe {
-                    input: Some((Resource::Ore, 2)),
-                    output: Some((Resource::Fuel, 2)),
+                    input: Some((Good::ORE, 2)),
+                    output: Some((Good::FUEL, 2)),
                     interval: 1,
                 },
             },
             ProducerInit {
                 station_index: 1,
-                recipe: Recipe { input: Some((Resource::Fuel, 1)), output: None, interval: 1 },
+                recipe: Recipe { input: Some((Good::FUEL, 1)), output: None, interval: 1 },
             },
         ];
         cfg.dispatch_cfg = DispatchCfg {

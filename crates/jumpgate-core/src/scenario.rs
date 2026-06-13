@@ -26,7 +26,7 @@ use crate::config::{
     GuidanceParams, MediaCfg, OrbitalElements, PriceCfg, ProducerInit, RefuelCfg, RunConfig,
     ShipyardCfg, StationInit, SubstepCfg, TrophicCfg,
 };
-use crate::economy::{Recipe, Resource};
+use crate::economy::{Good, Recipe};
 use crate::math::{G_CANONICAL, Vec3};
 use crate::stores::CraftRole;
 use crate::time::Dt;
@@ -196,8 +196,8 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
     // change.
     let stock = |ore: i64, fuel: i64| -> [i64; crate::economy::N_RESOURCES] {
         let mut s = [0i64; crate::economy::N_RESOURCES];
-        s[Resource::Ore.index()] = ore;
-        s[Resource::Fuel.index()] = fuel;
+        s[Good::ORE.index()]  = ore;
+        s[Good::FUEL.index()] = fuel;
         s
     };
     let stations = vec![
@@ -210,17 +210,17 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
     ];
     let producers = vec![
         // Ore miners at the sources.
-        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 2, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 2, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
         // Refiners at the tier destinations (Ore -> Fuel): the Ore demand sinks.
-        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
-        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
+        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
         // Fuel sinks back at the sources (per-tier return-leg demand).
-        ProducerInit { station_index: 0, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 0, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 1, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
     ];
 
     // --- corps: 3 tier corps + the Yard (corp 3, receives upgrade payments).
@@ -242,7 +242,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         for from in 0..3usize {
             contracts.push(ContractInit {
                 corp_index: tier,
-                resource: Resource::Ore,
+                resource: Good::ORE,
                 qty,
                 from_station_index: from,
                 to_station_index: dest,
@@ -251,7 +251,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         }
         contracts.push(ContractInit {
             corp_index: tier,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             qty,
             from_station_index: dest,
             to_station_index: tier, // per-tier Fuel sink (independent trigger)
@@ -395,8 +395,8 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     // band — the trophic DEVIATION comment applies unchanged.
     let stock = |ore: i64, fuel: i64| -> [i64; crate::economy::N_RESOURCES] {
         let mut s = [0i64; crate::economy::N_RESOURCES];
-        s[Resource::Ore.index()] = ore;
-        s[Resource::Fuel.index()] = fuel;
+        s[Good::ORE.index()]  = ore;
+        s[Good::FUEL.index()] = fuel;
         s
     };
     // Demand-deflation curve seed (spec §5): the SAME integer curve
@@ -433,21 +433,21 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     ];
     let producers = vec![
         // Ore miners at the six tier sources.
-        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 3, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 7, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
-        ProducerInit { station_index: 8, recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 } },
+        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 3, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 4, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 7, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit { station_index: 8, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
         // Refiners at the three tier dests: the Ore demand sinks and the
         // propellant supply geography.
-        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
-        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
-        ProducerInit { station_index: 9, recipe: Recipe { input: Some((Resource::Ore, 5)), output: Some((Resource::Fuel, 5)), interval: 60 } },
+        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit { station_index: 9, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
         // Fuel sinks at the per-tier return-leg destinations.
-        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 8, recipe: Recipe { input: Some((Resource::Fuel, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit { station_index: 8, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
     ];
 
     // --- corps: 3 tier corps + the Yard (3, upgrade payments) + the Port
@@ -469,7 +469,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         for from in [src_a, src_b] {
             contracts.push(ContractInit {
                 corp_index: tier,
-                resource: Resource::Ore,
+                resource: Good::ORE,
                 qty,
                 from_station_index: from,
                 to_station_index: dest,
@@ -478,7 +478,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         }
         contracts.push(ContractInit {
             corp_index: tier,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             qty,
             from_station_index: dest,
             to_station_index: sink,
@@ -996,7 +996,7 @@ mod tests {
             }
             let ore_froms: std::collections::BTreeSet<usize> = legs
                 .iter()
-                .filter(|k| k.resource == Resource::Ore)
+                .filter(|k| k.resource == Good::ORE)
                 .map(|k| k.from_station_index)
                 .collect();
             assert_eq!(
@@ -1006,11 +1006,11 @@ mod tests {
             );
             assert!(
                 legs.iter()
-                    .filter(|k| k.resource == Resource::Ore)
+                    .filter(|k| k.resource == Good::ORE)
                     .all(|k| k.to_station_index == dest),
                 "tier {tier} Ore legs land at dest {dest}"
             );
-            let ret: Vec<_> = legs.iter().filter(|k| k.resource == Resource::Fuel).collect();
+            let ret: Vec<_> = legs.iter().filter(|k| k.resource == Good::FUEL).collect();
             assert_eq!(ret.len(), 1, "tier {tier} has exactly one Fuel return");
             assert_eq!(ret[0].from_station_index, dest, "return departs the dest");
             assert_eq!(ret[0].to_station_index, sink, "return lands at the sink");
@@ -1070,11 +1070,11 @@ mod tests {
         // the ONE global 10/20 band): dest Ore + sink Fuel, descending.
         let dest_ore: Vec<i64> = FRONTIER_TIER_WIRING
             .iter()
-            .map(|w| cfg.stations[w.2].initial_stock[Resource::Ore.index()])
+            .map(|w| cfg.stations[w.2].initial_stock[Good::ORE.index()])
             .collect();
         let sink_fuel: Vec<i64> = FRONTIER_TIER_WIRING
             .iter()
-            .map(|w| cfg.stations[w.3].initial_stock[Resource::Fuel.index()])
+            .map(|w| cfg.stations[w.3].initial_stock[Good::FUEL.index()])
             .collect();
         assert_eq!(dest_ore, vec![18, 14, 10], "dest Ore Schmitt stagger");
         assert_eq!(sink_fuel, vec![18, 14, 10], "sink Fuel Schmitt stagger");
@@ -1180,19 +1180,19 @@ mod tests {
         // seeded fuel price nonzero (the phase-1 half-on guard's input).
         for (row, s) in cfg.stations.iter().enumerate() {
             assert_eq!(
-                s.initial_price_micros[Resource::Ore.index()],
+                s.initial_price_micros[Good::ORE.index()],
                 0,
                 "station {row}: Ore price dead"
             );
-            let st = s.initial_stock[Resource::Fuel.index()].clamp(0, 40);
+            let st = s.initial_stock[Good::FUEL.index()].clamp(0, 40);
             let want = curve_price(st);
             assert_eq!(
-                s.initial_price_micros[Resource::Fuel.index()],
+                s.initial_price_micros[Good::FUEL.index()],
                 want,
                 "station {row}: fuel price seeded from the curve"
             );
             assert!(
-                s.initial_price_micros[Resource::Fuel.index()] > 0,
+                s.initial_price_micros[Good::FUEL.index()] > 0,
                 "station {row}: half-on guard input must be nonzero"
             );
         }
@@ -1220,17 +1220,14 @@ mod tests {
         let mut fuel_updates = 0u32;
         for e in world.recent_events(Tick(0)) {
             if let EventKind::PriceUpdate { resource, price_micros, .. } = e.kind {
-                match resource {
-                    Resource::Ore => {
-                        panic!("Ore price updated — cap[Ore]==0 must keep it dead")
-                    }
-                    Resource::Fuel => {
-                        fuel_updates += 1;
-                        assert!(
-                            (1_000..=10_000).contains(&price_micros),
-                            "fuel price {price_micros} outside the curve band"
-                        );
-                    }
+                if resource == Good::ORE {
+                    panic!("Ore price updated — cap[Ore]==0 must keep it dead");
+                } else if resource == Good::FUEL {
+                    fuel_updates += 1;
+                    assert!(
+                        (1_000..=10_000).contains(&price_micros),
+                        "fuel price {price_micros} outside the curve band"
+                    );
                 }
             }
         }

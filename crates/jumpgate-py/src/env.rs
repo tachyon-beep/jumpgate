@@ -297,7 +297,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
     use jumpgate_core::config::{
         ContractInit, CorporationInit, DispatchCfg, PriceCfg, ProducerInit, StationInit,
     };
-    use jumpgate_core::economy::{Recipe, Resource};
+    use jumpgate_core::economy::{Good, Recipe};
 
     /// Circular-orbit radii (AU) for the four station-host bodies.
     const ORBIT_AU: [f64; 4] = [0.35, 0.55, 0.8, 1.1];
@@ -409,21 +409,21 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
         // Ore miners at stations 0 and 2 (keep pickup stock flowing).
         ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
+            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 },
         },
         ProducerInit {
             station_index: 2,
-            recipe: Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 40 },
+            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 },
         },
         // Ore demand-sinks at stations 1 and 3 (drain deliveries so REPOST
         // re-fires the routes).
         ProducerInit {
             station_index: 1,
-            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
+            recipe: Recipe { input: Some((Good::ORE, 5)), output: None, interval: 60 },
         },
         ProducerInit {
             station_index: 3,
-            recipe: Recipe { input: Some((Resource::Ore, 5)), output: None, interval: 60 },
+            recipe: Recipe { input: Some((Good::ORE, 5)), output: None, interval: 60 },
         },
     ];
     // Treasury large enough that escrow never reverts an accept (max 4
@@ -456,10 +456,10 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
     // route is best shifts with orbital phase, so rate-maximization is a
     // judgment, not a lookup.
     let contracts = vec![
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 1, reward_micros: 1_000_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 3, reward_micros: 1_200_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 0, to_station_index: 3, reward_micros: 1_600_000 },
-        ContractInit { corp_index: 0, resource: Resource::Ore, qty: 5, from_station_index: 2, to_station_index: 1, reward_micros: 3_000_000 },
+        ContractInit { corp_index: 0, resource: Good::ORE, qty: 5, from_station_index: 0, to_station_index: 1, reward_micros: 1_000_000 },
+        ContractInit { corp_index: 0, resource: Good::ORE, qty: 5, from_station_index: 2, to_station_index: 3, reward_micros: 1_200_000 },
+        ContractInit { corp_index: 0, resource: Good::ORE, qty: 5, from_station_index: 0, to_station_index: 3, reward_micros: 1_600_000 },
+        ContractInit { corp_index: 0, resource: Good::ORE, qty: 5, from_station_index: 2, to_station_index: 1, reward_micros: 3_000_000 },
     ];
 
     RunConfig {

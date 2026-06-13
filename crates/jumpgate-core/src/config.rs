@@ -127,7 +127,7 @@ pub struct CorporationInit {
 #[derive(Clone, Debug)]
 pub struct ContractInit {
     pub corp_index: usize,
-    pub resource: crate::economy::Resource,
+    pub resource: crate::economy::Good,
     pub qty: u32,
     pub from_station_index: usize,
     pub to_station_index: usize,
@@ -948,13 +948,13 @@ mod tests {
             station_index: 0,
             recipe: crate::economy::Recipe {
                 input: None,
-                output: Some((crate::economy::Resource::Ore, 5)),
+                output: Some((crate::economy::Good::ORE, 5)),
                 interval: 1,
             },
         });
         let h_mine = c.config_hash();
         // Flip output Ore->Fuel: recipe payload must move the hash.
-        c.producers[0].recipe.output = Some((crate::economy::Resource::Fuel, 5));
+        c.producers[0].recipe.output = Some((crate::economy::Good::FUEL, 5));
         assert_ne!(h_mine, c.config_hash());
         // ...and differs from the no-producer baseline.
         assert_ne!(sample().config_hash(), c.config_hash());

@@ -14,7 +14,7 @@
 //! `CommandKind`) live in `crate::types` (Task 3) so `stores.rs` can consume
 //! them without a contract<->stores cycle; this module imports them.
 
-use crate::economy::Resource;
+use crate::economy::Good;
 use crate::ids::{BodyId, ContractId, CraftId, ProducerId, StationId};
 use crate::math::Vec3;
 use crate::time::{Dt, Tick};
@@ -81,12 +81,12 @@ pub enum EventKind {
     },
     Production {
         producer: ProducerId,
-        resource: Resource,
+        resource: Good,
         qty: u32,
     },
     PriceUpdate {
         station: StationId,
-        resource: Resource,
+        resource: Good,
         price_micros: i64,
     },
     ContractOffered {
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn economy_event_kinds_are_copy_and_partial_eq() {
-        use crate::economy::Resource;
+        use crate::economy::Good;
         use crate::ids::{ContractId, CraftId, ProducerId, StationId};
 
         let producer = ProducerId {
@@ -426,14 +426,14 @@ mod tests {
 
         let production = EventKind::Production {
             producer,
-            resource: Resource::Ore,
+            resource: Good::ORE,
             qty: 5,
         };
         // Trade is deleted (A0.3); ContractOffered is the Copy+PartialEq proof witness.
         let offered2 = EventKind::ContractOffered { contract };
         let price_update = EventKind::PriceUpdate {
             station,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             price_micros: 2_000_000,
         };
         let offered = EventKind::ContractOffered { contract };

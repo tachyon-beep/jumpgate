@@ -3,25 +3,64 @@
 //! all money is i64 microcredits. Stations are Bodies; haulers dock via the live
 //! co-orbiting rendezvous arrival (events.rs).
 
-/// The commodity set for the v1 thin loop. `index()` is the canonical dense order
-/// used by every per-station resource array and by the state hash. APPEND-ONLY.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Resource {
-    Ore,
-    Fuel,
-}
+/// Runtime goods newtype (OD-1).  Dense index `0..n_goods` is the canonical
+/// per-resource array key; the numeric value is the GoodsCfg order and is
+/// NEVER folded as a count word — only the value is emitted to the state hash.
+/// Named constants ORE/FUEL pin the v1 pair at indices 0 and 1 (tested by
+/// `good_ore_and_fuel_pinned_indices`); appending new goods is config-only.
+/// Custom `Debug` preserves the v1 canonical names "Ore"/"Fuel" for indices
+/// 0 and 1 so the gossip-log format is unchanged (baseline-digest continuity).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Good(pub u16);
 
-pub const N_RESOURCES: usize = 2;
-
-impl Resource {
-    pub const ALL: [Resource; N_RESOURCES] = [Resource::Ore, Resource::Fuel];
-    pub fn index(self) -> usize {
-        match self {
-            Resource::Ore => 0,
-            Resource::Fuel => 1,
+impl std::fmt::Debug for Good {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            0 => write!(f, "Ore"),
+            1 => write!(f, "Fuel"),
+            n => write!(f, "Good({n})"),
         }
     }
 }
+
+impl Good {
+    /// Canonical dense index (0-based); used by every per-resource array and
+    /// by the state-hash fold.
+    #[inline]
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+
+    /// v1 pinned goods.  Indices are VERIFIED by `good_ore_and_fuel_pinned_indices`.
+    pub const ORE:  Good = Good(0);
+    pub const FUEL: Good = Good(1);
+
+    /// All v1 base goods in canonical index order.  Used only by `update_prices`
+    /// to build PriceUpdate events; code that needs a runtime count should read
+    /// `n_goods` from GoodsCfg (A3).
+    pub const ALL_V1: [Good; N_RESOURCES] = [Good::ORE, Good::FUEL];
+}
+
+/// Backward-compatible alias kept for migration in A1a; removed in A1b once all
+/// call sites are updated.  Declared after `Good` so `Resource::Ore.index()`
+/// still compiles, easing the mechanical conversion.
+#[allow(non_camel_case_types, dead_code)]
+#[deprecated(since = "0.0.0", note = "migrate to Good::ORE / Good::FUEL (A1)")]
+pub type Resource = Good;
+
+/// Backward-compat shim: re-export old names as associated consts.
+#[allow(dead_code, non_upper_case_globals)]
+impl Good {
+    #[deprecated(since = "0.0.0", note = "use Good::ORE")]
+    pub const Ore:  Good = Good::ORE;
+    #[deprecated(since = "0.0.0", note = "use Good::FUEL")]
+    pub const Fuel: Good = Good::FUEL;
+}
+
+/// Number of base goods in v1 (pinned; Experiment C raises this via config).
+/// Used ONLY for fixed-size array literals that survive until A1b converts them
+/// to Vecs; do NOT introduce new uses.
+pub const N_RESOURCES: usize = 2;
 
 use crate::diagnostics::permille_floor;
 use crate::ids::{BodyId, ContractId, CorporationId, CraftId, ProducerId, SlotMap, StationId};
@@ -32,8 +71,8 @@ use crate::time::Tick;
 /// (Some(Ore), Some(Fuel)); demand sink = (Some(Fuel), None).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Recipe {
-    pub input: Option<(Resource, u32)>,
-    pub output: Option<(Resource, u32)>,
+    pub input: Option<(Good, u32)>,
+    pub output: Option<(Good, u32)>,
     pub interval: u32,
 }
 
@@ -157,7 +196,7 @@ pub struct ContractStore {
     pub ids: SlotMap<()>,
     pub status: Vec<ContractStatus>,
     pub corp: Vec<CorporationId>,
-    pub resource: Vec<Resource>,
+    pub resource: Vec<Good>,
     pub qty: Vec<u32>,
     pub from_station: Vec<StationId>,
     pub to_station: Vec<StationId>,
@@ -185,7 +224,7 @@ impl ContractStore {
     pub fn push(
         &mut self,
         corp: CorporationId,
-        resource: Resource,
+        resource: Good,
         qty: u32,
         from_station: StationId,
         to_station: StationId,
@@ -322,7 +361,7 @@ pub fn update_prices(
                         tick,
                         kind: EventKind::PriceUpdate {
                             station,
-                            resource: Resource::ALL[r],
+                            resource: Good::ALL_V1[r],
                             price_micros: p,
                         },
                     });
@@ -1010,7 +1049,7 @@ pub fn resolve_refuels(
 
     let lot = refuel.lot_mass;
     let prev = Tick(tick.0.saturating_sub(1));
-    let fuel_r = Resource::Fuel.index();
+    let fuel_r = Good::FUEL.index();
     for crow in 0..ships.ids.len() {
         if ships.pending_refuel[crow].is_none() {
             continue;
@@ -1294,7 +1333,7 @@ pub fn run_refuel_policies(
         return;
     }
     let prev = Tick(tick.0.saturating_sub(1));
-    let fuel_r = Resource::Fuel.index();
+    let fuel_r = Good::FUEL.index();
     for crow in 0..ships.ids.len() {
         if craft_cfg.get(crow).is_some_and(|c| !c.scripted) {
             continue;
@@ -1559,6 +1598,25 @@ mod tests {
     use crate::events::EventStream;
     use crate::ids::{BodyId, CorporationId};
 
+    // NEW test — A1 pinned-index contract.  Enum exhaustiveness is gone;
+    // this test is the load-bearing substitute that fires if ORE/FUEL are
+    // declared at the wrong index or GoodsCfg boot order changes.
+    #[test]
+    fn good_ore_and_fuel_pinned_indices() {
+        // ORE must be index 0, FUEL must be index 1.  These are the canonical
+        // dense order used by every per-resource array and by the state hash.
+        // If either constant moves, every existing trophic/frontier golden
+        // diverges and the cross-branch digest proof fails.
+        assert_eq!(Good::ORE.index(), 0, "ORE must be index 0");
+        assert_eq!(Good::FUEL.index(), 1, "FUEL must be index 1");
+        // Good(u16) must implement Copy, Clone, Debug, PartialEq, Eq — required
+        // by Recipe/ContractStore/EventKind which derive these.
+        fn needs_copy<T: Copy>() {}
+        fn needs_eq<T: Eq>() {}
+        needs_copy::<Good>();
+        needs_eq::<Good>();
+    }
+
     /// A station whose Body is a throwaway (BodyId not resolved here; producers
     /// read by StationId row, not body).
     fn one_station(stock: [i64; N_RESOURCES]) -> StationStore {
@@ -1575,16 +1633,16 @@ mod tests {
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
-            Recipe { input: None, output: Some((Resource::Ore, 5)), interval: 1 },
+            Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
         );
         let mut counters = EconCounters::zero();
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
 
-        assert_eq!(stations.stock[0][Resource::Ore.index()], 5, "ore stock rose by 5");
-        assert_eq!(counters.mined[Resource::Ore.index()], 5, "mined[Ore]==5");
-        assert_eq!(counters.consumed[Resource::Ore.index()], 0);
+        assert_eq!(stations.stock[0][Good::ORE.index()], 5, "ore stock rose by 5");
+        assert_eq!(counters.mined[Good::ORE.index()], 5, "mined[Ore]==5");
+        assert_eq!(counters.consumed[Good::ORE.index()], 0);
         assert_eq!(producers.last_fired[0], Tick(1), "last_fired advanced");
         // exactly one Production event for the miner output leg.
         let prod: Vec<_> = events
@@ -1595,7 +1653,7 @@ mod tests {
         assert_eq!(prod.len(), 1);
         assert!(matches!(
             prod[0].kind,
-            EventKind::Production { resource: Resource::Ore, qty: 5, .. }
+            EventKind::Production { resource: Good::ORE, qty: 5, .. }
         ));
     }
 
@@ -1609,8 +1667,8 @@ mod tests {
         producers.push(
             st,
             Recipe {
-                input: Some((Resource::Ore, 3)),
-                output: Some((Resource::Fuel, 2)),
+                input: Some((Good::ORE, 3)),
+                output: Some((Good::FUEL, 2)),
                 interval: 1,
             },
         );
@@ -1619,12 +1677,12 @@ mod tests {
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
 
-        assert_eq!(stations.stock[0][Resource::Ore.index()], 7, "ore -3");
-        assert_eq!(stations.stock[0][Resource::Fuel.index()], 2, "fuel +2");
-        assert_eq!(counters.consumed[Resource::Ore.index()], 3, "consumed[Ore]==3");
-        assert_eq!(counters.mined[Resource::Fuel.index()], 2, "mined[Fuel]==2");
-        assert_eq!(counters.mined[Resource::Ore.index()], 0);
-        assert_eq!(counters.consumed[Resource::Fuel.index()], 0);
+        assert_eq!(stations.stock[0][Good::ORE.index()], 7, "ore -3");
+        assert_eq!(stations.stock[0][Good::FUEL.index()], 2, "fuel +2");
+        assert_eq!(counters.consumed[Good::ORE.index()], 3, "consumed[Ore]==3");
+        assert_eq!(counters.mined[Good::FUEL.index()], 2, "mined[Fuel]==2");
+        assert_eq!(counters.mined[Good::ORE.index()], 0);
+        assert_eq!(counters.consumed[Good::FUEL.index()], 0);
         // Production event names the OUTPUT leg.
         let prod: Vec<_> = events
             .events
@@ -1634,7 +1692,7 @@ mod tests {
         assert_eq!(prod.len(), 1);
         assert!(matches!(
             prod[0].kind,
-            EventKind::Production { resource: Resource::Fuel, qty: 2, .. }
+            EventKind::Production { resource: Good::FUEL, qty: 2, .. }
         ));
     }
 
@@ -1648,8 +1706,8 @@ mod tests {
         producers.push(
             st,
             Recipe {
-                input: Some((Resource::Ore, 5)),
-                output: Some((Resource::Fuel, 2)),
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 2)),
                 interval: 1,
             },
         );
@@ -1672,17 +1730,17 @@ mod tests {
         let mut producers = ProducerStore::empty();
         producers.push(
             st,
-            Recipe { input: None, output: Some((Resource::Ore, 1)), interval: 3 },
+            Recipe { input: None, output: Some((Good::ORE, 1)), interval: 3 },
         );
         let mut counters = EconCounters::zero();
         let mut events = EventStream::new();
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(1), &mut events);
         run_producers(&mut stations, &mut producers, &mut counters, Tick(2), &mut events);
-        assert_eq!(stations.stock[0][Resource::Ore.index()], 0, "not yet (interval gate)");
+        assert_eq!(stations.stock[0][Good::ORE.index()], 0, "not yet (interval gate)");
 
         run_producers(&mut stations, &mut producers, &mut counters, Tick(3), &mut events);
-        assert_eq!(stations.stock[0][Resource::Ore.index()], 1, "fires at tick 3");
+        assert_eq!(stations.stock[0][Good::ORE.index()], 1, "fires at tick 3");
         assert_eq!(producers.last_fired[0], Tick(3));
     }
 
@@ -1713,8 +1771,8 @@ mod tests {
 
         update_prices(&mut stations, &price_cfg, Tick(1), &mut events);
 
-        let fi = Resource::Fuel.index();
-        let oi = Resource::Ore.index();
+        let fi = Good::FUEL.index();
+        let oi = Good::ORE.index();
         // EXACT integer prices: p = 100_000*(2000 - s*1800/10)/1000.
         //   s=0  -> 100_000*2000/1000        = 200_000  (= base*2)
         //   s=3  -> 100_000*(2000-540)/1000  = 146_000
@@ -1750,16 +1808,16 @@ mod tests {
         assert_eq!(updates.len(), fuel_stocks.len(), "one PriceUpdate per row (Fuel)");
         assert!(updates.iter().all(|e| matches!(
             e.kind,
-            EventKind::PriceUpdate { resource: Resource::Fuel, .. }
+            EventKind::PriceUpdate { resource: Good::FUEL, .. }
         )));
     }
 
     #[test]
     fn resource_index_is_stable_and_dense() {
-        assert_eq!(Resource::Ore.index(), 0);
-        assert_eq!(Resource::Fuel.index(), 1);
-        assert_eq!(Resource::ALL.len(), N_RESOURCES);
-        for (i, r) in Resource::ALL.iter().enumerate() {
+        assert_eq!(Good::ORE.index(), 0);
+        assert_eq!(Good::FUEL.index(), 1);
+        assert_eq!(Good::ALL_V1.len(), N_RESOURCES);
+        for (i, r) in Good::ALL_V1.iter().enumerate() {
             assert_eq!(r.index(), i);
         }
     }
@@ -2016,7 +2074,7 @@ mod tests {
         world.ships.pending_refuel[0] = Some(());
         world.step(&mut Vec::new());
 
-        let f = Resource::Fuel.index();
+        let f = Good::FUEL.index();
         assert_eq!(world.stations.stock[0][f], 38, "stock leg: -= units");
         assert_eq!(world.econ.consumed[f], 2, "sink leg: consumed[Fuel] += units");
         assert_eq!(world.ships.credits_micros[0], 2_000, "wallet leg: debited units*price");
@@ -2078,7 +2136,7 @@ mod tests {
         stock_before: i64,
         arm: &str,
     ) {
-        let f = Resource::Fuel.index();
+        let f = Good::FUEL.index();
         assert_eq!(world.ships.fuel_mass[0], fuel_before, "{arm}: tank untouched");
         assert_eq!(world.ships.credits_micros[0], credits_before, "{arm}: zero wallet movement");
         assert_eq!(world.stations.stock[0][f], stock_before, "{arm}: stock untouched");
@@ -2099,7 +2157,7 @@ mod tests {
     fn refuel_skips_deterministically() {
         use crate::math::Vec3;
         use crate::world::World;
-        let f = Resource::Fuel.index();
+        let f = Good::FUEL.index();
 
         let (mut world, _h) = World::reset(refuel_world_fixture()).expect("resolvable cfg");
         world.ships.credits_micros[0] = 12_000;
@@ -2337,7 +2395,7 @@ mod tests {
             vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
-            resource: Resource::Fuel,
+            resource: Good::FUEL,
             qty: 10,
             from_station_index: 0,
             to_station_index: 1,
@@ -2385,7 +2443,7 @@ mod tests {
         assert_eq!(world.contracts.hauler[0], Some(craft), "hauler bound");
         assert_eq!(world.contracts.escrow_micros[0], 1_000_000, "reward escrowed");
         assert_eq!(world.corporations.treasury_micros[0], 4_000_000, "treasury debited");
-        assert_eq!(world.ships.cargo[0], Some((Resource::Fuel, 10)), "qty-10 lot loaded");
+        assert_eq!(world.ships.cargo[0], Some((Good::FUEL, 10)), "qty-10 lot loaded");
     }
 
     #[test]
@@ -2401,7 +2459,7 @@ mod tests {
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
-        let cid = contracts.push(corp, Resource::Fuel, 10, from, to, 1_000);
+        let cid = contracts.push(corp, Good::FUEL, 10, from, to, 1_000);
         let mut ships = CraftStore::empty();
         ships.push(
             BaseSpec {
@@ -2540,8 +2598,8 @@ mod tests {
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, a);
         let mut contracts = ContractStore::empty();
-        let c0 = contracts.push(corp, Resource::Fuel, 5, a, b, 1_000_000);
-        let c1 = contracts.push(corp, Resource::Fuel, 5, a, c, 1_000_000);
+        let c0 = contracts.push(corp, Good::FUEL, 5, a, b, 1_000_000);
+        let c1 = contracts.push(corp, Good::FUEL, 5, a, c, 1_000_000);
         let mut ships = CraftStore::empty();
         ships.push(
             BaseSpec {
@@ -2902,7 +2960,7 @@ mod tests {
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(1_000_000, from);
         let mut contracts = ContractStore::empty();
-        let seed = contracts.push(corp, Resource::Fuel, 5, from, to, 1_000);
+        let seed = contracts.push(corp, Good::FUEL, 5, from, to, 1_000);
         let srow = contracts.ids.dense_index(seed.slot, seed.generation).unwrap();
         contracts.status[srow] = ContractStatus::Completed;
         let mut ships = CraftStore::empty();
@@ -3059,7 +3117,7 @@ mod tests {
             }],
             contracts: vec![ContractInit {
                 corp_index: 0,
-                resource: Resource::Fuel,
+                resource: Good::FUEL,
                 qty: 5,
                 from_station_index,
                 to_station_index,
@@ -3091,7 +3149,7 @@ mod tests {
         use crate::contract::Command;
         use crate::types::{CommandKind, EntityRef, Target};
         use crate::world::World;
-        let fuel = Resource::Fuel.index();
+        let fuel = Good::FUEL.index();
 
         // ---- Arm 1: status `Accepted` (the deadhead leg), end-to-end through
         // `World::step`. Origin = the FAR station (body 1), so the step-1 accept
@@ -3172,7 +3230,7 @@ mod tests {
         );
         let crow = world.ships.index_of(craft).unwrap();
         let (lost_res, lost_qty) = world.ships.cargo[crow].expect("cargo loaded on step 1");
-        assert_eq!((lost_res, lost_qty), (Resource::Fuel, 5));
+        assert_eq!((lost_res, lost_qty), (Good::FUEL, 5));
 
         world.ships.fuel_mass[crow] = 0.0; // drained dry pre-dispatch
         let mut failure_events = EventStream::new();
@@ -3326,8 +3384,8 @@ mod tests {
         let mut corporations = CorporationStore::empty();
         let corp = corporations.push(0, s0);
         let mut contracts = ContractStore::empty();
-        contracts.push(corp, Resource::Fuel, 5, s0, s1, 1_000_000); // k0, route 1
-        contracts.push(corp, Resource::Fuel, 5, s1, s0, 1_000_000); // k1, route 2
+        contracts.push(corp, Good::FUEL, 5, s0, s1, 1_000_000); // k0, route 1
+        contracts.push(corp, Good::FUEL, 5, s1, s0, 1_000_000); // k1, route 2
         let mut ships = CraftStore::empty();
         ships.push(spec(), Vec3::ZERO, Vec3::ZERO, 1.0);
         // The hauler's OWN gossip says route 1 (k0) is hot...
@@ -3380,8 +3438,8 @@ mod tests {
         ships2.gossip[0] = Some(GossipBuffer::empty(8));
         ships2.info_tick[0] = Tick(100);
         let mut contracts2 = ContractStore::empty();
-        contracts2.push(corp, Resource::Fuel, 5, s0, s1, 1_000_000);
-        contracts2.push(corp, Resource::Fuel, 5, s1, s0, 1_000_000);
+        contracts2.push(corp, Good::FUEL, 5, s0, s1, 1_000_000);
+        contracts2.push(corp, Good::FUEL, 5, s1, s0, 1_000_000);
         let empty_ring = RouteEvidence { robs: vec![[Tick(0); 8]; 4], cursor: vec![0; 4] };
         let mut diag2 = AssignDiag::default();
         run_scripted_dispatch(
