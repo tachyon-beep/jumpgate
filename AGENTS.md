@@ -1,4 +1,5 @@
 <!-- filigree:instructions:v3.0.0rc12:65e6fb25 -->
+<!-- filigree:last-writer:filigree install -->
 ## Filigree Issue Tracker
 
 `filigree` tracks tasks for this project. Data lives in `.filigree/`. Prefer
