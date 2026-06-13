@@ -213,6 +213,8 @@ fn config_template(num_craft: usize) -> RunConfig {
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     }
 }
 
@@ -430,7 +432,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
     // Treasury large enough that escrow never reverts an accept (max 4
     // concurrent escrows × 3 cr ≪ 1000 cr).
     let corporations =
-        vec![CorporationInit { treasury_micros: 1_000_000_000, home_station_index: 0 }];
+        vec![CorporationInit { treasury_micros: 1_000_000_000, home_station_index: 0 , arb_premium_micros: 0}];
 
     // LIVE trophic surface for the pirates variant (num_pirates == 0 keeps
     // the inert default — the spec-§8 lever — so existing trader scenarios
@@ -492,6 +494,8 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     }
 }
 

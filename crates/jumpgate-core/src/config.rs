@@ -120,6 +120,9 @@ pub struct ProducerInit {
 pub struct CorporationInit {
     pub treasury_micros: i64,
     pub home_station_index: usize,
+    /// Arbitrage premium floor this corp requires above transport cost before
+    /// posting. 0 = will post whenever spread > transport (default).
+    pub arb_premium_micros: i64,
 }
 
 /// A delivery contract seeded at config (status `Offered` at reset): move `qty` of
@@ -468,6 +471,47 @@ impl Default for GoodsCfg {
     }
 }
 
+/// Exchange corporation config (OD-2): one config-named corp is the goods money
+/// counterparty at every station including the haven.
+/// `active: false` default → the Exchange verb settle arms are no-ops (inert gate,
+/// analogous to RefuelCfg.lot_mass == 0.0).
+/// `corp_index` is the dense corporation row index (Yard/Port idiom).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExchangeCfg {
+    /// Dense corporation row index receiving/paying trade money.
+    pub corp_index: u32,
+    /// When false, all TradeBuy/TradeSell settle arms are deterministic no-ops.
+    /// Derived `Default` gives `active: false` — the structural inert gate.
+    pub active: bool,
+}
+
+// NOTE (C1): ONE canonical ArbitrageCfg for rung A. A4.2 and A5.2 reference
+// this struct and do NOT redefine it. This is the A5.2 superset field set.
+/// Arbitrage poster config (stage 1b2 slot, OD-2/spec §1.2).
+/// `scan_interval == 0` is the structural inert gate: the poster returns
+/// immediately without scanning, preserving bit-identical behavior on
+/// trophic/frontier (the RefuelCfg.lot_mass precedent).
+/// Derived `Default` gives `scan_interval: 0` (poster OFF, the structural inert
+/// gate) and empty Vecs — the RefuelCfg.lot_mass precedent.
+#[derive(Clone, Debug, Default)]
+pub struct ArbitrageCfg {
+    /// Ticks between poster scans. 0 = poster is OFF (the structural inert gate).
+    pub scan_interval: u32,
+    /// Fixed transport-floor component of posted wage (micros).
+    pub wage_flat_micros: i64,
+    /// Fraction of spread surplus added to wage: `surplus * wage_share_milli / 1000`.
+    pub wage_share_milli: u32,
+    /// Factory-time transport cost table: `transport_micros[from][to]` non-negative int.
+    /// Folded count-first in config_hash. NOT runtime ephemeris (PDR-0007).
+    pub transport_micros: Vec<Vec<i64>>,
+    /// Lot-size ladder (units). Smallest-first.
+    pub qty_ladder: Vec<u32>,
+    /// Maximum contracts posted per scan across all routes.
+    pub max_posts_per_scan: usize,
+    /// Minimum surplus above transport before posting, per-corp (indexed by corp row).
+    pub arb_premium_micros: Vec<i64>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RunConfig {
     /// gym reset(seed) OVERWRITES this per episode.
@@ -504,6 +548,11 @@ pub struct RunConfig {
     // is the v1 two-good table; n_goods = goods.goods.len() sizes all
     // per-resource Vecs at World::reset.
     pub goods: GoodsCfg,
+    /// Exchange configuration: the money counterparty for goods trades.
+    /// `active: false` default → all own-trade settle arms are no-ops.
+    pub exchange: ExchangeCfg,
+    /// Arbitrage poster configuration. `scan_interval: 0` default → poster OFF.
+    pub arbitrage: ArbitrageCfg,
 }
 
 /// The CONFIG hash (immutable initial conditions). NOT the per-tick state hash.
@@ -591,9 +640,10 @@ impl RunConfig {
             shipyard, // NEW (pirates rung A): destructure forces folding below
             media,    // NEW (media rung cut 1): destructure forces folding below
             refuel,   // NEW (world-gets-big): destructure forces folding below
-            goods,   // NEW (A1b): destructure forces folding in A3
+            goods,    // NEW (A1b): folded at config tail in A3.2 (CONFIG_FIELD_ORDER 27)
+            exchange, // NEW (A3.2): folded at config tail (CONFIG_FIELD_ORDER 28)
+            arbitrage, // NEW (A3.2): folded at config tail (CONFIG_FIELD_ORDER 29..=30)
         } = self;
-        let _ = goods; // folded in A3; bound here so adding A3's fold is a compile error until explicit
         let mut h = ConfigFnv::new();
         // Scalars in fixed order.
         h.write_u64(*master_seed);
@@ -660,6 +710,7 @@ impl RunConfig {
         for c in corporations {
             h.write_u64(c.treasury_micros as u64);
             h.write_u64(c.home_station_index as u64);
+            h.write_u64(c.arb_premium_micros as u64); // NEW — rung A (A3.2)
         }
         for k in contracts {
             h.write_u64(k.corp_index as u64);
@@ -793,6 +844,46 @@ impl RunConfig {
         let RefuelCfg { lot_mass, corp_index } = refuel;
         h.write_u64(lot_mass.to_bits());
         h.write_u64(*corp_index as u64);
+        // GOODS-AS-GOODS RUNG A (TAIL, append-only — CONFIG_FIELD_ORDER 27..=30).
+        // Exhaustive destructures: a new field is a compile error until folded.
+        let GoodsCfg { goods } = goods; // NOTE (C6): field is `goods`, not `goods_cfg`
+        // COUNT FIRST (anti-aliasing delimiter, config fold discipline):
+        h.write_u64(goods.len() as u64);
+        for g in goods {
+            let GoodSpec { name: _, unit_mass_milli } = g; // name NEVER folded (OD-7)
+            h.write_u64(*unit_mass_milli as u64);
+        }
+        let ExchangeCfg { corp_index: ex_corp, active } = exchange;
+        h.write_u64(*ex_corp as u64);
+        h.write_u64(*active as u64);
+        let ArbitrageCfg {
+            scan_interval,
+            wage_flat_micros,
+            wage_share_milli,
+            transport_micros,
+            qty_ladder,
+            max_posts_per_scan,
+            arb_premium_micros,
+        } = arbitrage;
+        h.write_u64(*scan_interval as u64);
+        h.write_u64(*wage_flat_micros as u64);
+        h.write_u64(*wage_share_milli as u64);
+        h.write_u64(transport_micros.len() as u64);
+        for row in transport_micros {
+            h.write_u64(row.len() as u64);
+            for &v in row {
+                h.write_u64(v as u64);
+            }
+        }
+        h.write_u64(qty_ladder.len() as u64);
+        for &q in qty_ladder {
+            h.write_u64(q as u64);
+        }
+        h.write_u64(*max_posts_per_scan as u64);
+        h.write_u64(arb_premium_micros.len() as u64);
+        for &p in arb_premium_micros {
+            h.write_u64(p as u64);
+        }
         ConfigHash(h.finish())
     }
 }
@@ -824,7 +915,7 @@ fn write_recipe(h: &mut ConfigFnv, r: &crate::economy::Recipe) {
 mod tests {
     use super::*;
 
-    const GOLDEN_CONFIG_HASH: u64 = 0x128c_1299_5c48_4fdc; // RE-PINNED: +RefuelCfg{lot_mass,corp_index} folded at config tail (world-gets-big §5). Was 0xee02_df67_1889_78dc.
+    const GOLDEN_CONFIG_HASH: u64 = 0x461e_1582_16ed_0eae; // RE-PINNED: +GoodsCfg+ExchangeCfg+ArbitrageCfg+arb_premium_micros folded at config tail (goods-as-goods rung A). Was 0x128c_1299_5c48_4fdc.
 
     fn sample() -> RunConfig {
         RunConfig {
@@ -873,6 +964,8 @@ mod tests {
             media: MediaCfg::default(),
             refuel: RefuelCfg::default(),
             goods: GoodsCfg::default(),
+            exchange: ExchangeCfg::default(),
+            arbitrage: ArbitrageCfg::default(),
         }
     }
 
@@ -893,6 +986,61 @@ mod tests {
     #[test]
     fn same_config_same_hash() {
         assert_eq!(sample().config_hash(), sample().config_hash());
+    }
+
+    // A3.2: GoodsCfg.unit_mass_milli, ArbitrageCfg.scan_interval, and
+    // ExchangeCfg.active must all move the config hash (folded at config tail).
+    #[test]
+    fn goods_cfg_arb_cfg_exchange_cfg_are_config_hashed() {
+        let base = sample();
+
+        // ArbitrageCfg.scan_interval=1 (non-default) must move the hash.
+        let mut modified = sample();
+        modified.arbitrage = crate::config::ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 0,
+            transport_micros: vec![],
+            qty_ladder: vec![],
+            max_posts_per_scan: 0,
+            arb_premium_micros: vec![],
+        };
+        assert_ne!(
+            base.config_hash(),
+            modified.config_hash(),
+            "ArbitrageCfg.scan_interval must move the config hash"
+        );
+
+        // ExchangeCfg.active=true must move the hash.
+        let mut ex_modified = sample();
+        ex_modified.exchange = crate::config::ExchangeCfg { corp_index: 0, active: true };
+        assert_ne!(
+            base.config_hash(),
+            ex_modified.config_hash(),
+            "ExchangeCfg.active must move the config hash"
+        );
+
+        // GoodsCfg.unit_mass_milli must move the hash (name is never folded).
+        let mut goods_modified = sample();
+        goods_modified.goods.goods[0].unit_mass_milli = 2000;
+        assert_ne!(
+            base.config_hash(),
+            goods_modified.config_hash(),
+            "GoodSpec.unit_mass_milli must move the config hash"
+        );
+
+        // CorporationInit.arb_premium_micros must move the hash.
+        let mut corp_modified = sample();
+        corp_modified.corporations =
+            vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 7 }];
+        let mut base_with_corp = sample();
+        base_with_corp.corporations =
+            vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }];
+        assert_ne!(
+            base_with_corp.config_hash(),
+            corp_modified.config_hash(),
+            "CorporationInit.arb_premium_micros must move the config hash"
+        );
     }
 
     #[test]

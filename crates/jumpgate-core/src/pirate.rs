@@ -1251,7 +1251,7 @@ mod tests {
                 },
             ],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }],
+            corporations: vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }],
             contracts: vec![ContractInit {
                 corp_index: 0,
                 resource: Good::FUEL,
@@ -1274,6 +1274,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
@@ -1558,7 +1560,7 @@ mod tests {
             contract_qty: 5,
         };
         cfg.corporations =
-            vec![CorporationInit { treasury_micros: 100_000_000, home_station_index: 0 }];
+            vec![CorporationInit { treasury_micros: 100_000_000, home_station_index: 0, arb_premium_micros: 0 }];
         cfg.trophic.p_rob_milli = 700;
         cfg.trophic.rob_cooldown = 200;
         cfg.trophic.driveoff_cooldown = 50;
@@ -1635,7 +1637,7 @@ mod tests {
                 })
                 .collect();
             c.corporations =
-                vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }];
+                vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }];
             c.contracts = vec![];
             c.craft =
                 vec![pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO), pirate_init(Vec3::ZERO)];

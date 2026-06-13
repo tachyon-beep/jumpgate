@@ -86,6 +86,8 @@ fn star_config(seed: u64, star_mass: f64, window: u64, craft: Vec<CraftInit>) ->
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     }
 }
 
@@ -361,6 +363,8 @@ fn transfer_to_moving_body_rendezvous() {
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");
@@ -494,6 +498,8 @@ fn coasting_flyby_arrival_fires(rel_speed_mag: f64) -> bool {
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     };
 
     let (mut world, _h) = World::reset(cfg).expect("resolvable config");

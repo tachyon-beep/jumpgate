@@ -1114,7 +1114,7 @@ mod tests {
                 sells_upgrades: true,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
             contracts: vec![],
             price_cfg: PriceCfg::default(),
             dispatch_cfg: DispatchCfg::default(),
@@ -1123,6 +1123,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
@@ -1252,6 +1254,7 @@ mod tests {
                 corporations: vec![CorporationInit {
                     treasury_micros: 0,
                     home_station_index: 0,
+                    arb_premium_micros: 0,
                 }],
                 contracts: vec![],
                 price_cfg: PriceCfg::default(),
@@ -1265,6 +1268,8 @@ mod tests {
                 media: crate::config::MediaCfg::default(),
                 refuel: crate::config::RefuelCfg::default(),
                 goods: crate::config::GoodsCfg::default(),
+                exchange: crate::config::ExchangeCfg::default(),
+                arbitrage: crate::config::ArbitrageCfg::default(),
             }
         }
 
@@ -1346,7 +1351,7 @@ mod tests {
                 sells_upgrades: false,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
             contracts: vec![],
             price_cfg: PriceCfg {
                 base_micros: vec![0i64, 5_000i64],
@@ -1360,6 +1365,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: RefuelCfg { lot_mass: 2.5e-10, corp_index: 0 },
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         };
         let (mut world, _h) = World::reset(cfg).expect("resolvable cfg");
         world.ships.credits_micros[0] = 1_000_000;

@@ -225,10 +225,10 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
 
     // --- corps: 3 tier corps + the Yard (corp 3, receives upgrade payments).
     let corporations = vec![
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 3 },
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 4 },
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 },
-        CorporationInit { treasury_micros: 0, home_station_index: 3 }, // the Yard
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 3 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 4 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 0, home_station_index: 3 , arb_premium_micros: 0}, // the Yard
     ];
 
     // --- 12 directed route templates: per tier, 3 Ore legs out to the tier's
@@ -306,6 +306,8 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         media: MediaCfg::default(),
         refuel: crate::config::RefuelCfg::default(),
         goods: crate::config::GoodsCfg::default(),
+        exchange: crate::config::ExchangeCfg::default(),
+        arbitrage: crate::config::ArbitrageCfg::default(),
     }
 }
 
@@ -454,11 +456,11 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     // --- corps: 3 tier corps + the Yard (3, upgrade payments) + the Port
     // (4, propellant revenue — armed by RefuelCfg.corp_index in task 2.4).
     let corporations = vec![
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 2 },
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 },
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 9 },
-        CorporationInit { treasury_micros: 0, home_station_index: 2 },
-        CorporationInit { treasury_micros: 0, home_station_index: 2 },
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 2 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 9 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 0, home_station_index: 2 , arb_premium_micros: 0},
+        CorporationInit { treasury_micros: 0, home_station_index: 2 , arb_premium_micros: 0},
     ];
 
     // --- 9 directed route templates: per tier, 2 Ore legs src->dest + 1 Fuel
@@ -542,6 +544,8 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         // generator AND consumer land in one rung (the OD-5b two-sided law).
         refuel: RefuelCfg { lot_mass: 5.0e-11, corp_index: 4 },
         goods: crate::config::GoodsCfg::default(),
+        exchange: crate::config::ExchangeCfg::default(),
+        arbitrage: crate::config::ArbitrageCfg::default(),
     }
 }
 

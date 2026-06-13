@@ -62,6 +62,8 @@ fn base_config() -> RunConfig {
         media: jumpgate_core::config::MediaCfg::default(),
         refuel: jumpgate_core::config::RefuelCfg::default(),
         goods: jumpgate_core::config::GoodsCfg::default(),
+        exchange: jumpgate_core::config::ExchangeCfg::default(),
+        arbitrage: jumpgate_core::config::ArbitrageCfg::default(),
     }
 }
 

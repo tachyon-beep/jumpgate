@@ -1417,6 +1417,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
@@ -1489,6 +1491,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
@@ -1903,6 +1907,7 @@ mod tests {
         cfg.corporations = vec![crate::config::CorporationInit {
             treasury_micros: 0,
             home_station_index: 0,
+            arb_premium_micros: 0,
         }];
         cfg.refuel = crate::config::RefuelCfg { lot_mass: 5e-11, corp_index: 0 };
 
@@ -2313,6 +2318,7 @@ mod tests {
         cfg.corporations = vec![CorporationInit {
             treasury_micros: 5_000_000,
             home_station_index: 0,
+            arb_premium_micros: 0,
         }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
@@ -2358,7 +2364,7 @@ mod tests {
             StationInit { body_index: 0, initial_stock: vec![0i64, 0i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
         ];
         cfg.corporations =
-            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
+            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
             resource: Good::FUEL,
@@ -2619,6 +2625,7 @@ mod tests {
         cfg.corporations = vec![CorporationInit {
             treasury_micros: 100_000_000,
             home_station_index: 0,
+            arb_premium_micros: 0,
         }];
         cfg
     }
@@ -3188,7 +3195,7 @@ mod tests {
             // drained before the next lands -> staggering visibly flattens the peak.
             ProducerInit { station_index: 1, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 1 } },
         ];
-        cfg.corporations = vec![CorporationInit { treasury_micros: 100_000_000_000, home_station_index: 0 }];
+        cfg.corporations = vec![CorporationInit { treasury_micros: 100_000_000_000, home_station_index: 0, arb_premium_micros: 0 }];
         // Seeded route template (Fuel A->B, qty 5) — the order-up-to repost clones it.
         cfg.contracts = vec![ContractInit {
             corp_index: 0, resource: Good::FUEL, qty: 5,

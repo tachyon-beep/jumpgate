@@ -611,6 +611,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 

@@ -1892,7 +1892,7 @@ mod tests {
                 sells_upgrades,
             }],
             producers: vec![],
-            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0 }],
+            corporations: vec![CorporationInit { treasury_micros: 0, home_station_index: 0, arb_premium_micros: 0 }],
             contracts: vec![],
             price_cfg: crate::config::PriceCfg::default(),
             dispatch_cfg: crate::config::DispatchCfg::default(),
@@ -1901,6 +1901,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
@@ -2383,7 +2385,7 @@ mod tests {
             },
         ];
         cfg.corporations =
-            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0 }];
+            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
             resource: Good::FUEL,
@@ -3105,6 +3107,7 @@ mod tests {
             corporations: vec![CorporationInit {
                 treasury_micros: 5_000_000,
                 home_station_index: 0,
+                arb_premium_micros: 0,
             }],
             contracts: vec![ContractInit {
                 corp_index: 0,
@@ -3121,6 +3124,8 @@ mod tests {
             media: crate::config::MediaCfg::default(),
             refuel: crate::config::RefuelCfg::default(),
             goods: crate::config::GoodsCfg::default(),
+            exchange: crate::config::ExchangeCfg::default(),
+            arbitrage: crate::config::ArbitrageCfg::default(),
         }
     }
 
