@@ -495,6 +495,31 @@ fn gossip_log_event_json(world: &World, e: &Event) -> Option<serde_json::Value> 
             "e": "lie_low", "tick": e.tick.0, "pirate": pirate.slot,
             "until": until.0,
         })),
+        // Goods-as-goods rung A: own-trade "buy"/"sell" rows. The settle stages
+        // emit one per good lot moved; encode craft/station slots, good index,
+        // qty, and the unit price (all i64-safe).
+        EventKind::TradeBought {
+            craft,
+            station,
+            good,
+            qty,
+            price_micros,
+        } => Some(serde_json::json!({
+            "e": "buy", "t": e.tick.0, "craft": craft.slot,
+            "station": station.slot, "good": good.0, "qty": qty,
+            "price_micros": price_micros,
+        })),
+        EventKind::TradeSold {
+            craft,
+            station,
+            good,
+            qty,
+            price_micros,
+        } => Some(serde_json::json!({
+            "e": "sell", "t": e.tick.0, "craft": craft.slot,
+            "station": station.slot, "good": good.0, "qty": qty,
+            "price_micros": price_micros,
+        })),
         // Variants that are world-scoped or per-tick noise have no gossip row.
         // This exhaustive list prevents future variants from silently vanishing.
         EventKind::Arrival { .. }
@@ -560,6 +585,8 @@ fn chronicle_subject(kind: &EventKind) -> Option<CraftId> {
         EventKind::ContractFailed { hauler, .. } => Some(hauler),
         // Goods-as-goods A0: the WB4 middle beat (robbed→broke→RefuelDenied→ADRIFT).
         EventKind::RefuelDenied { craft, .. } => Some(craft),
+        // Goods-as-goods rung A: own-trade legs thread into the craft's life arc.
+        EventKind::TradeBought { craft, .. } | EventKind::TradeSold { craft, .. } => Some(craft),
         EventKind::Robbed { pirate, .. }
         | EventKind::DrivenOff { pirate, .. }
         | EventKind::HaulerKilled { pirate, .. }

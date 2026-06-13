@@ -213,6 +213,24 @@ pub enum EventKind {
         station: StationId,
         reason: RefuelDeniedReason,
     },
+    /// A scripted craft bought goods from a station (stock -> hold transfer settled).
+    /// Emitted exactly once: in resolve_trade_buys after all accounting legs.
+    TradeBought {
+        craft: CraftId,
+        station: StationId,
+        good: crate::economy::Good,
+        qty: u32,
+        price_micros: i64,
+    },
+    /// A scripted craft sold goods to a station (hold -> stock transfer settled).
+    /// Emitted exactly once: in resolve_trade_sells after all accounting legs.
+    TradeSold {
+        craft: CraftId,
+        station: StationId,
+        good: crate::economy::Good,
+        qty: u32,
+        price_micros: i64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -439,6 +457,14 @@ mod tests {
         let offered = EventKind::ContractOffered { contract };
         let accepted = EventKind::ContractAccepted { contract, hauler };
         let fulfilled = EventKind::ContractFulfilled { contract, hauler };
+        // Goods-as-goods rung A: TradeBought/TradeSold are Copy+PartialEq too.
+        let trade_bought = EventKind::TradeBought {
+            craft: CraftId { slot: 0, generation: 0 },
+            station: StationId { slot: 0, generation: 0 },
+            good: Good(0),
+            qty: 3,
+            price_micros: 100_000,
+        };
 
         // Copy: binding by assignment leaves the original usable.
         let production_copy = production;
@@ -447,6 +473,7 @@ mod tests {
         let offered_copy = offered;
         let accepted_copy = accepted;
         let fulfilled_copy = fulfilled;
+        let trade_bought_copy = trade_bought; // Copy
 
         // PartialEq: copies equal originals.
         assert_eq!(production, production_copy);
@@ -455,11 +482,13 @@ mod tests {
         assert_eq!(offered, offered_copy);
         assert_eq!(accepted, accepted_copy);
         assert_eq!(fulfilled, fulfilled_copy);
+        assert_eq!(trade_bought, trade_bought_copy); // PartialEq
 
         // PartialEq: distinct variants differ.
         assert_ne!(production, offered2);
         assert_ne!(price_update, offered);
         assert_ne!(accepted, fulfilled);
+        assert_ne!(production, trade_bought); // distinct variants
 
         // Wrap one in an Event to confirm the stream type still derives.
         let ev = Event {
