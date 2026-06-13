@@ -54,3 +54,22 @@ For each later-phase commit, repeat this procedure (replacing --scenario and
 determinism break. For hash-neutral commits (A1 runtime-goods refactor),
 ALL 12 digests must be identical. For behavior-changing commits (A3+),
 record the new digests under a new dated directory.
+
+## Regeneration (exact command shape — digest capture excludes --replay-check)
+
+The digest-capture runs do NOT pass `--replay-check` (its OK line would land
+in stdout and move the .out digest); replay-check is run separately. Per
+(scenario, seed):
+
+```bash
+cargo run -q -p jumpgate-core --release --example trophic_run -- \
+  --scenario <trophic|frontier> --seed <7|23> --ticks 50000 \
+  --jsonl <dir>/<scenario>-s<seed>.jsonl \
+  --gossip-log <dir>/<scenario>-s<seed>.gossip.jsonl \
+  > <dir>/<scenario>-s<seed>.out
+sha256sum <dir>/<scenario>-s<seed>.{out,jsonl,gossip.jsonl}
+```
+
+Independently reproduced 2026-06-13 (main loop): frontier-s7 all three
+digests bit-identical (the .out matches after stripping the replay-check
+line from a run that had mistakenly included the flag).
