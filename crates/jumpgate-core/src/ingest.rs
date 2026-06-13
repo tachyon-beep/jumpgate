@@ -469,6 +469,7 @@ mod tests {
                 fuel_mass: 1e-9,
                 role: crate::stores::CraftRole::Idle,
                 scripted: true,
+                trade_reserve_micros: 0,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],

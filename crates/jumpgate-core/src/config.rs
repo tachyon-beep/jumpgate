@@ -54,6 +54,11 @@ pub struct CraftInit {
     /// `!scripted` craft — the gym-exclusion flag, decided at config so the
     /// config golden moves once (spec §5). Default `true`.
     pub scripted: bool,
+    /// Credits held in reserve before considering own-trade (rung-A two-mode
+    /// policy). Default 0 leaves trophic/frontier unchanged. A craft only enters
+    /// own-trade mode when `credits_micros >= buy_cost + trade_reserve_micros`.
+    /// NOT folded into config_hash (transient policy dial; no golden movement).
+    pub trade_reserve_micros: i64,
 }
 
 /// N substeps = pure fn of QUANTIZED total local acceleration magnitude (Task 7).
@@ -973,6 +978,7 @@ mod tests {
                 fuel_mass: 0.5,
                 role: crate::stores::CraftRole::Idle,
                 scripted: true,
+                trade_reserve_micros: 0,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![],
@@ -1324,6 +1330,7 @@ mod tests {
             fuel_mass: 0.0,
             role: crate::stores::CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         });
         assert_ne!(sample().config_hash(), c.config_hash());
     }

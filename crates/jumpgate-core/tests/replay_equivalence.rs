@@ -66,6 +66,7 @@ fn base_config() -> RunConfig {
             fuel_mass: 5.0e-10,
             role: jumpgate_core::stores::CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         }],
         guidance: GuidanceParams::default(),
         stations: vec![],

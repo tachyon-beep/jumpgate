@@ -180,6 +180,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
             fuel_mass: 1.0e-9,
             role: CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         });
     }
     for _ in 0..NUM_PIRATES {
@@ -193,6 +194,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
             fuel_mass: 1.0e-9,
             role: CraftRole::Pirate,
             scripted: true,
+            trade_reserve_micros: 0,
         });
     }
 
@@ -518,6 +520,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
             fuel_mass: 1.0e-9,
             role: CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         });
     }
     for _ in 0..FRONTIER_NUM_PIRATES {
@@ -531,6 +534,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
             fuel_mass: 1.0e-9,
             role: CraftRole::Pirate,
             scripted: true,
+            trade_reserve_micros: 0,
         });
     }
 

@@ -1675,7 +1675,10 @@ pub fn run_trade_policies(
     bodies: &BodyStore,
     eph: &Ephemeris,
     exchange: &crate::config::ExchangeCfg,
-    arbitrage: &crate::config::ArbitrageCfg,
+    // Reserved for the full transport-table net comparison (A5.2 poster owns the
+    // table-based wage/trade tie-break); the per-craft reserve dial supersedes
+    // the wage-flat proxy at the own-trader gate below.
+    _arbitrage: &crate::config::ArbitrageCfg,
     goods_cfg: &crate::config::GoodsCfg,
     tick: Tick,
 ) {
@@ -1756,9 +1759,12 @@ pub fn run_trade_policies(
                 continue;
             }
             let net = spread * qty;
-            // Wallet headroom: must cover buy_cost + trade_reserve.
+            // Wallet headroom: must cover buy_cost + trade_reserve. The reserve
+            // is the per-craft CraftInit dial (A5.1, default 0 => trophic/frontier
+            // unchanged); the arbitrage wage-flat is the POSTER's floor, not the
+            // own-trader's reserve.
             let buy_cost = qty * src_price;
-            let trade_reserve = arbitrage.wage_flat_micros; // reuse as reserve proxy v1
+            let trade_reserve = craft_cfg.get(crow).map_or(0, |c| c.trade_reserve_micros);
             if ships.credits_micros[crow] < buy_cost + trade_reserve {
                 continue;
             }
@@ -3182,6 +3188,7 @@ mod tests {
                 fuel_mass: 1e-9,
                 role: crate::stores::CraftRole::Idle,
                 scripted: true,
+                trade_reserve_micros: 0,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![StationInit {
@@ -4325,6 +4332,7 @@ mod tests {
             fuel_mass: 0.0,
             role: CraftRole::Idle,
             scripted: false,
+            trade_reserve_micros: 0,
         }];
         run_scripted_dispatch(
             &mut contracts,
@@ -4659,6 +4667,7 @@ mod tests {
                 fuel_mass: 7.0e-11,
                 role: CraftRole::Idle,
                 scripted: false, // manual-accept only: scripted ASSIGN stays out
+                trade_reserve_micros: 0,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![
@@ -5259,6 +5268,7 @@ mod tests {
                 fuel_mass: 1e-9,
                 role: crate::stores::CraftRole::Idle,
                 scripted: true,
+                trade_reserve_micros: 0,
             }],
             guidance: GuidanceParams::default(),
             stations: vec![
@@ -5801,5 +5811,55 @@ mod tests {
                 + world.contracts.escrow_micros.iter().sum::<i64>();
             assert_eq!(total, t0_sum, "credit identity violated after trade step");
         }
+    }
+
+    #[test]
+    fn pending_trade_columns_exist_and_are_always_none_at_hash_point() {
+        // The two transient own-trade intent columns must exist on CraftStore,
+        // be all-None at reset, and be fully consumed (all-None) at every
+        // state-hash point. The debug_assert! inside state_hash fires if any
+        // intent leaks across a tick boundary on the trophic scenario (Exchange
+        // inactive there, so the intent stages never write — but the columns
+        // still exist and the asserts still hold).
+        use crate::hash::state_hash;
+        use crate::scenario::scenario_trophic;
+        use crate::world::World;
+
+        let (mut w, _) = World::reset(scenario_trophic(7)).expect("reset");
+        assert!(
+            w.ships.pending_trade_buy.iter().all(Option::is_none),
+            "pending_trade_buy must be all-None at reset"
+        );
+        assert!(
+            w.ships.pending_trade_sell.iter().all(Option::is_none),
+            "pending_trade_sell must be all-None at reset"
+        );
+        let mut cmds = Vec::new();
+        for _ in 0..50 {
+            w.step(&mut cmds);
+            // state_hash debug_asserts both columns all-None; panics otherwise.
+            let _ = state_hash(&w);
+        }
+    }
+
+    #[test]
+    fn two_mode_policy_chooses_package_when_wallet_below_reserve() {
+        // A craft with wallet < (buy_cost + trade_reserve) stays on the package
+        // path (wage-hauling when broke — D6). Day-0 wallets are 0, so at tick 0
+        // no craft may write pending_trade_buy on the bazaar scenario.
+        use crate::hash::state_hash;
+        use crate::scenario::scenario_bazaar;
+        use crate::world::World;
+
+        let cfg = scenario_bazaar(42);
+        let (mut w, _) = World::reset(cfg).expect("reset");
+
+        let mut cmds = Vec::new();
+        w.step(&mut cmds);
+        assert!(
+            w.ships.pending_trade_buy.iter().all(Option::is_none),
+            "day-0 wallet=0 craft must not write pending_trade_buy (broke => wage path)"
+        );
+        let _ = state_hash(&w);
     }
 }

@@ -1316,6 +1316,7 @@ mod tests {
             fuel_mass: 1e-9,
             role: CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         }
     }
 
@@ -2270,6 +2271,7 @@ mod tests {
         cfg.contracts = vec![];
         cfg.craft = vec![CraftInit {
             scripted: false,
+            trade_reserve_micros: 0,
             ..pirate_init(Vec3::new(0.01, 0.0, 0.0))
         }];
         let (mut world, _) = World::reset(cfg).expect("resolvable cfg");

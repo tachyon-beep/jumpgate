@@ -182,6 +182,7 @@ fn config_template(num_craft: usize) -> RunConfig {
             fuel_mass: 1.0e-12,
             role: jumpgate_core::stores::CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         })
         .collect();
     RunConfig {
@@ -356,6 +357,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
             fuel_mass: 1.0e-9,
             role: jumpgate_core::stores::CraftRole::Idle,
             scripted: true,
+            trade_reserve_micros: 0,
         })
         .collect();
     // Pirates APPENDED after the agent craft (craft_ids()[0] stays the
@@ -376,6 +378,7 @@ pub fn trader_config_template(seed: u64, num_craft: usize, num_pirates: usize) -
                 fuel_mass: 1.0e-9,
                 role: jumpgate_core::stores::CraftRole::Pirate,
                 scripted: true,
+                trade_reserve_micros: 0,
             });
         }
     }

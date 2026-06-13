@@ -117,6 +117,7 @@ fn coasting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
         fuel_mass: 0.0,
         role: jumpgate_core::stores::CraftRole::Idle,
         scripted: true,
+        trade_reserve_micros: 0,
     }
 }
 
@@ -270,6 +271,7 @@ fn thrusting_craft(pos: Vec3, vel: Vec3) -> CraftInit {
         fuel_mass: 1.0e-9, // full tank => Δv budget for the accelerate+brake round trip
         role: jumpgate_core::stores::CraftRole::Idle,
         scripted: true,
+        trade_reserve_micros: 0,
     }
 }
 
