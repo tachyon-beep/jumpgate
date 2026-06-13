@@ -1264,6 +1264,41 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
                 c.fuel_mass *= scale;
             }
         }
+        // fleet_scale_count (Experiment C, panel L5-C2): replicate the craft
+        // vector PER ROLE BLOCK — all haulers N times, then all pirates N times.
+        // Keeps the per_craft_credits[:haulers] prefix slice valid (w4_grid.py
+        // reads hauler count from the META line, not a module constant). Distinct
+        // from the float `fuel_capacity_scale` knob (which scales tanks, not
+        // headcount). scenario_bazaar's craft vec is already role-blocked.
+        "fleet_scale_count" => {
+            let scale: u32 = p(name, value)?;
+            if scale == 0 {
+                return Err(format!("--set {name}={value}: must be >= 1"));
+            }
+            if scale != 1 {
+                let haulers: Vec<CraftInit> = cfg
+                    .craft
+                    .iter()
+                    .filter(|c| c.role == CraftRole::Idle)
+                    .cloned()
+                    .collect();
+                let pirates: Vec<CraftInit> = cfg
+                    .craft
+                    .iter()
+                    .filter(|c| c.role == CraftRole::Pirate)
+                    .cloned()
+                    .collect();
+                let mut new_craft =
+                    Vec::with_capacity((haulers.len() + pirates.len()) * scale as usize);
+                for _ in 0..scale {
+                    new_craft.extend(haulers.iter().cloned());
+                }
+                for _ in 0..scale {
+                    new_craft.extend(pirates.iter().cloned());
+                }
+                cfg.craft = new_craft;
+            }
+        }
         other => return Err(format!("--set {other}: unknown knob")),
     }
     Ok(())
@@ -1745,6 +1780,67 @@ mod tests {
         assert!(
             apply_knob(&mut cfg, "fuel_capacity_scale", "nan").is_err(),
             "NaN is loud"
+        );
+    }
+
+    #[test]
+    fn scenario_bazaar_fleet_scale_replicates_per_role_block() {
+        let mut cfg = scenario_bazaar(7);
+        let n_haulers_base = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Idle)
+            .count();
+        let n_pirates_base = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Pirate)
+            .count();
+
+        // fleet_scale_count = 2 doubles EACH role block independently.
+        apply_knob(&mut cfg, "fleet_scale_count", "2").expect("fleet_scale_count knob");
+
+        let n_haulers = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Idle)
+            .count();
+        let n_pirates = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Pirate)
+            .count();
+        assert_eq!(n_haulers, n_haulers_base * 2, "haulers scaled 2x");
+        assert_eq!(n_pirates, n_pirates_base * 2, "pirates scaled 2x");
+
+        // Role-block order: all haulers precede all pirates.
+        let first_pirate = cfg.craft.iter().position(|c| c.role == CraftRole::Pirate);
+        let last_hauler = cfg.craft.iter().rposition(|c| c.role == CraftRole::Idle);
+        if let (Some(fp), Some(lh)) = (first_pirate, last_hauler) {
+            assert!(
+                lh < fp,
+                "all haulers (last at {lh}) must precede all pirates (first at {fp})"
+            );
+        }
+
+        // per_craft_credits[:haulers] prefix-slice invariant: first n_haulers
+        // rows are all Idle.
+        for row in 0..n_haulers {
+            assert_eq!(
+                cfg.craft[row].role,
+                CraftRole::Idle,
+                "craft row {row} must be Idle (hauler) for the prefix-slice invariant"
+            );
+        }
+
+        // Identity at scale 1; zero is a loud error.
+        let mut cfg1 = scenario_bazaar(7);
+        let n0 = cfg1.craft.len();
+        apply_knob(&mut cfg1, "fleet_scale_count", "1").expect("identity");
+        assert_eq!(cfg1.craft.len(), n0, "scale 1 is identity");
+        assert!(
+            apply_knob(&mut cfg1, "fleet_scale_count", "0").is_err(),
+            "zero is loud"
         );
     }
 
