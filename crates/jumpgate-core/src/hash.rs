@@ -317,6 +317,18 @@ pub fn state_hash(world: &World) -> u64 {
         world.ships.pending_refuel.iter().all(Option::is_none),
         "pending_refuel must be fully consumed (all None) at every state-hash point"
     );
+    // `pending_trade_buy` / `pending_trade_sell` are TRANSIENT own-trade intent
+    // (goods-as-goods rung A): written by stage 1c3x, consumed by stage 1dx the
+    // same tick, so they must be empty at EVERY hash point — the stage-ordering
+    // contract, same discipline as pending_upgrade / pending_refuel.
+    debug_assert!(
+        world.ships.pending_trade_buy.iter().all(Option::is_none),
+        "pending_trade_buy must be fully consumed (all None) at every state-hash point"
+    );
+    debug_assert!(
+        world.ships.pending_trade_sell.iter().all(Option::is_none),
+        "pending_trade_sell must be fully consumed (all None) at every state-hash point"
+    );
 
     h.finish()
 }
@@ -1305,5 +1317,30 @@ mod tests {
             w.step(&mut cmds);
             println!("tick={t} hash={:016x}", crate::hash::state_hash(&w));
         }
+    }
+
+    // A3.3: state_hash debug-asserts that pending_trade_buy is fully consumed.
+    // A Some at hash time is a stage-ordering bug and must panic loudly in debug.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "pending_trade_buy must be fully consumed")]
+    fn pending_trade_buy_not_none_at_hash_point_panics() {
+        let (mut world, _) = World::reset(cfg_with_craft_x(2.0)).expect("reset ok");
+        // Force a Some into the column (simulating a broken settle stage).
+        let sentinel = crate::ids::StationId { slot: 0, generation: 0 };
+        world.ships.pending_trade_buy[0] = Some((crate::economy::Good(0), 1, sentinel));
+        // state_hash must debug_assert-panic.
+        let _ = crate::hash::state_hash(&world);
+    }
+
+    // A3.3: same loud-failure guard for pending_trade_sell.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "pending_trade_sell must be fully consumed")]
+    fn pending_trade_sell_not_none_at_hash_point_panics() {
+        let (mut world, _) = World::reset(cfg_with_craft_x(2.0)).expect("reset ok");
+        let sentinel = crate::ids::StationId { slot: 0, generation: 0 };
+        world.ships.pending_trade_sell[0] = Some(sentinel);
+        let _ = crate::hash::state_hash(&world);
     }
 }

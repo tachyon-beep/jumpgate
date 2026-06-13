@@ -316,6 +316,8 @@ impl World {
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
             pending_refuel: Vec::new(),
+            pending_trade_buy: Vec::new(),
+            pending_trade_sell: Vec::new(),
             gossip: Vec::new(),
             hold: Vec::new(),
         };
@@ -360,6 +362,8 @@ impl World {
             ships.info_tick.push(Tick(0));
             ships.pending_upgrade.push(None);
             ships.pending_refuel.push(None);
+            ships.pending_trade_buy.push(None);
+            ships.pending_trade_sell.push(None);
             // Media column (v5): a comms-log for non-pirate craft on a
             // media-live world; pirates are information-blind by construction
             // (spec §16 OD-6) — `None`, like every row when media is off.

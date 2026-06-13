@@ -206,6 +206,14 @@ pub struct CraftStore {
     /// `resolve_refuels` the SAME tick, and debug-asserted all-None at hash
     /// points. NOT folded into HASH_FIELD_ORDER.
     pub pending_refuel: Vec<Option<()>>,
+    /// TRANSIENT own-trade BUY intent written by run_trade_policies (stage 1c3x)
+    /// and consumed unconditionally by resolve_trade_buys (stage 1dx) the same tick.
+    /// Payload: (good_index, qty, source_station_id). None at every state-hash point.
+    pub pending_trade_buy: Vec<Option<(crate::economy::Good, u32, crate::ids::StationId)>>,
+    /// TRANSIENT own-trade SELL intent written by run_trade_policies (stage 1c3x)
+    /// and consumed unconditionally by resolve_trade_sells (stage 1dx) the same tick.
+    /// Payload: destination StationId (goods and qty read from hold). None at every hash point.
+    pub pending_trade_sell: Vec<Option<crate::ids::StationId>>,
     // --- Media-rung column (length-parallel, state v5) ---
     /// Per-craft gossip comms-log: `Some(GossipBuffer)` ONLY for non-pirate
     /// rows on a media-live world — pirates are information-blind by
@@ -254,6 +262,8 @@ impl CraftStore {
             info_tick: Vec::new(),
             pending_upgrade: Vec::new(),
             pending_refuel: Vec::new(),
+            pending_trade_buy: Vec::new(),
+            pending_trade_sell: Vec::new(),
             gossip: Vec::new(),
             hold: Vec::new(),
         }
@@ -291,6 +301,8 @@ impl CraftStore {
         self.info_tick.push(Tick(0));
         self.pending_upgrade.push(None);
         self.pending_refuel.push(None);
+        self.pending_trade_buy.push(None);
+        self.pending_trade_sell.push(None);
         // Media: `Some` only for non-pirate rows on a media-live world; the
         // generic push seeds `None` (World::reset's mint loop decides).
         self.gossip.push(None);
