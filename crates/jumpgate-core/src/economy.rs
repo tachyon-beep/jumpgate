@@ -326,11 +326,12 @@ pub fn run_producers(
 pub fn update_prices(
     stations: &mut StationStore,
     price_cfg: &crate::config::PriceCfg,
+    goods_cfg: &crate::config::GoodsCfg,
     tick: Tick,
     events: &mut EventStream,
 ) {
     for row in 0..stations.ids.len() {
-        for r in 0..price_cfg.cap.len() {
+        for r in 0..goods_cfg.goods.len() {
             if price_cfg.cap[r] == 0 {
                 continue;
             }
@@ -347,7 +348,7 @@ pub fn update_prices(
                         tick,
                         kind: EventKind::PriceUpdate {
                             station,
-                            resource: Good::ALL_V1[r],
+                            resource: Good(r as u16), // A1 newtype replaces Resource::ALL[r]
                             price_micros: p,
                         },
                     });
@@ -1744,7 +1745,7 @@ mod tests {
 
     #[test]
     fn update_prices_linear_deflation_exact_integer() {
-        use crate::config::PriceCfg;
+        use crate::config::{GoodsCfg, PriceCfg};
         // base_micros[Fuel]=100_000, cap[Fuel]=10, slope_milli=1800.
         // Ore has cap==0 -> SKIPPED (div-by-zero guard, price left unchanged).
         let price_cfg = PriceCfg {
@@ -1767,7 +1768,8 @@ mod tests {
         }
         let mut events = EventStream::new();
 
-        update_prices(&mut stations, &price_cfg, Tick(1), &mut events);
+        let goods_cfg = GoodsCfg::default(); // v1 two-good table (Ore, Fuel)
+        update_prices(&mut stations, &price_cfg, &goods_cfg, Tick(1), &mut events);
 
         let fi = Good::FUEL.index();
         let oi = Good::ORE.index();
@@ -3449,5 +3451,54 @@ mod tests {
         );
         assert_eq!(diag2.decisions, 1);
         assert_eq!(diag2.flips, 0, "agreeing sources never flip");
+    }
+
+    // A3.1: the pricer must run for ALL n_goods resources (not the fixed v1 pair)
+    // and a cap==0 good must stay at its initial price (the dead-good skip).
+    #[test]
+    fn update_prices_runs_for_all_goods_and_respects_cap_zero() {
+        use crate::config::{GoodSpec, GoodsCfg, PriceCfg};
+
+        // Three goods: Ore(0), Fuel(1), Widget(2). Widget has cap==0 (dead).
+        let goods_cfg = GoodsCfg {
+            goods: vec![
+                GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
+                GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
+                GoodSpec { name: "Widget".to_string(), unit_mass_milli: 1000 },
+            ],
+        };
+        let n = goods_cfg.goods.len();
+        let mut station = StationStore::empty();
+        station.push(
+            BodyId { slot: 0, generation: 0 },
+            vec![0i64; n],
+            // Ore/Fuel start at 0 (will be repriced); Widget at sentinel 1.
+            vec![0i64, 0i64, 1i64],
+        );
+
+        let price_cfg = PriceCfg {
+            base_micros: vec![100_000, 50_000, 99_999], // Widget base irrelevant
+            cap: vec![100, 100, 0],                      // Widget cap==0 → NEVER priced
+            slope_milli: 1800,
+            reprice_interval: 1,
+        };
+
+        let mut events = EventStream::new();
+        update_prices(&mut station, &price_cfg, &goods_cfg, Tick(1), &mut events);
+
+        // Ore (cap>0, stock=0): should update to base*2 = 200_000.
+        assert_eq!(station.price_micros[0][0], 200_000, "Ore price should update at stock=0");
+        // Fuel (cap>0, stock=0): should update to base*2 = 100_000.
+        assert_eq!(station.price_micros[0][1], 100_000, "Fuel price should update at stock=0");
+        // Widget (cap==0): must remain at the initial sentinel value 1 — never priced.
+        assert_eq!(station.price_micros[0][2], 1, "Widget (cap=0) must not be re-priced");
+
+        // Exactly 2 PriceUpdate events emitted (Ore + Fuel), never Widget.
+        let price_updates: Vec<_> = events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::PriceUpdate { .. }))
+            .collect();
+        assert_eq!(price_updates.len(), 2, "only live-priced goods emit PriceUpdate");
     }
 }

@@ -1197,6 +1197,7 @@ impl World {
             crate::economy::update_prices(
                 &mut self.stations,
                 &self.config.price_cfg,
+                &self.config.goods,
                 next,
                 &mut self.events,
             );
