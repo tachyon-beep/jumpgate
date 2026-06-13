@@ -2647,7 +2647,15 @@ mod tests {
                     .iter()
                     .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
                     .sum();
-                let lhs = stock + in_transit;
+                // v6: own-cargo hold also participates in the in-transit identity.
+                let in_hold: i64 = w
+                    .ships
+                    .hold
+                    .iter()
+                    .flat_map(|h| h.iter())
+                    .filter_map(|(good, q)| (good.index() == r).then_some(*q as i64))
+                    .sum();
+                let lhs = stock + in_transit + in_hold;
                 let rhs = initial[r] + w.econ.mined[r] - w.econ.consumed[r];
                 assert_eq!(
                     lhs, rhs,
@@ -2911,11 +2919,19 @@ mod tests {
                 .iter()
                 .filter_map(|c| c.and_then(|(res, q)| (res.index() == r).then_some(q as i64)))
                 .sum();
-            let lhs = stock + in_transit;
+            // v6: own-cargo hold also participates in the in-transit identity.
+            let in_hold: i64 = world
+                .ships
+                .hold
+                .iter()
+                .flat_map(|h| h.iter())
+                .filter_map(|(good, q)| (good.index() == r).then_some(*q as i64))
+                .sum();
+            let lhs = stock + in_transit + in_hold;
             let rhs = initial[r] + world.econ.mined[r] - world.econ.consumed[r];
             assert_eq!(
                 lhs, rhs,
-                "resource identity for r={r}: {lhs} != {rhs} (stock+in_transit vs initial+mined-consumed)"
+                "resource identity for r={r}: {lhs} != {rhs} (stock+in_transit+hold vs initial+mined-consumed)"
             );
         }
     }
@@ -2960,6 +2976,34 @@ mod tests {
             world.econ.consumed[fuel] > 0,
             "deliver + sink-consume legs fired (consumed Fuel > 0)"
         );
+    }
+
+    #[test]
+    fn hold_participates_in_resource_identity() {
+        // After A2, assert_resource_identity must count units in ships.hold[]
+        // as in-transit goods. This test manually places a Good(0) unit into
+        // a craft hold and verifies the identity still holds with the updated
+        // helper. Without the hold sum, the identity equation is unbalanced.
+        use crate::economy::{N_GOODS_V1, Good};
+        let (mut world, _) =
+            World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
+        let mut initial = [0i64; N_GOODS_V1];
+        for (r, slot) in initial.iter_mut().enumerate() {
+            *slot = world.stations.stock.iter().map(|s| s[r]).sum();
+        }
+        // Move one unit of a live good (Fuel — station A seeds 10 at reset) from
+        // station 0's stock into craft 0's hold. The conservation identity is
+        // preserved (stock-1, hold+1) ONLY if assert_resource_identity sums the
+        // hold; without the hold term the equation is short by 1 and panics.
+        let fuel = Good::FUEL.index();
+        assert!(world.stations.stock[0][fuel] > 0, "fixture seeds Fuel at station A");
+        world.stations.stock[0][fuel] -= 1;
+        world.ships.hold[0].push((Good::FUEL, 1));
+        // If assert_resource_identity doesn't sum hold, it will assert-fail here.
+        assert_resource_identity(&world, &initial);
+        // Restore.
+        world.ships.hold[0].clear();
+        world.stations.stock[0][fuel] += 1;
     }
 
     #[test]
