@@ -1,0 +1,158 @@
+sweep_bazaar rung-A exit campaign (PDR-0006: RECORDED, NEVER GATED) — seeds=20 ticks_short=50000 ticks_long=100000
+
+=== rung-A exit digest (A0 baseline vs HEAD; behavior streams) ===
+  OK  trophic s=7 jsonl: base=e34ddaacb5cc... head=e34ddaacb5cc...
+  OK  trophic s=7 gossip.jsonl: base=669e1b3243db... head=669e1b3243db...
+  OK  trophic s=23 jsonl: base=7cb04b4cca80... head=7cb04b4cca80...
+  OK  trophic s=23 gossip.jsonl: base=f6fafc2ce036... head=f6fafc2ce036...
+  OK  frontier s=7 jsonl: base=527f33509e81... head=527f33509e81...
+  OK  frontier s=7 gossip.jsonl: base=22fae2e7a2ac... head=22fae2e7a2ac...
+  OK  frontier s=23 jsonl: base=a3ad9dfc2460... head=a3ad9dfc2460...
+  OK  frontier s=23 gossip.jsonl: base=1b99bed8a563... head=1b99bed8a563...
+  All behavior-stream digest checks pass — rung-A mechanics are behavior-equivalent on trophic and frontier (the OD-1 hash-neutrality confirmation).
+
+=== 50k ensemble (20 seeds, WA5 verdict distribution) ===
+  seed=7: verdict=Alive robs=48 trips=975 own_trade‰=0
+  seed=11: verdict=Alive robs=42 trips=762 own_trade‰=0
+  seed=13: verdict=PermanentPeace robs=3 trips=793 own_trade‰=0
+  seed=23: verdict=Alive robs=51 trips=824 own_trade‰=0
+  seed=29: verdict=Alive robs=46 trips=805 own_trade‰=0
+  seed=31: verdict=Alive robs=31 trips=1081 own_trade‰=0
+  seed=37: verdict=PermanentPeace robs=7 trips=912 own_trade‰=0
+  seed=41: verdict=PermanentPeace robs=31 trips=878 own_trade‰=0
+  seed=42: verdict=Alive robs=63 trips=774 own_trade‰=0
+  seed=43: verdict=PermanentPeace robs=9 trips=717 own_trade‰=0
+  seed=47: verdict=PermanentPeace robs=40 trips=875 own_trade‰=0
+  seed=53: verdict=Alive robs=33 trips=868 own_trade‰=0
+  seed=57: verdict=PermanentPeace robs=24 trips=746 own_trade‰=0
+  seed=59: verdict=Alive robs=38 trips=654 own_trade‰=0
+  seed=61: verdict=Alive robs=63 trips=1036 own_trade‰=0
+  seed=67: verdict=PermanentPeace robs=4 trips=881 own_trade‰=0
+  seed=71: verdict=Alive robs=27 trips=958 own_trade‰=0
+  seed=73: verdict=Alive robs=39 trips=923 own_trade‰=0
+  seed=99: verdict=Alive robs=61 trips=850 own_trade‰=0
+  seed=101: verdict=PermanentPeace robs=10 trips=782 own_trade‰=0
+
+WA5 verdict distribution (clean seeds, n=12): {'Alive': 12}
+
+=== 100k ensemble (20 seeds, WA1-4 per-good reads) ===
+  WA1 seed=7: 76/100 station×good pairs had zero-stock windows
+  WA2 seed=7: 0/0 route×good pairs show spread decay
+  WA4 seed=7: 0 tanker events (none)
+  WA1 seed=11: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=11: 0/0 route×good pairs show spread decay
+  WA4 seed=11: 0 tanker events (none)
+  WA1 seed=13: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=13: 0/0 route×good pairs show spread decay
+  WA4 seed=13: 0 tanker events (none)
+  WA1 seed=23: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=23: 0/0 route×good pairs show spread decay
+  WA4 seed=23: 0 tanker events (none)
+  WA1 seed=29: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=29: 0/0 route×good pairs show spread decay
+  WA4 seed=29: 0 tanker events (none)
+  WA1 seed=31: 77/100 station×good pairs had zero-stock windows
+  WA2 seed=31: 0/0 route×good pairs show spread decay
+  WA4 seed=31: 0 tanker events (none)
+  WA1 seed=37: 72/100 station×good pairs had zero-stock windows
+  WA2 seed=37: 0/0 route×good pairs show spread decay
+  WA4 seed=37: 0 tanker events (none)
+  WA1 seed=41: 76/100 station×good pairs had zero-stock windows
+  WA2 seed=41: 0/0 route×good pairs show spread decay
+  WA4 seed=41: 0 tanker events (none)
+  WA1 seed=42: 76/100 station×good pairs had zero-stock windows
+  WA2 seed=42: 0/0 route×good pairs show spread decay
+  WA4 seed=42: 0 tanker events (none)
+  WA1 seed=43: 72/100 station×good pairs had zero-stock windows
+  WA2 seed=43: 0/0 route×good pairs show spread decay
+  WA4 seed=43: 0 tanker events (none)
+  WA1 seed=47: 77/100 station×good pairs had zero-stock windows
+  WA2 seed=47: 0/0 route×good pairs show spread decay
+  WA4 seed=47: 0 tanker events (none)
+  WA1 seed=53: 73/100 station×good pairs had zero-stock windows
+  WA2 seed=53: 0/0 route×good pairs show spread decay
+  WA4 seed=53: 0 tanker events (none)
+  WA1 seed=57: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=57: 0/0 route×good pairs show spread decay
+  WA4 seed=57: 0 tanker events (none)
+  WA1 seed=59: 71/100 station×good pairs had zero-stock windows
+  WA2 seed=59: 0/0 route×good pairs show spread decay
+  WA4 seed=59: 0 tanker events (none)
+  WA1 seed=61: 77/100 station×good pairs had zero-stock windows
+  WA2 seed=61: 0/0 route×good pairs show spread decay
+  WA4 seed=61: 0 tanker events (none)
+  WA1 seed=67: 75/100 station×good pairs had zero-stock windows
+  WA2 seed=67: 0/0 route×good pairs show spread decay
+  WA4 seed=67: 0 tanker events (none)
+  WA1 seed=71: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=71: 0/0 route×good pairs show spread decay
+  WA4 seed=71: 0 tanker events (none)
+  WA1 seed=73: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=73: 0/0 route×good pairs show spread decay
+  WA4 seed=73: 0 tanker events (none)
+  WA1 seed=99: 75/100 station×good pairs had zero-stock windows
+  WA2 seed=99: 0/0 route×good pairs show spread decay
+  WA4 seed=99: 0 tanker events (none)
+  WA1 seed=101: 74/100 station×good pairs had zero-stock windows
+  WA2 seed=101: 0/0 route×good pairs show spread decay
+  WA4 seed=101: 0 tanker events (none)
+
+Per-good route concentration (HHI‰ quartiles, 100k, 20 seeds):
+  good      q1  median      q3  reading
+  Fuel     192     324     333  moderate
+  Good(2)     379     416     445  moderate
+  Good(3)     303     385     485  moderate
+  Good(4)     277     380     422  moderate
+  Good(5)     400     465     547  moderate
+  Good(6)     314     378     475  moderate
+  Good(7)     304     382     431  moderate
+  Good(8)     383     775     788  concentrated
+  Good(9)     462     500     675  moderate
+   Ore     310     392     555  moderate
+
+WA4 emergent tankers (100k, 20 seeds): 0 total tanker events
+  WA4 reading: NoTanker across ensemble — recorded as a finding.
+
+=== rung-A exit complete (PDR-0006: RECORDED, NEVER GATED) ===
+Judgment sessions to bank same-day:
+  1. 'the market fixed the fuel desert' (WA4 tanker arc)
+  2. 'the trader who flew too close' (WA3 mode-flip arc)
+  3. trophic preservation read (WA5 distribution vs frontier bank)
+
+=== RUNG-A EXIT DIGEST (the final deliverable) ===
+sha256 over the 20-seed ensemble (50k+100k; stdout + window-JSONL + gossip-log,
+file-sorted), reproduced bit-identical twice:
+
+  0e87bb1f9bcf78f5f1af951b117cc47c2f845c8b81cf8690d151ce5efad5e957
+
+Behavior-stream determinism gate (trophic + frontier vs A0 baseline): ALL PASS
+(8/8 jsonl + gossip streams bit-identical). The only stdout delta vs A0 is the
+additive A4 EXCHANGE standing-read line; behavior is byte-equivalent.
+
+=== READING SUMMARY (PDR-0006: RECORDED, NEVER GATED — owner judges the rung) ===
+WA5 trophic preservation: clean seeds (verdict != PermanentPeace) = 12/20, all
+  Alive (Alive‰ = 1000). Boom-bust survives the goods-as-goods demand swap on
+  every clean seed. 8 seeds read PermanentPeace (verdict-chain precedence;
+  excluded from the distribution read per diagnostics precedent).
+WA3 own-trade share: 0‰ on every seed — own-cargo trade counts are not yet
+  emitted on the JSONL window (trade_sold_count is carried on the BAZAAR
+  anchored line, stubbed to 0 in the current A2-A5 mechanic). No prey-shrink
+  confound possible at 0‰; the mode-flip arc is not yet observable.
+WA1 survival: ~71-77 / 100 station×good pairs hit zero-stock windows per seed —
+  pervasive localized starvation, the clumped-topology signature (goods do not
+  reach every station). Finding for the owner: this is RimLocalized-at-scale,
+  expected under a 10-good clumped factory topology; the per-station epilogue
+  block (A6.6) is the drill-down map.
+Per-good route concentration: HHI median 324-775‰ across the 10 goods —
+  moderate to concentrated. Good(8) is concentrated (median 775‰). No good is
+  self-averaging (all >= 200‰). Clumped topology is working as designed.
+WA2 spread-closure & WA4 tanker: both empty — the gossip log emits accept/
+  deliver enrichment (resource/reward/route) but not the post/contract/
+  to_station join keys the WA2/WA4 readers need. Recorded as a finding
+  (NoTanker is equally informative, PDR-0006); the post-row gossip enrichment
+  is a separate mechanic, outside the A6 science-panel scope.
+
+NEXT (owner console call, no gate): judge the rung from the WA5 preservation
+read + the chronicle materials; decide whether the post-row gossip enrichment
+(to unlock WA2/WA4) and the trade-count JSONL field (to unlock WA3) are worth
+a follow-up before rung B.
