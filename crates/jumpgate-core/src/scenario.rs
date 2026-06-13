@@ -1114,10 +1114,8 @@ mod tests {
     /// big-map trajectory so physics/stage/config drift on the frontier is
     /// loud. Re-derive ONLY via `print_golden_frontier` (single-cause re-pin
     /// commits; the calibration v_e bake is the one scheduled re-pin).
-    // RE-PINNED: hauler v_e calibration bake (OD-5b, k=2.5 x measured worst
-    // leg burn — see the FRONTIER_HAULER_EXHAUST_VELOCITY doc comment). Was
-    // 0xe5b3c68a9b4f727c.
-    const FRONTIER_TRAJECTORY_GOLDEN: u64 = 0x050de98bd4b6793c;
+    // RE-PINNED: v5->v6 (+hold). Was 0x050de98bd4b6793c.
+    const FRONTIER_TRAJECTORY_GOLDEN: u64 = 0x53d88bc83c712b83;
 
     #[test]
     fn frontier_trajectory_golden() {

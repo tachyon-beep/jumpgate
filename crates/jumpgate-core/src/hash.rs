@@ -123,13 +123,14 @@ pub const HASH_MAGIC: u64 = 0x4a55_4d50_4741_5445; // "JUMPGATE"
 /// `engage_cooldown_until` inside word 26, world-level `route_evidence` word 29).
 /// v5: + media-rung state (craft gossip comms-logs word 30, station gossip
 /// reservoirs word 31, `next_alert_seq` word 32).
-pub const HASH_FORMAT_VERSION: u32 = 5;
+/// v6: + goods-rung hold column (per-craft `hold: Vec<Vec<(Good, u32)>>`, word after 28).
+pub const HASH_FORMAT_VERSION: u32 = 6;
 
 /// Golden per-tick hash of the minimal zero-init slice under HASH_FIELD_ORDER
 /// words 1..=13. Pinned so any change to the canonical encoding is caught.
 /// Captured from the first run of `golden_zero_state_hash`; if HASH_FIELD_ORDER
 /// or HASH_FORMAT_VERSION changes, recapture AND bump the version.
-pub const GOLDEN_ZERO_STATE_HASH: u64 = 0x0f20_843f_ccfd_8c70; // RE-PINNED: HASH_FORMAT_VERSION 4->5 (+craft/station gossip, next_alert_seq). Was 0xafdc_5c35_6266_0ff0.
+pub const GOLDEN_ZERO_STATE_HASH: u64 = 0xc783_f6bf_b5a4_04b3; // RE-PINNED: HASH_FORMAT_VERSION 5->6 (+hold column after word 28). Was 0x0f20_843f_ccfd_8c70.
 
 /// Shared FNV-1a 64-bit hasher for the per-tick state hash. Folds each u64 as 8
 /// little-endian bytes. `new()` seeds with `HASH_MAGIC` then the version word.
@@ -365,6 +366,15 @@ pub(crate) fn write_craft_economy(h: &mut FnvHasher, world: &World, idx: usize) 
     h.write_u64(world.ships.upgrades[idx].hulls as u64); // 27a
     h.write_u64(world.ships.upgrades[idx].escorts as u64); // 27b
     h.write_u64(world.ships.info_tick[idx].0); // 28
+    // HASH_FIELD_ORDER v6 hold: count-first, then (good.0, qty) per entry.
+    // Canonical form: ascending Good, no zero-qty entries. Pirates hold zeros
+    // (Vec::new()); the count word (0) is the self-delimiting boundary.
+    let hold = &world.ships.hold[idx];
+    h.write_u64(hold.len() as u64);
+    for (good, qty) in hold {
+        h.write_u64(good.0 as u64);
+        h.write_u64(*qty as u64);
+    }
 }
 
 /// Fold a `Recipe` into the state hash (input disc+payload, output disc+payload,
@@ -1114,8 +1124,8 @@ mod tests {
         // a field was added/reordered or the version bumped: update HASH_FIELD_ORDER
         // (module doc), bump HASH_FORMAT_VERSION, and re-paste from `print_golden`.
         let (w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
-        // RE-PINNED: HASH_FORMAT_VERSION 4->5 (+craft/station gossip, next_alert_seq). Was 0xa29b_6334_16f7_cd20.
-        assert_eq!(state_hash(&w), 0x274b_6874_3b8d_2700u64);
+        // RE-PINNED: HASH_FORMAT_VERSION 5->6 (+hold column after word 28). Was 0x274b_6874_3b8d_2700.
+        assert_eq!(state_hash(&w), 0xb5b9_1c11_1eba_bcc3u64);
     }
 
     #[test]
@@ -1205,6 +1215,8 @@ mod tests {
         h.write_u64(0); // 27a. upgrades.hulls
         h.write_u64(0); // 27b. upgrades.escorts
         h.write_u64(0); // 28. info_tick
+        // v6 hold: one craft row, empty hold -> count word 0.
+        h.write_u64(0); // v6 hold count (empty vec on zero-init world)
         // store-level words 20-24, all empty (zero counters; each store cursor 0, no elements):
         h.write_u64(0); // 20a. econ.mined[Ore]
         h.write_u64(0); // 20b. econ.mined[Fuel]
@@ -1234,6 +1246,37 @@ mod tests {
     #[test]
     fn golden_zero_state_hash() {
         assert_eq!(manual_zero_fold(), GOLDEN_ZERO_STATE_HASH);
+    }
+
+    #[test]
+    fn hold_column_folds_into_state_hash_v6() {
+        // The `hold` column must be folded after word 28 (info_tick) in
+        // write_craft_economy. A non-empty hold must produce a different hash
+        // than an empty hold. HASH_FORMAT_VERSION must be 6.
+        assert_eq!(
+            HASH_FORMAT_VERSION,
+            6,
+            "A2 requires HASH_FORMAT_VERSION=6; update the version before this test passes"
+        );
+        let (mut w, _) = World::reset(cfg_with_craft_x(2.0)).expect("resolvable config");
+        let base = state_hash(&w);
+
+        // Mutate the hold of craft 0 to contain one unit of Good(0).
+        // Before A2 this field does not exist — this test fails to compile.
+        w.ships.hold[0].push((crate::economy::Good(0), 1));
+        let with_hold = state_hash(&w);
+        assert_ne!(
+            base, with_hold,
+            "a non-empty hold must move the state hash (hold fold is missing or wrong)"
+        );
+
+        // An empty Vec must produce the same hash as the base (pirate-row discipline).
+        w.ships.hold[0].clear();
+        let cleared = state_hash(&w);
+        assert_eq!(
+            base, cleared,
+            "clearing the hold must restore the original hash"
+        );
     }
 
     #[test]

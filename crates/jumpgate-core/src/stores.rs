@@ -212,6 +212,11 @@ pub struct CraftStore {
     /// construction (spec §16 OD-6) and get `None`, as does every row when
     /// media is off. HASHED (HASH_FIELD_ORDER word 30).
     pub gossip: Vec<Option<crate::media::GossipBuffer>>,
+    // --- Goods-rung columns (HASHED v6+) ---
+    /// Owned-cargo hold for own-trade craft; canonical ascending-Good no-zero-qty form.
+    /// Pirates get `Vec::new()` — they never become own-traders (D6/D7).
+    /// Fold: count-first after word 28 in `write_craft_economy`.
+    pub hold: Vec<Vec<(crate::economy::Good, u32)>>,
 }
 
 /// SoA store for massive on-rails bodies. `eph_index` maps a body slot to its
@@ -250,6 +255,7 @@ impl CraftStore {
             pending_upgrade: Vec::new(),
             pending_refuel: Vec::new(),
             gossip: Vec::new(),
+            hold: Vec::new(),
         }
     }
 
@@ -288,6 +294,9 @@ impl CraftStore {
         // Media: `Some` only for non-pirate rows on a media-live world; the
         // generic push seeds `None` (World::reset's mint loop decides).
         self.gossip.push(None);
+        // Goods-rung (v6): all craft start with an empty hold (pirates never
+        // fill theirs; the empty-vec count word keeps the fold uniform).
+        self.hold.push(Vec::new());
         CraftId { slot, generation }
     }
 

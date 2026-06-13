@@ -237,7 +237,7 @@ mod tests {
             "edition=2024",
             "rand_chacha=0.10.0",
             "rand_core=0.10.1",
-            "hash_fmt_v=5",
+            "hash_fmt_v=6",
         ] {
             assert!(s.contains(needle), "stamp {s:?} missing {needle:?}");
         }

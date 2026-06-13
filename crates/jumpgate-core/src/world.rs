@@ -317,6 +317,7 @@ impl World {
             pending_upgrade: Vec::new(),
             pending_refuel: Vec::new(),
             gossip: Vec::new(),
+            hold: Vec::new(),
         };
         for c in cfg.craft.iter() {
             ships.ids.insert(());
@@ -367,6 +368,8 @@ impl World {
             } else {
                 None
             });
+            // Goods-rung hold (v6): empty for all craft including pirates.
+            ships.hold.push(Vec::new());
         }
 
         // Mint economy stores from the RunConfig init vecs. Dependency order:
