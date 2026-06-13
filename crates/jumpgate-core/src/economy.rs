@@ -451,6 +451,8 @@ pub fn run_scripted_dispatch(
     dispatch: &crate::config::DispatchCfg,
     shipyard: &crate::config::ShipyardCfg,
     trophic: &crate::config::TrophicCfg,
+    arbitrage: &crate::config::ArbitrageCfg,
+    corporations: &CorporationStore,
     tick: Tick,
     events: &mut EventStream,
 ) {
@@ -560,6 +562,126 @@ pub fn run_scripted_dispatch(
             }
         }
     } // end REPOST else block (A4.3 structural-off prelude)
+
+    // ARBITRAGE POSTER (goods-as-goods A4) — the Exchange corp posts a sealed
+    // package when spread × qty − transport − premium > 0 AND the corp has
+    // funding headroom. Replaces order-up-to REPOST as the demand generator.
+    // Inert gate: scan_interval == 0 skips entirely (structural off for
+    // trophic/frontier/default). Rate gate: scan only on the configured interval
+    // tick. O(n_stations² × n_goods) per scan tick. Emits ContractOffered only
+    // (PackagePosted dropped per synthesis conflict resolution; the "post"
+    // gossip-log row is runner-enriched from ContractOffered + current prices).
+    if arbitrage.scan_interval > 0
+        && tick.0.is_multiple_of(arbitrage.scan_interval as u64)
+        && !arbitrage.qty_ladder.is_empty()
+        && !corporations.ids.is_empty()
+    {
+        let n_stations = stations.ids.len();
+        let n_corps = corporations.ids.len();
+        // scan_index increments each scan period (PDR-0007 corp-rotation).
+        let scan_index = tick.0 / arbitrage.scan_interval as u64;
+        // per-corp committed scratch: prevents over-posting against a single
+        // treasury within this scan tick. Reset to 0 each scan.
+        let mut committed: Vec<i64> = vec![0i64; n_corps];
+        let mut posts_this_scan: usize = 0;
+        // route_index enumerates directed non-diagonal pairs in iteration order
+        // (0 == the first from!=to pair), the corp-rotation selector. Diagonal,
+        // dead-station, and dead-corp skips do NOT advance it (L1-C2: the rotation
+        // counts considered routes, not raw loop iterations).
+        let mut route_index: u64 = 0;
+        'route: for from_srow in 0..n_stations {
+            let Some((from_slot, from_gen)) = stations.ids.id_at(from_srow) else {
+                continue;
+            };
+            let from_id = StationId { slot: from_slot, generation: from_gen };
+            for to_srow in 0..n_stations {
+                if to_srow == from_srow {
+                    continue;
+                }
+                if posts_this_scan >= arbitrage.max_posts_per_scan {
+                    break 'route;
+                }
+                let Some((to_slot, to_gen)) = stations.ids.id_at(to_srow) else {
+                    continue;
+                };
+                let to_id = StationId { slot: to_slot, generation: to_gen };
+                // 2D transport table: transport_micros[from][to] (0 if absent —
+                // a degenerate config; the inert gate prevents it in production).
+                let transport = arbitrage
+                    .transport_micros
+                    .get(from_srow)
+                    .and_then(|row| row.get(to_srow))
+                    .copied()
+                    .unwrap_or(0);
+                // Corp rotation (L1-C2): deterministic first-refusal.
+                let corp_row = ((route_index + scan_index) % n_corps as u64) as usize;
+                let Some((cs, cg)) = corporations.ids.id_at(corp_row) else {
+                    route_index += 1;
+                    continue;
+                };
+                let corp_id = CorporationId { slot: cs, generation: cg };
+                let treasury = corporations.treasury_micros[corp_row];
+                // Per-corp minimum-surplus premium (OD-2; 0 by default).
+                let premium = arbitrage
+                    .arb_premium_micros
+                    .get(corp_row)
+                    .copied()
+                    .unwrap_or(0);
+                // Per-good scan on this route.
+                let n_goods = stations.price_micros[from_srow]
+                    .len()
+                    .min(stations.price_micros[to_srow].len());
+                for good_idx in 0..n_goods {
+                    // L2-C3: price < 1 guard (cloned from resolve_refuels).
+                    let price_from = stations.price_micros[from_srow][good_idx];
+                    if price_from < 1 {
+                        continue;
+                    }
+                    let price_to = stations.price_micros[to_srow][good_idx];
+                    if price_to < 1 {
+                        continue;
+                    }
+                    let spread = price_to.saturating_sub(price_from);
+                    if spread <= 0 {
+                        continue;
+                    }
+                    // Smallest-first qty ladder.
+                    let Some(&qty) = arbitrage.qty_ladder.first() else {
+                        continue;
+                    };
+                    // spread * qty − transport − premium > 0?
+                    let gross = spread.saturating_mul(qty as i64);
+                    let surplus = gross.saturating_sub(transport).saturating_sub(premium);
+                    if surplus <= 0 {
+                        continue;
+                    }
+                    // Wage = flat floor + transport + share of surplus (OD-4a).
+                    let wage = arbitrage
+                        .wage_flat_micros
+                        .saturating_add(transport)
+                        .saturating_add(
+                            surplus.saturating_mul(arbitrage.wage_share_milli as i64) / 1000,
+                        );
+                    // Funding headroom: treasury − committed >= wage + price_from * qty.
+                    let buy_cost = price_from.saturating_mul(qty as i64);
+                    let need = wage.saturating_add(buy_cost);
+                    let available = treasury.saturating_sub(committed[corp_row]);
+                    if available < need {
+                        continue;
+                    }
+                    committed[corp_row] = committed[corp_row].saturating_add(need);
+                    let good = Good(good_idx as u16);
+                    let new_id = contracts.push(corp_id, good, qty, from_id, to_id, wage);
+                    events.emit(Event {
+                        tick,
+                        kind: EventKind::ContractOffered { contract: new_id },
+                    });
+                    posts_this_scan += 1;
+                }
+                route_index += 1;
+            }
+        }
+    }
 
     // ASSIGN GATE (trader rung 1): `stagger_period == 0` turns scripted acceptance
     // OFF entirely — manual / RL-issued `AcceptContract` only. REPOST above is
@@ -2077,6 +2199,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &trophic,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -2088,6 +2212,190 @@ mod tests {
         assert!(
             events.events.is_empty(),
             "no ContractOffered events when demand is 0/0"
+        );
+    }
+
+    /// Build a StationStore from a list of per-good price rows (stock filled
+    /// with 50 ore for headroom; body slot == row).
+    fn stations_with_prices(rows: &[Vec<i64>]) -> StationStore {
+        let mut s = StationStore::empty();
+        for (i, prices) in rows.iter().enumerate() {
+            s.push(
+                BodyId { slot: i as u32, generation: 0 },
+                vec![50i64; prices.len()],
+                prices.clone(),
+            );
+        }
+        s
+    }
+
+    #[test]
+    fn arbitrage_poster_posts_when_spread_clears_transport() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        // from (low price 100k) -> to (high price 500k): spread*qty > transport.
+        let stations = stations_with_prices(&[vec![100_000i64, 0], vec![500_000i64, 0]]);
+        let mut corporations = CorporationStore::empty();
+        corporations.push(10_000_000_000i64, StationId { slot: 0, generation: 0 });
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 200,
+            transport_micros: vec![vec![0, 50_000], vec![50_000, 0]],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0],
+        };
+        let mut contracts = ContractStore::empty();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut ships = CraftStore::empty();
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &corporations,
+            Tick(1),
+            &mut events,
+        );
+        // spread = 400_000; surplus = 400_000*5 - 50_000 = 1_950_000 > 0 -> one post.
+        assert_eq!(contracts.ids.len(), 1, "one Offered row posted");
+        assert_eq!(contracts.resource[0], Good::ORE);
+        assert_eq!(contracts.qty[0], 5);
+        assert_eq!(contracts.from_station[0].slot, 0);
+        assert_eq!(contracts.to_station[0].slot, 1);
+        let expected_wage = 50_000i64 + 1_950_000 * 200 / 1000;
+        assert_eq!(contracts.reward_micros[0], expected_wage);
+        let offered_count = events
+            .events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::ContractOffered { .. }))
+            .count();
+        assert_eq!(offered_count, 1, "one ContractOffered event");
+    }
+
+    #[test]
+    fn arbitrage_poster_skips_when_spread_below_transport() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        // Narrow spread (490k -> 500k) with transport > spread*qty -> no post.
+        let stations = stations_with_prices(&[vec![490_000i64, 0], vec![500_000i64, 0]]);
+        let mut corporations = CorporationStore::empty();
+        corporations.push(10_000_000_000i64, StationId { slot: 0, generation: 0 });
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 200,
+            transport_micros: vec![vec![0, 500_000], vec![500_000, 0]],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0],
+        };
+        let mut contracts = ContractStore::empty();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut ships = CraftStore::empty();
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &corporations,
+            Tick(1),
+            &mut events,
+        );
+        assert_eq!(contracts.ids.len(), 0, "no post when spread < transport");
+    }
+
+    #[test]
+    fn arbitrage_corp_rotation_assigns_first_refusal() {
+        use crate::config::{ArbitrageCfg, DispatchCfg, ShipyardCfg, TrophicCfg};
+        // 4 stations, 2 corps, all-zero transport so every spread clears.
+        // route_index 0 (0->1) at scan_index 1 -> corp (0+1)%2 = 1.
+        let stations = stations_with_prices(&[
+            vec![100_000i64, 0],
+            vec![500_000i64, 0],
+            vec![100_000i64, 0],
+            vec![500_000i64, 0],
+        ]);
+        let mut corporations = CorporationStore::empty();
+        let _corp0 = corporations.push(10_000_000_000i64, StationId { slot: 0, generation: 0 });
+        let corp1 = corporations.push(10_000_000_000i64, StationId { slot: 0, generation: 0 });
+        let arb = ArbitrageCfg {
+            scan_interval: 1,
+            wage_flat_micros: 0,
+            wage_share_milli: 0,
+            transport_micros: vec![vec![0i64; 4]; 4],
+            qty_ladder: vec![5],
+            max_posts_per_scan: 64,
+            arb_premium_micros: vec![0, 0],
+        };
+        let mut contracts = ContractStore::empty();
+        let dispatch = DispatchCfg {
+            demand_low: 0,
+            demand_high: 0,
+            stagger_period: 0,
+            contract_reward_micros: 0,
+            contract_qty: 0,
+        };
+        let mut ships = CraftStore::empty();
+        let mut diag = AssignDiag::default();
+        let route_evidence = crate::world::RouteEvidence { robs: Vec::new(), cursor: Vec::new() };
+        let mut events = EventStream::new();
+        // Tick 1 -> scan_index = 1/1 = 1. route_index 0 (0->1): corp (0+1)%2 = 1.
+        run_scripted_dispatch(
+            &mut contracts,
+            &stations,
+            &mut ships,
+            &[],
+            &route_evidence,
+            false,
+            false,
+            &mut diag,
+            &dispatch,
+            &ShipyardCfg::default(),
+            &TrophicCfg::default(),
+            &arb,
+            &corporations,
+            Tick(1),
+            &mut events,
+        );
+        let first_post = contracts.corp.first().copied();
+        assert_eq!(
+            first_post,
+            Some(corp1),
+            "route_index=0 scan_index=1 -> corp (0+1)%2=1"
         );
     }
 
@@ -3233,6 +3541,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -3253,6 +3563,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(2),
             &mut events,
         );
@@ -3418,6 +3730,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3443,6 +3757,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &scoring,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3470,6 +3786,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &scoring,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3528,6 +3846,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &scoring,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3555,6 +3875,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &scoring,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3605,6 +3927,8 @@ mod tests {
             &dispatch,
             &ShipyardCfg::default(),
             &TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut EventStream::new(),
         );
@@ -3825,6 +4149,8 @@ mod tests {
             &dispatch,
             &crate::config::ShipyardCfg::default(),
             &crate::config::TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut events,
         );
@@ -4325,6 +4651,8 @@ mod tests {
             &dispatch,
             &ShipyardCfg::default(),
             &trophic,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(100),
             &mut events,
         );
@@ -4369,6 +4697,8 @@ mod tests {
             &dispatch,
             &ShipyardCfg::default(),
             &trophic,
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(100),
             &mut events,
         );
@@ -4727,6 +5057,8 @@ mod tests {
             &dispatch,
             &shipyard,
             &crate::config::TrophicCfg::default(),
+            &crate::config::ArbitrageCfg::default(),
+            &CorporationStore::empty(),
             Tick(1),
             &mut events,
         );

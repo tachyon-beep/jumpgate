@@ -42,7 +42,9 @@ impl RouteEvidence {
             return 0;
         };
         let lo = info_tick.0.saturating_sub(window);
-        ring.iter().filter(|t| t.0 > lo && t.0 <= info_tick.0).count() as u32
+        ring.iter()
+            .filter(|t| t.0 > lo && t.0 <= info_tick.0)
+            .count() as u32
     }
 }
 
@@ -149,7 +151,12 @@ impl View {
 pub enum ResetError {
     /// Craft `craft_index`'s worst-case (empty-tank) braking cannot resolve the
     /// arrival sphere at this `dt`: `a_max_empty * dt^2 >= limit` (limit = R/(2·k_brake)).
-    Unbrakable { craft_index: usize, a_max_empty: f64, dt: f64, limit: f64 },
+    Unbrakable {
+        craft_index: usize,
+        a_max_empty: f64,
+        dt: f64,
+        limit: f64,
+    },
     /// An economy init vec referenced an out-of-range index (`what` names the
     /// reference kind, e.g. `"station.body_index"`; `index` is the bad value).
     /// Validated before tick 0 so a malformed economy config never mints a
@@ -174,7 +181,12 @@ pub enum ResetError {
 impl std::fmt::Display for ResetError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ResetError::Unbrakable { craft_index, a_max_empty, dt, limit } => write!(
+            ResetError::Unbrakable {
+                craft_index,
+                a_max_empty,
+                dt,
+                limit,
+            } => write!(
                 f,
                 "craft {craft_index} is unbrakable: a_max_empty*dt^2 = {} >= R/(2*k_brake) = {limit} \
                  (a_max_empty={a_max_empty}, dt={dt}); remedy: lower max_thrust, raise dry_mass, or shrink dt",
@@ -209,7 +221,9 @@ impl World {
         // before minting any stores.
         let n_goods = cfg.goods.goods.len();
         if n_goods == 0 {
-            return Err(ResetError::BadGoodsCfg { reason: "GoodsCfg has zero goods" });
+            return Err(ResetError::BadGoodsCfg {
+                reason: "GoodsCfg has zero goods",
+            });
         }
         for (si, s) in cfg.stations.iter().enumerate() {
             if s.initial_stock.len() != n_goods {
@@ -245,7 +259,12 @@ impl World {
             let dry = c.spec.base_dry_mass;
             let a_max_empty = c.spec.base_max_thrust / dry;
             if !(dry > 0.0 && a_max_empty.is_finite() && a_max_empty * dt * dt < limit) {
-                return Err(ResetError::Unbrakable { craft_index: i, a_max_empty, dt, limit });
+                return Err(ResetError::Unbrakable {
+                    craft_index: i,
+                    a_max_empty,
+                    dt,
+                    limit,
+                });
             }
         }
         // Media half-on validation (BEFORE minting, like BadEconomyRef): the
@@ -266,7 +285,11 @@ impl World {
                     reason: "lot_mass > 0 but price_cfg.base_micros[Fuel] == 0",
                 });
             }
-            if cfg.stations.iter().any(|s| s.initial_price_micros.get(fuel).copied().unwrap_or(0) == 0) {
+            if cfg
+                .stations
+                .iter()
+                .any(|s| s.initial_price_micros.get(fuel).copied().unwrap_or(0) == 0)
+            {
                 return Err(ResetError::BadRefuelCfg {
                     reason: "lot_mass > 0 but a station's seeded initial_price_micros[Fuel] == 0",
                 });
@@ -370,11 +393,15 @@ impl World {
             // Media column (v5): a comms-log for non-pirate craft on a
             // media-live world; pirates are information-blind by construction
             // (spec §16 OD-6) — `None`, like every row when media is off.
-            ships.gossip.push(if media_live && c.role != crate::stores::CraftRole::Pirate {
-                Some(crate::media::GossipBuffer::empty(cfg.media.craft_gossip_slots))
-            } else {
-                None
-            });
+            ships.gossip.push(
+                if media_live && c.role != crate::stores::CraftRole::Pirate {
+                    Some(crate::media::GossipBuffer::empty(
+                        cfg.media.craft_gossip_slots,
+                    ))
+                } else {
+                    None
+                },
+            );
             // Goods-rung hold (v6): empty for all craft including pirates.
             ships.hold.push(Vec::new());
         }
@@ -389,18 +416,30 @@ impl World {
         let mut stations = crate::economy::StationStore::empty();
         let mut station_ids: Vec<crate::ids::StationId> = Vec::with_capacity(cfg.stations.len());
         for s in cfg.stations.iter() {
-            let (slot, generation) = bodies.ids.id_at(s.body_index).ok_or(
-                ResetError::BadEconomyRef { what: "station.body_index", index: s.body_index },
-            )?;
+            let (slot, generation) =
+                bodies
+                    .ids
+                    .id_at(s.body_index)
+                    .ok_or(ResetError::BadEconomyRef {
+                        what: "station.body_index",
+                        index: s.body_index,
+                    })?;
             let body = BodyId { slot, generation };
-            station_ids.push(stations.push(body, s.initial_stock.clone(), s.initial_price_micros.clone()));
+            station_ids.push(stations.push(
+                body,
+                s.initial_stock.clone(),
+                s.initial_price_micros.clone(),
+            ));
         }
 
         let mut producers = crate::economy::ProducerStore::empty();
         for p in cfg.producers.iter() {
-            let station = *station_ids.get(p.station_index).ok_or(
-                ResetError::BadEconomyRef { what: "producer.station_index", index: p.station_index },
-            )?;
+            let station = *station_ids
+                .get(p.station_index)
+                .ok_or(ResetError::BadEconomyRef {
+                    what: "producer.station_index",
+                    index: p.station_index,
+                })?;
             producers.push(station, p.recipe);
         }
 
@@ -408,35 +447,47 @@ impl World {
         let mut corp_ids: Vec<crate::ids::CorporationId> =
             Vec::with_capacity(cfg.corporations.len());
         for c in cfg.corporations.iter() {
-            let home_station = *station_ids.get(c.home_station_index).ok_or(
-                ResetError::BadEconomyRef {
-                    what: "corporation.home_station_index",
-                    index: c.home_station_index,
-                },
-            )?;
+            let home_station =
+                *station_ids
+                    .get(c.home_station_index)
+                    .ok_or(ResetError::BadEconomyRef {
+                        what: "corporation.home_station_index",
+                        index: c.home_station_index,
+                    })?;
             corp_ids.push(corporations.push(c.treasury_micros, home_station));
         }
 
         let mut contracts = crate::economy::ContractStore::empty();
         for k in cfg.contracts.iter() {
-            let corp = *corp_ids.get(k.corp_index).ok_or(ResetError::BadEconomyRef {
-                what: "contract.corp_index",
-                index: k.corp_index,
-            })?;
-            let from_station = *station_ids.get(k.from_station_index).ok_or(
-                ResetError::BadEconomyRef {
-                    what: "contract.from_station_index",
-                    index: k.from_station_index,
-                },
-            )?;
-            let to_station = *station_ids.get(k.to_station_index).ok_or(
-                ResetError::BadEconomyRef {
-                    what: "contract.to_station_index",
-                    index: k.to_station_index,
-                },
-            )?;
+            let corp = *corp_ids
+                .get(k.corp_index)
+                .ok_or(ResetError::BadEconomyRef {
+                    what: "contract.corp_index",
+                    index: k.corp_index,
+                })?;
+            let from_station =
+                *station_ids
+                    .get(k.from_station_index)
+                    .ok_or(ResetError::BadEconomyRef {
+                        what: "contract.from_station_index",
+                        index: k.from_station_index,
+                    })?;
+            let to_station =
+                *station_ids
+                    .get(k.to_station_index)
+                    .ok_or(ResetError::BadEconomyRef {
+                        what: "contract.to_station_index",
+                        index: k.to_station_index,
+                    })?;
             // status Offered (ContractStore::push seeds it), escrow 0, no hauler.
-            contracts.push(corp, k.resource, k.qty, from_station, to_station, k.reward_micros);
+            contracts.push(
+                corp,
+                k.resource,
+                k.qty,
+                from_station,
+                to_station,
+                k.reward_micros,
+            );
         }
 
         // Route-evidence rings: dense n_stations² directed routes, sized once
@@ -488,8 +539,9 @@ impl World {
                     .id_at(cfg.trophic.hideout_body_index as usize)
                     .map(|(slot, generation)| crate::ids::BodyId { slot, generation })
                     .and_then(|hb| (0..station_ids.len()).find(|&s| stations.body[s] == hb));
-                let candidates: Vec<usize> =
-                    (0..station_ids.len()).filter(|&s| Some(s) != haven).collect();
+                let candidates: Vec<usize> = (0..station_ids.len())
+                    .filter(|&s| Some(s) != haven)
+                    .collect();
                 let Some(&srow) = candidates.get((u % candidates.len().max(1) as u64) as usize)
                 else {
                     continue; // haven-only world: nowhere huntable to scatter
@@ -569,7 +621,11 @@ impl World {
         match self.ship_index(id) {
             Some(i) => {
                 let eff = effective_params(&self.ships.spec[i], &self.ships.mods[i]);
-                crate::math::tsiolkovsky_dv(eff.exhaust_velocity, eff.dry_mass, self.ships.fuel_mass[i])
+                crate::math::tsiolkovsky_dv(
+                    eff.exhaust_velocity,
+                    eff.dry_mass,
+                    self.ships.fuel_mass[i],
+                )
             }
             None => 0.0,
         }
@@ -716,8 +772,7 @@ impl World {
     /// intended) contract. `None` for a stale id.
     pub fn craft_is_idle(&self, id: CraftId) -> Option<bool> {
         self.ship_index(id).map(|i| {
-            self.ships.role[i] == crate::stores::CraftRole::Idle
-                && self.ships.contract[i].is_none()
+            self.ships.role[i] == crate::stores::CraftRole::Idle && self.ships.contract[i].is_none()
         })
     }
 
@@ -749,8 +804,7 @@ impl World {
         rows.sort_by(|a, b| a.0.total_cmp(&b.0));
         rows.into_iter()
             .map(|(_, row)| {
-                let active = self.ships.pirate[row]
-                    .is_some_and(|ps| self.tick >= ps.lie_low_until);
+                let active = self.ships.pirate[row].is_some_and(|ps| self.tick >= ps.lie_low_until);
                 let s = crate::pirate::strength(
                     self.ships.role[row],
                     self.ships.upgrades[row],
@@ -812,6 +866,8 @@ impl World {
             &self.config.dispatch_cfg,
             &self.config.shipyard,
             &self.config.trophic,
+            &self.config.arbitrage,
+            &self.corporations,
             next,
             &mut self.events,
         );
@@ -1007,15 +1063,23 @@ impl World {
             let fuel = self.ships.fuel_mass[ci];
 
             let (dest_pos, dest_vel) = match self.ships.nav[ci] {
-                NavState::Seeking { dest, .. } => {
-                    (self.resolve_dest_pos(dest, cur), self.resolve_dest_vel(dest, cur))
-                }
+                NavState::Seeking { dest, .. } => (
+                    self.resolve_dest_pos(dest, cur),
+                    self.resolve_dest_vel(dest, cur),
+                ),
                 NavState::Idle => (pos, Vec3::ZERO), // unused (throttle will be 0)
                 NavState::DirectThrust { .. } => (pos, Vec3::ZERO), // unused (autopilot ignores dest)
             };
             let (thrust_dir, throttle) = autopilot_command(
-                self.ships.nav[ci], pos, vel, dest_pos, dest_vel, fuel, &eff,
-                &self.config.guidance, dt,
+                self.ships.nav[ci],
+                pos,
+                vel,
+                dest_pos,
+                dest_vel,
+                fuel,
+                &eff,
+                &self.config.guidance,
+                dt,
             );
 
             let (thrust_accel, fuel_consumed) =
@@ -1046,8 +1110,7 @@ impl World {
             // UNHASHED fuel diagnostics: duty, cumulative burn, and low-water.
             // Diagnostics-only; no behavior stage reads `fuel_diag`.
             if fuel_consumed > 0.0 {
-                self.fuel_diag.thrust_ticks[ci] =
-                    self.fuel_diag.thrust_ticks[ci].saturating_add(1);
+                self.fuel_diag.thrust_ticks[ci] = self.fuel_diag.thrust_ticks[ci].saturating_add(1);
                 self.fuel_diag.burned_mass[ci] += fuel_consumed;
             }
             if self.ships.fuel_mass[ci] < self.fuel_diag.min_fuel_mass[ci] {
@@ -1235,7 +1298,9 @@ impl World {
             })
             .collect();
         for (craft, opened) in leg_edges {
-            let Some(row) = self.ship_index(craft) else { continue };
+            let Some(row) = self.ship_index(craft) else {
+                continue;
+            };
             if opened {
                 self.fuel_diag.leg_start_fuel[row] = Some(self.ships.fuel_mass[row]);
             } else if let Some(start) = self.fuel_diag.leg_start_fuel[row].take() {
@@ -1256,7 +1321,9 @@ impl World {
         //      modulo-by-zero if a fixture sets the interval to 0 (clock disabled).
         //      Disjoint &mut field borrows (`stations`, `events`) + read-only price_cfg.
         if self.config.price_cfg.reprice_interval > 0
-            && next.0.is_multiple_of(self.config.price_cfg.reprice_interval as u64)
+            && next
+                .0
+                .is_multiple_of(self.config.price_cfg.reprice_interval as u64)
         {
             crate::economy::update_prices(
                 &mut self.stations,
@@ -1423,7 +1490,9 @@ impl StateView for World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, SubstepCfg};
+    use crate::config::{
+        BaseSpec, BodyInit, CraftInit, GuidanceParams, OrbitalElements, SubstepCfg,
+    };
     use crate::contract::StateView;
     use crate::types::CommandKind;
 
@@ -1493,8 +1562,15 @@ mod tests {
         // pattern; no layout, fold-order, or stepping change).
         let (world, _) = World::reset(one_body_one_craft()).expect("resolvable cfg");
         let id = world.ships.ids_at(0);
-        assert_eq!(world.craft_role(id), Some(crate::stores::CraftRole::Idle), "live read");
-        let stale = CraftId { slot: id.slot, generation: id.generation + 1 };
+        assert_eq!(
+            world.craft_role(id),
+            Some(crate::stores::CraftRole::Idle),
+            "live read"
+        );
+        let stale = CraftId {
+            slot: id.slot,
+            generation: id.generation + 1,
+        };
         assert_eq!(world.craft_role(stale), None, "stale id reads None");
     }
 
@@ -1593,7 +1669,10 @@ mod tests {
         // `is_finite()` guard branch must reject (else a divide-by-zero ship slips through).
         let mut cfg = one_body_one_thrusting_craft();
         cfg.craft[0].spec.base_dry_mass = 0.0;
-        assert!(matches!(World::reset(cfg), Err(ResetError::Unbrakable { craft_index: 0, .. })));
+        assert!(matches!(
+            World::reset(cfg),
+            Err(ResetError::Unbrakable { craft_index: 0, .. })
+        ));
     }
 
     #[test]
@@ -1601,7 +1680,10 @@ mod tests {
         let cfg = one_body_one_craft();
         let expected = cfg.config_hash();
         let (world, returned) = World::reset(cfg).expect("resolvable config");
-        assert_eq!(returned, expected, "reset must return RunConfig::config_hash()");
+        assert_eq!(
+            returned, expected,
+            "reset must return RunConfig::config_hash()"
+        );
         assert_eq!(world.tick(), Tick(0));
         assert_eq!(world.dt().get(), 1.0);
         assert_eq!(world.craft_ids().len(), 1);
@@ -1631,11 +1713,17 @@ mod tests {
         // Body position is derived from tick via ephemeris, never mutated in a store:
         // body_pos(t) must equal the ephemeris sample for that t regardless of stepping.
         let body_at_0_again = world.body_pos(body, Tick(0)).unwrap();
-        assert_eq!(body_at_0, body_at_0_again, "body_pos(0) is tick-derived, not stateful");
+        assert_eq!(
+            body_at_0, body_at_0_again,
+            "body_pos(0) is tick-derived, not stateful"
+        );
 
         // The craft moved but did not blow up: radius stays within a sane band.
         let r = world.craft_pos(world.craft_ids()[0]).unwrap().length();
-        assert!(r > 0.5 * start_r && r < 2.0 * start_r, "coast stayed bounded: r={r}");
+        assert!(
+            r > 0.5 * start_r && r < 2.0 * start_r,
+            "coast stayed bounded: r={r}"
+        );
     }
 
     #[test]
@@ -1653,7 +1741,10 @@ mod tests {
         crate::ingest::ingest_commands(&mut world, Tick(0), &mut cmds);
         match world.ships.nav[0] {
             NavState::Seeking { dv_remaining, .. } => {
-                assert!(dv_remaining.is_finite(), "dv must be finite, got {dv_remaining}");
+                assert!(
+                    dv_remaining.is_finite(),
+                    "dv must be finite, got {dv_remaining}"
+                );
                 assert!(dv_remaining > 0.0, "fuelled craft has positive dv budget");
             }
             other => panic!("expected Seeking, got {other:?}"),
@@ -1775,7 +1866,10 @@ mod tests {
         let dest = NavDest::Position(target);
         let mut cmds = vec![Command {
             target: Target::Entity(EntityRef::Craft(id)),
-            kind: CommandKind::Destination { dest, burn_budget: Some(1.0) },
+            kind: CommandKind::Destination {
+                dest,
+                burn_budget: Some(1.0),
+            },
         }];
 
         let d0 = world.craft_pos(id).unwrap().sub(target).length();
@@ -1784,7 +1878,11 @@ mod tests {
 
         // History: the command was logged at tick 0 and is visible via StateView.
         let recent = world.recent_commands(Tick(0));
-        assert_eq!(recent.len(), 1, "the issued command is recorded and exposed");
+        assert_eq!(
+            recent.len(),
+            1,
+            "the issued command is recorded and exposed"
+        );
         assert!(
             matches!(recent[0].kind, CommandKind::Destination { .. }),
             "recorded command kind preserved"
@@ -1795,7 +1893,9 @@ mod tests {
         assert!(
             evs.iter().any(|e| matches!(
                 e.kind,
-                EventKind::ActionIngested { target: Target::Entity(EntityRef::Craft(_)) }
+                EventKind::ActionIngested {
+                    target: Target::Entity(EntityRef::Craft(_))
+                }
             )),
             "ingestion emits ActionIngested"
         );
@@ -1831,7 +1931,11 @@ mod tests {
             world.step(&mut empty);
         }
         // Dormant craft are not ticked: position is unchanged.
-        assert_eq!(world.craft_pos(id).unwrap(), p0, "Lod::Nothing skips integration");
+        assert_eq!(
+            world.craft_pos(id).unwrap(),
+            p0,
+            "Lod::Nothing skips integration"
+        );
         assert_eq!(world.tick(), Tick(10));
     }
 
@@ -1857,12 +1961,22 @@ mod tests {
         assert_eq!(full.craft_pos(cid), world.craft_pos(cid));
         assert_eq!(full.craft_vel(cid), world.craft_vel(cid));
         assert_eq!(full.craft_fuel(cid), world.craft_fuel(cid));
-        assert_eq!(full.craft_fuel_capacity(cid), Some(1e-12), "fuel_capacity surfaced");
+        assert_eq!(
+            full.craft_fuel_capacity(cid),
+            Some(1e-12),
+            "fuel_capacity surfaced"
+        );
         // Body position in the View is the tick-derived ephemeris sample.
-        assert_eq!(full.bodies[0].1, world.body_pos(world.body_ids()[0], Tick(0)).unwrap());
+        assert_eq!(
+            full.bodies[0].1,
+            world.body_pos(world.body_ids()[0], Tick(0)).unwrap()
+        );
 
         let none = world.project(&DenyAll);
-        assert!(none.craft.is_empty() && none.bodies.is_empty(), "deny-all hides all entities");
+        assert!(
+            none.craft.is_empty() && none.bodies.is_empty(),
+            "deny-all hides all entities"
+        );
     }
 
     #[test]
@@ -1880,7 +1994,10 @@ mod tests {
         let target = Vec3::new(5.3, 0.0, 0.0);
         let mut cmds = vec![Command {
             target: Target::Entity(EntityRef::Craft(id)),
-            kind: CommandKind::Destination { dest: NavDest::Position(target), burn_budget: Some(1.0) },
+            kind: CommandKind::Destination {
+                dest: NavDest::Position(target),
+                burn_budget: Some(1.0),
+            },
         }];
         world.step(&mut cmds);
         for _ in 0..50 {
@@ -1899,7 +2016,7 @@ mod tests {
     /// path (distinct from `populated_economy_parity`, which hand-mutates).
     fn one_body_two_stations_one_miner() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{Recipe, Good};
+        use crate::economy::{Good, Recipe};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![
             StationInit {
@@ -1917,7 +2034,11 @@ mod tests {
         ];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 1,
+            },
         }];
         cfg
     }
@@ -1940,13 +2061,21 @@ mod tests {
         assert_eq!(wa.stations.stock[0], vec![7i64, 3i64]);
         assert_eq!(wa.stations.price_micros[0], vec![100i64, 200i64]);
         // The minted producer points at the minted StationId for station_index 0.
-        let st0 = wa.stations.ids.id_at(0).map(|(slot, generation)| crate::ids::StationId {
-            slot,
-            generation,
-        });
-        assert_eq!(Some(wa.producers.station[0]), st0, "producer bound to minted station 0");
+        let st0 = wa
+            .stations
+            .ids
+            .id_at(0)
+            .map(|(slot, generation)| crate::ids::StationId { slot, generation });
+        assert_eq!(
+            Some(wa.producers.station[0]),
+            st0,
+            "producer bound to minted station 0"
+        );
         // Flow counters start zero (no firing at reset).
-        assert_eq!(wa.econ, crate::economy::EconCounters::zero(crate::economy::N_GOODS_V1));
+        assert_eq!(
+            wa.econ,
+            crate::economy::EconCounters::zero(crate::economy::N_GOODS_V1)
+        );
     }
 
     #[test]
@@ -1973,11 +2102,17 @@ mod tests {
             home_station_index: 0,
             arb_premium_micros: 0,
         }];
-        cfg.refuel = crate::config::RefuelCfg { lot_mass: 5e-11, corp_index: 0 };
+        cfg.refuel = crate::config::RefuelCfg {
+            lot_mass: 5e-11,
+            corp_index: 0,
+        };
 
         // Arm 1: price_cfg.base_micros[Fuel] == 0 (the PriceCfg default).
         assert!(
-            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            matches!(
+                World::reset(cfg.clone()),
+                Err(ResetError::BadRefuelCfg { .. })
+            ),
             "lot_mass > 0 with base_micros[Fuel] == 0 must reject"
         );
 
@@ -1985,13 +2120,19 @@ mod tests {
         cfg.price_cfg.base_micros[fuel] = 5_000;
         cfg.stations[0].initial_price_micros[fuel] = 0;
         assert!(
-            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            matches!(
+                World::reset(cfg.clone()),
+                Err(ResetError::BadRefuelCfg { .. })
+            ),
             "lot_mass > 0 with a zero seeded station Fuel price must reject"
         );
 
         cfg.refuel.corp_index = cfg.corporations.len() as u32;
         assert!(
-            matches!(World::reset(cfg.clone()), Err(ResetError::BadRefuelCfg { .. })),
+            matches!(
+                World::reset(cfg.clone()),
+                Err(ResetError::BadRefuelCfg { .. })
+            ),
             "lot_mass > 0 with a stale Port corp index must reject"
         );
 
@@ -2029,11 +2170,16 @@ mod tests {
         // Row 0 is the fixture's Idle craft — non-pirate, so it gets a
         // comms-log too (the mint rule is `role != Pirate`, not Hauler-only).
         for row in [0usize, 1] {
-            let buf = w.ships.gossip[row].as_ref().expect("non-pirate row mints Some");
+            let buf = w.ships.gossip[row]
+                .as_ref()
+                .expect("non-pirate row mints Some");
             assert_eq!(buf.slots.len(), 8, "craft comms-log cap from config");
             assert_eq!(buf.occupied(), 0, "comms-logs mint empty");
         }
-        assert!(w.ships.gossip[2].is_none(), "pirate rows are information-blind: None");
+        assert!(
+            w.ships.gossip[2].is_none(),
+            "pirate rows are information-blind: None"
+        );
         assert_eq!(w.next_alert_seq, 0, "alert mint counter starts at 0");
         assert_eq!(w.media_diag.evictions, 0, "diagnostics mint zeroed");
         assert!(w.media_diag.contacts.is_empty(), "diagnostics mint empty");
@@ -2043,7 +2189,10 @@ mod tests {
         cfg.trophic.engage_radius_au = 0.0;
         let (w_off, _) = World::reset(cfg).expect("resolvable inert config");
         assert!(!w_off.media_live(), "engage 0.0 must close the dual gate");
-        assert!(w_off.station_gossip.is_empty(), "no reservoirs when media is off");
+        assert!(
+            w_off.station_gossip.is_empty(),
+            "no reservoirs when media is off"
+        );
         assert!(
             w_off.ships.gossip.iter().all(Option::is_none),
             "no comms-logs when media is off"
@@ -2104,12 +2253,18 @@ mod tests {
         w.tick = Tick(window + 1000);
         let now = w.tick;
         {
-            let buf = w.ships.gossip[1].as_mut().expect("hauler row mints a comms-log");
+            let buf = w.ships.gossip[1]
+                .as_mut()
+                .expect("hauler row mints a comms-log");
             buf.slots[0] = Some(test_alert(0, 3, now));
             buf.slots[1] = Some(test_alert(1, 3, Tick(now.0 - window - 1)));
             buf.slots[2] = Some(test_alert(2, 5, now));
         }
-        assert_eq!(w.route_evidence(a, 3), 1, "route 3: one fresh, one aged out");
+        assert_eq!(
+            w.route_evidence(a, 3),
+            1,
+            "route 3: one fresh, one aged out"
+        );
         assert_eq!(w.route_evidence(a, 5), 1, "route 5: the fresh alert counts");
         assert_eq!(w.route_evidence(a, 9), 0, "unmentioned route reads 0");
         for route in [3usize, 5, 9] {
@@ -2143,7 +2298,8 @@ mod tests {
         );
         assert_eq!(
             w.route_evidence(reader, 1),
-            w.route_evidence.count_recent(1, w.ships.info_tick[0], window),
+            w.route_evidence
+                .count_recent(1, w.ships.info_tick[0], window),
             "media-off accessor == the legacy ring read"
         );
         assert_eq!(w.route_evidence(reader, 9), 0, "out-of-range route reads 0");
@@ -2231,7 +2387,9 @@ mod tests {
             assert_eq!(w.next_alert_seq, 0, "mint counter untouched");
             assert_eq!(
                 w.rng.stream(RngStream::Media).next_u64(),
-                RngStreams::from_master(master).stream(RngStream::Media).next_u64(),
+                RngStreams::from_master(master)
+                    .stream(RngStream::Media)
+                    .next_u64(),
                 "Media stream cursor untouched (zero draws consumed)"
             );
         };
@@ -2257,21 +2415,24 @@ mod tests {
         let a = craft_id_at(&w, 1);
         let b = craft_id_at(&w, 2);
         let t0 = Tick(1000);
-        w.ships.gossip[1].as_mut().expect("comms-log").slots[0] =
-            Some(test_alert(9, 2, t0));
+        w.ships.gossip[1].as_mut().expect("comms-log").slots[0] = Some(test_alert(9, 2, t0));
         w.ships.gossip[2].as_mut().expect("comms-log").slots[0] =
             Some(test_alert(9, 2, Tick(t0.0 + 3000)));
         // Past A's horizon (t0 + window) but not past B's (t0 + 3000 + window).
         w.tick = Tick(t0.0 + window + 1500);
         assert_eq!(w.route_evidence(a, 2), 0, "A forgets on its own clock");
-        assert_eq!(w.route_evidence(b, 2), 1, "B still holds it: the return staggers");
+        assert_eq!(
+            w.route_evidence(b, 2),
+            1,
+            "B still holds it: the return staggers"
+        );
     }
 
     /// One station (Ore=0) with a ∅->Ore(5) miner at interval 1, attached to it.
     /// Used to prove `run_producers` is wired into `World::step`.
     fn one_body_one_station_one_miner_ore_zero() -> RunConfig {
         use crate::config::{ProducerInit, StationInit};
-        use crate::economy::{Recipe, Good};
+        use crate::economy::{Good, Recipe};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
@@ -2281,7 +2442,11 @@ mod tests {
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 1,
+            },
         }];
         cfg
     }
@@ -2322,7 +2487,10 @@ mod tests {
         }];
         assert!(matches!(
             World::reset(cfg),
-            Err(ResetError::BadEconomyRef { what: "station.body_index", index: 5 })
+            Err(ResetError::BadEconomyRef {
+                what: "station.body_index",
+                index: 5
+            })
         ));
     }
 
@@ -2415,7 +2583,14 @@ mod tests {
         let body_mass = 1e-12;
         cfg.bodies.push(BodyInit {
             mass: body_mass,
-            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            elements: OrbitalElements {
+                a,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
         });
         // Craft co-located + co-orbiting with body 1 at tick 0.
         let v_circ = (crate::G_CANONICAL * (1.0 + body_mass) / a).sqrt();
@@ -2423,12 +2598,25 @@ mod tests {
         cfg.craft[0].vel = Vec3::new(0.0, v_circ, 0.0);
         cfg.stations = vec![
             // Station A (origin) on the FAST body: 10 Fuel covers the 5-unit load.
-            StationInit { body_index: 1, initial_stock: vec![0i64, 10i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+            StationInit {
+                body_index: 1,
+                initial_stock: vec![0i64, 10i64],
+                initial_price_micros: vec![0i64, 0i64],
+                sells_upgrades: false,
+            },
             // Station B (destination) on the central star.
-            StationInit { body_index: 0, initial_stock: vec![0i64, 0i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+            StationInit {
+                body_index: 0,
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
+                sells_upgrades: false,
+            },
         ];
-        cfg.corporations =
-            vec![CorporationInit { treasury_micros: 5_000_000, home_station_index: 0, arb_premium_micros: 0 }];
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 5_000_000,
+            home_station_index: 0,
+            arb_premium_micros: 0,
+        }];
         cfg.contracts = vec![ContractInit {
             corp_index: 0,
             resource: Good::FUEL,
@@ -2553,7 +2741,10 @@ mod tests {
 
         // Escrow refunded to the owning corp; corp treasury back to its pre-accept
         // value; escrow zeroed.
-        assert_eq!(world.contracts.escrow_micros[cidx], 0, "escrow zeroed on fail");
+        assert_eq!(
+            world.contracts.escrow_micros[cidx], 0,
+            "escrow zeroed on fail"
+        );
         assert_eq!(
             world.corporations.treasury_micros[0], initial_treasury,
             "escrow refunded to corp treasury"
@@ -2561,7 +2752,10 @@ mod tests {
 
         // Craft cargo/contract handle cleared; role back to Idle.
         let crow = world.ships.index_of(craft).unwrap();
-        assert_eq!(world.ships.cargo[crow], None, "cargo cleared (lost) on fail");
+        assert_eq!(
+            world.ships.cargo[crow], None,
+            "cargo cleared (lost) on fail"
+        );
         assert_eq!(world.ships.contract[crow], None, "contract handle cleared");
         assert_eq!(world.ships.role[crow], CraftRole::Idle, "role back to Idle");
 
@@ -2576,7 +2770,10 @@ mod tests {
         let final_credit = world.corporations.treasury_micros.iter().sum::<i64>()
             + world.ships.credits_micros.iter().sum::<i64>()
             + world.contracts.escrow_micros.iter().sum::<i64>();
-        assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+        assert_eq!(
+            final_credit, initial_credit,
+            "Σtreasury+Σcredits+Σescrow invariant"
+        );
     }
 
     #[test]
@@ -2606,7 +2803,10 @@ mod tests {
 
         // Contract escrowed and loaded (final status CargoLoaded after one step).
         assert_eq!(world.contracts.status[cidx], ContractStatus::CargoLoaded);
-        assert_eq!(world.contracts.escrow_micros[cidx], 1_000_000, "escrow == reward");
+        assert_eq!(
+            world.contracts.escrow_micros[cidx], 1_000_000,
+            "escrow == reward"
+        );
         assert_eq!(world.contracts.hauler[cidx], Some(craft), "hauler bound");
         // Corp treasury debited by the reward (escrow held off-balance-sheet).
         assert_eq!(world.corporations.treasury_micros[0], 4_000_000);
@@ -2652,14 +2852,18 @@ mod tests {
     /// trigger and a repost is warranted after the first delivery.
     fn full_stage1_self_running_fixture() -> RunConfig {
         use crate::config::{CorporationInit, ProducerInit};
-        use crate::economy::{Recipe, Good};
+        use crate::economy::{Good, Recipe};
         let mut cfg = two_body_contract_fixture();
         // Producers on station A (origin) + a demand sink on station B (destination).
         cfg.producers = vec![
             // Miner: ∅ -> Ore(5) every tick.
             ProducerInit {
                 station_index: 0,
-                recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 1 },
+                recipe: Recipe {
+                    input: None,
+                    output: Some((Good::ORE, 5)),
+                    interval: 1,
+                },
             },
             // Refiner: Ore(2) -> Fuel(2) every tick (keeps A restocked with Fuel).
             ProducerInit {
@@ -2673,7 +2877,11 @@ mod tests {
             // Demand sink at B: Fuel(1) -> ∅ every tick (consumes delivered Fuel).
             ProducerInit {
                 station_index: 1,
-                recipe: Recipe { input: Some((Good::FUEL, 1)), output: None, interval: 1 },
+                recipe: Recipe {
+                    input: Some((Good::FUEL, 1)),
+                    output: None,
+                    interval: 1,
+                },
             },
         ];
         // Trigger repost while B's stock sits below demand_low (5-unit deliveries,
@@ -2696,7 +2904,7 @@ mod tests {
 
     #[test]
     fn scripted_dispatch_makes_stage1_loop_self_run() {
-        use crate::economy::{ContractStatus, N_GOODS_V1, Good};
+        use crate::economy::{ContractStatus, Good, N_GOODS_V1};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
         let fuel = Good::FUEL.index();
@@ -2755,8 +2963,14 @@ mod tests {
                 break;
             }
         }
-        assert!(completed, "at least one contract self-completed within the step bound");
-        assert!(b_fuel_seen_positive, "station B Fuel stock saw deliveries (>0 at some point)");
+        assert!(
+            completed,
+            "at least one contract self-completed within the step bound"
+        );
+        assert!(
+            b_fuel_seen_positive,
+            "station B Fuel stock saw deliveries (>0 at some point)"
+        );
 
         // Run a few ticks past the first completion so the REPOST branch fires (B's
         // stock is below demand_low after the sink consumes the delivery).
@@ -2818,7 +3032,10 @@ mod tests {
                 break;
             }
         }
-        assert!(completed, "contract reached Completed within the step bound");
+        assert!(
+            completed,
+            "contract reached Completed within the step bound"
+        );
 
         // Cargo unloaded into station B (+5 Fuel); station B opened at 0.
         let crow = world.ships.index_of(craft).unwrap();
@@ -2847,7 +3064,10 @@ mod tests {
         let final_credit = world.corporations.treasury_micros.iter().sum::<i64>()
             + world.ships.credits_micros.iter().sum::<i64>()
             + world.contracts.escrow_micros.iter().sum::<i64>();
-        assert_eq!(final_credit, initial_credit, "Σtreasury+Σcredits+Σescrow invariant");
+        assert_eq!(
+            final_credit, initial_credit,
+            "Σtreasury+Σcredits+Σescrow invariant"
+        );
     }
 
     /// Phase-0b fuel instrument: one delivery run brackets exactly one
@@ -2892,9 +3112,18 @@ mod tests {
         let (close_tick, burn_permille) = world.fuel_diag.leg_burns[0];
         assert!(close_tick.0 > 0, "leg closed at a real tick");
         assert!(burn_permille <= 1000, "leg burn is a permille of capacity");
-        assert_eq!(world.fuel_diag.leg_start_fuel[0], None, "bracket consumed at close");
-        assert!(world.fuel_diag.thrust_ticks[0] > 0, "duty counted thrusting ticks");
-        assert!(world.fuel_diag.burned_mass[0] > 0.0, "cumulative burn accumulated");
+        assert_eq!(
+            world.fuel_diag.leg_start_fuel[0], None,
+            "bracket consumed at close"
+        );
+        assert!(
+            world.fuel_diag.thrust_ticks[0] > 0,
+            "duty counted thrusting ticks"
+        );
+        assert!(
+            world.fuel_diag.burned_mass[0] > 0.0,
+            "cumulative burn accumulated"
+        );
         assert!(
             world.fuel_diag.min_fuel_mass[0] <= world.ships.fuel_mass[0],
             "low-water mark never exceeds the live tank"
@@ -2917,30 +3146,67 @@ mod tests {
         let board = world.offered_contracts();
         assert_eq!(board.len(), 1, "one seeded Offered contract");
         let (cid, reward, from, to) = board[0];
-        assert_eq!(cid, ContractId { slot: 0, generation: 0 });
+        assert_eq!(
+            cid,
+            ContractId {
+                slot: 0,
+                generation: 0
+            }
+        );
         assert_eq!(reward, 1_000_000);
-        assert_eq!(from, StationId { slot: 0, generation: 0 });
-        assert_eq!(to, StationId { slot: 1, generation: 0 });
+        assert_eq!(
+            from,
+            StationId {
+                slot: 0,
+                generation: 0
+            }
+        );
+        assert_eq!(
+            to,
+            StationId {
+                slot: 1,
+                generation: 0
+            }
+        );
 
         // (2) station_pos == the station's body position at the current tick (the
         // same eph read the projection makes); stale id -> None.
         let view = world.project(&FullObserver);
-        assert_eq!(world.station_pos(from), view.body_pos(world.stations.body[0]));
+        assert_eq!(
+            world.station_pos(from),
+            view.body_pos(world.stations.body[0])
+        );
         assert_eq!(world.station_pos(to), view.body_pos(world.stations.body[1]));
-        assert_eq!(world.station_pos(StationId { slot: 99, generation: 0 }), None);
+        assert_eq!(
+            world.station_pos(StationId {
+                slot: 99,
+                generation: 0
+            }),
+            None
+        );
 
         // (3) Wallet/idleness before any motion; stale craft id -> None.
         assert_eq!(world.craft_credits(craft), Some(0));
         assert_eq!(world.craft_is_idle(craft), Some(true));
-        let stale = CraftId { slot: 99, generation: 0 };
+        let stale = CraftId {
+            slot: 99,
+            generation: 0,
+        };
         assert_eq!(world.craft_credits(stale), None);
         assert_eq!(world.craft_is_idle(stale), None);
 
         // (4) Accept-INTENT alone (ships.contract set pre-resolve; contract still
         // Offered + hauler None) takes the slot OFF the board.
         world.ships.contract[crow] = Some(cid);
-        assert!(world.offered_contracts().is_empty(), "intent claims the slot");
-        assert_eq!(world.craft_is_idle(craft), Some(false), "intent breaks idleness");
+        assert!(
+            world.offered_contracts().is_empty(),
+            "intent claims the slot"
+        );
+        assert_eq!(
+            world.craft_is_idle(craft),
+            Some(false),
+            "intent breaks idleness"
+        );
         world.ships.contract[crow] = None;
         assert_eq!(world.offered_contracts().len(), 1, "board restored");
 
@@ -2951,7 +3217,10 @@ mod tests {
             kind: CommandKind::AcceptContract { contract: cid },
         }];
         world.step(&mut cmds);
-        assert!(world.offered_contracts().is_empty(), "accepted contract off the board");
+        assert!(
+            world.offered_contracts().is_empty(),
+            "accepted contract off the board"
+        );
         assert_eq!(world.craft_is_idle(craft), Some(false));
 
         // (6) Drive to delivery: escrow settles into the wallet, idle again.
@@ -2964,8 +3233,15 @@ mod tests {
                 break;
             }
         }
-        assert!(paid, "escrow settled into craft_credits within the step bound");
-        assert_eq!(world.craft_is_idle(craft), Some(true), "idle again after delivery");
+        assert!(
+            paid,
+            "escrow settled into craft_credits within the step bound"
+        );
+        assert_eq!(
+            world.craft_is_idle(craft),
+            Some(true),
+            "idle again after delivery"
+        );
     }
 
     // ---- Task 18: the PHASE-1 gate -----------------------------------------
@@ -3010,7 +3286,7 @@ mod tests {
 
     #[test]
     fn phase1_gate_resource_accounting_identity_holds_every_tick() {
-        use crate::economy::{N_GOODS_V1, Good};
+        use crate::economy::{Good, N_GOODS_V1};
         let (mut world, _h) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
 
@@ -3042,8 +3318,14 @@ mod tests {
         let ore = Good::ORE.index();
         let fuel = Good::FUEL.index();
         assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
-        assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
-        assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");
+        assert!(
+            world.econ.mined[fuel] > 0,
+            "refiner output leg live (mined Fuel > 0)"
+        );
+        assert!(
+            world.econ.consumed[ore] > 0,
+            "refiner input leg live (consumed Ore > 0)"
+        );
         assert!(
             world.econ.consumed[fuel] > 0,
             "deliver + sink-consume legs fired (consumed Fuel > 0)"
@@ -3056,7 +3338,7 @@ mod tests {
         // as in-transit goods. This test manually places a Good(0) unit into
         // a craft hold and verifies the identity still holds with the updated
         // helper. Without the hold sum, the identity equation is unbalanced.
-        use crate::economy::{N_GOODS_V1, Good};
+        use crate::economy::{Good, N_GOODS_V1};
         let (mut world, _) =
             World::reset(full_stage1_self_running_fixture()).expect("resolvable cfg");
         let mut initial = [0i64; N_GOODS_V1];
@@ -3068,7 +3350,10 @@ mod tests {
         // preserved (stock-1, hold+1) ONLY if assert_resource_identity sums the
         // hold; without the hold term the equation is short by 1 and panics.
         let fuel = Good::FUEL.index();
-        assert!(world.stations.stock[0][fuel] > 0, "fixture seeds Fuel at station A");
+        assert!(
+            world.stations.stock[0][fuel] > 0,
+            "fixture seeds Fuel at station A"
+        );
         world.stations.stock[0][fuel] -= 1;
         world.ships.hold[0].push((Good::FUEL, 1));
         // If assert_resource_identity doesn't sum hold, it will assert-fail here.
@@ -3099,13 +3384,19 @@ mod tests {
             world_b.step(&mut empty_b);
             let ha = crate::hash::state_hash(&world_a);
             let hb = crate::hash::state_hash(&world_b);
-            assert_eq!(ha, hb, "replay determinism: state_hash diverged at tick {t}");
+            assert_eq!(
+                ha, hb,
+                "replay determinism: state_hash diverged at tick {t}"
+            );
             last = ha;
         }
 
         // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
         // constant sequences would compare equal trivially.
-        assert_ne!(last, h0, "state_hash evolved over the 200-tick run (not a constant)");
+        assert_ne!(
+            last, h0,
+            "state_hash evolved over the 200-tick run (not a constant)"
+        );
     }
 
     /// Reprice-clock fixture (Task 20): one station (Fuel price live, Ore inert) with a
@@ -3120,7 +3411,7 @@ mod tests {
     /// spurious change there).
     fn one_station_growing_fuel_reprice_4() -> RunConfig {
         use crate::config::{PriceCfg, ProducerInit, StationInit};
-        use crate::economy::{Recipe, Good};
+        use crate::economy::{Good, Recipe};
         let mut cfg = one_body_one_craft();
         cfg.stations = vec![StationInit {
             body_index: 0,
@@ -3130,7 +3421,11 @@ mod tests {
         }];
         cfg.producers = vec![ProducerInit {
             station_index: 0,
-            recipe: Recipe { input: None, output: Some((Good::FUEL, 5)), interval: 1 },
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::FUEL, 5)),
+                interval: 1,
+            },
         }];
         cfg.price_cfg = PriceCfg {
             base_micros: vec![0i64, 100_000i64],
@@ -3167,23 +3462,41 @@ mod tests {
         }
 
         // Price stays at its opening value (0) through ticks 1..3, then RECOMPUTES at t=4.
-        assert_eq!(priced[0], 0, "t=1 (not a reprice tick): price unchanged from open (0)");
+        assert_eq!(
+            priced[0], 0,
+            "t=1 (not a reprice tick): price unchanged from open (0)"
+        );
         assert_eq!(priced[1], 0, "t=2 (not a reprice tick): price unchanged");
         assert_eq!(priced[2], 0, "t=3 (not a reprice tick): price unchanged");
-        assert_eq!(priced[3], 180_000, "t=4 reprice: s=20 -> 100_000*(2000-200)/1000");
+        assert_eq!(
+            priced[3], 180_000,
+            "t=4 reprice: s=20 -> 100_000*(2000-200)/1000"
+        );
         // Constant between reprice ticks even as stock moves (20 -> 35 over t=4..7).
         assert_eq!(priced[4], 180_000, "t=5: held constant despite stock 25");
         assert_eq!(priced[5], 180_000, "t=6: held constant despite stock 30");
         assert_eq!(priced[6], 180_000, "t=7: held constant despite stock 35");
-        assert_eq!(priced[7], 160_000, "t=8 reprice: s=40 -> 100_000*(2000-400)/1000");
+        assert_eq!(
+            priced[7], 160_000,
+            "t=8 reprice: s=40 -> 100_000*(2000-400)/1000"
+        );
         assert_eq!(priced[8], 160_000, "t=9: held constant");
         assert_eq!(priced[9], 160_000, "t=10: held constant");
         assert_eq!(priced[10], 160_000, "t=11: held constant");
-        assert_eq!(priced[11], 140_000, "t=12 reprice: s=60 -> 100_000*(2000-600)/1000");
+        assert_eq!(
+            priced[11], 140_000,
+            "t=12 reprice: s=60 -> 100_000*(2000-600)/1000"
+        );
 
         // The constancy-despite-moving-stock claim, asserted on both edges:
-        assert_ne!(priced[3], priced[2], "price CHANGES at the reprice tick (t=4 vs t=3)");
-        assert_eq!(priced[4], priced[3], "price HELD between reprice ticks (t=5 == t=4)");
+        assert_ne!(
+            priced[3], priced[2],
+            "price CHANGES at the reprice tick (t=4 vs t=3)"
+        );
+        assert_eq!(
+            priced[4], priced[3],
+            "price HELD between reprice ticks (t=5 == t=4)"
+        );
 
         // Determinism leg: two worlds, same config, identical empty inputs -> identical
         // price sequence.
@@ -3197,8 +3510,7 @@ mod tests {
             wa.step(&mut ea);
             wb.step(&mut eb);
             assert_eq!(
-                wa.stations.price_micros[0][fi],
-                wb.stations.price_micros[0][fi],
+                wa.stations.price_micros[0][fi], wb.stations.price_micros[0][fi],
                 "reprice sequence diverged at tick {t}"
             );
         }
@@ -3220,7 +3532,7 @@ mod tests {
     /// A/B levers.
     fn stage2_ab_loop_fixture(demand_high: i64, stagger_period: u32) -> RunConfig {
         use crate::config::{ContractInit, CorporationInit, ProducerInit, StationInit};
-        use crate::economy::{Recipe, Good};
+        use crate::economy::{Good, Recipe};
         let fuel = Good::FUEL.index();
         let mut cfg = one_body_one_thrusting_craft();
         // Negligible central mass so B's body is near-stationary and the from-rest
@@ -3230,7 +3542,14 @@ mod tests {
         // full post->dispatch->deliver wave fits well inside the 1000-tick window.
         cfg.bodies.push(BodyInit {
             mass: 1e-12,
-            elements: OrbitalElements { a: 0.02, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+            elements: OrbitalElements {
+                a: 0.02,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0: 0.0,
+            },
         });
         // FOUR Idle haulers, all co-located at origin body 0 (so staggered dispatch is
         // meaningful: >1 hauler can claim the burst).
@@ -3248,22 +3567,61 @@ mod tests {
         }
         cfg.stations = vec![
             // Station A (origin): deep Fuel stock + producers keep it restocked.
-            StationInit { body_index: 0, initial_stock: vec![0i64, 1000i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+            StationInit {
+                body_index: 0,
+                initial_stock: vec![0i64, 1000i64],
+                initial_price_micros: vec![0i64, 0i64],
+                sells_upgrades: false,
+            },
             // Station B (destination): a Fuel demand sink drains it each tick.
-            StationInit { body_index: 1, initial_stock: vec![0i64, 0i64], initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
+            StationInit {
+                body_index: 1,
+                initial_stock: vec![0i64, 0i64],
+                initial_price_micros: vec![0i64, 0i64],
+                sells_upgrades: false,
+            },
         ];
         cfg.producers = vec![
-            ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 20)), interval: 1 } },
-            ProducerInit { station_index: 0, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 1 } },
+            ProducerInit {
+                station_index: 0,
+                recipe: Recipe {
+                    input: None,
+                    output: Some((Good::ORE, 20)),
+                    interval: 1,
+                },
+            },
+            ProducerInit {
+                station_index: 0,
+                recipe: Recipe {
+                    input: Some((Good::ORE, 5)),
+                    output: Some((Good::FUEL, 5)),
+                    interval: 1,
+                },
+            },
             // Sink at B: consumes 5 Fuel/tick (== qty) so a staggered arrival is fully
             // drained before the next lands -> staggering visibly flattens the peak.
-            ProducerInit { station_index: 1, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 1 } },
+            ProducerInit {
+                station_index: 1,
+                recipe: Recipe {
+                    input: Some((Good::FUEL, 5)),
+                    output: None,
+                    interval: 1,
+                },
+            },
         ];
-        cfg.corporations = vec![CorporationInit { treasury_micros: 100_000_000_000, home_station_index: 0, arb_premium_micros: 0 }];
+        cfg.corporations = vec![CorporationInit {
+            treasury_micros: 100_000_000_000,
+            home_station_index: 0,
+            arb_premium_micros: 0,
+        }];
         // Seeded route template (Fuel A->B, qty 5) — the order-up-to repost clones it.
         cfg.contracts = vec![ContractInit {
-            corp_index: 0, resource: Good::FUEL, qty: 5,
-            from_station_index: 0, to_station_index: 1, reward_micros: 1_000,
+            corp_index: 0,
+            resource: Good::FUEL,
+            qty: 5,
+            from_station_index: 0,
+            to_station_index: 1,
+            reward_micros: 1_000,
         }];
         // Stage-2 pricing LIVE so price actually moves (named fixture constraint).
         cfg.price_cfg.base_micros[fuel] = 100_000;
@@ -3332,7 +3690,13 @@ mod tests {
         let peak = *series.iter().max().unwrap();
         let last200 = &series[800..];
         let band = last200.iter().max().unwrap() - last200.iter().min().unwrap();
-        Stage2Run { peak, band, accept_ticks, max_in_flight, completions }
+        Stage2Run {
+            peak,
+            band,
+            accept_ticks,
+            max_in_flight,
+            completions,
+        }
     }
 
     #[test]
@@ -3359,9 +3723,20 @@ mod tests {
 
         // (0) THE LOOP SUSTAINS in every config (return-routing): far past the 4-delivery
         // single-wave jam ceiling, with a BOUNDED steady-state band (no growing cycle).
-        for (label, r) in [("undamped", &undamped), ("deadband", &deadband), ("damped", &damped)] {
-            assert!(r.completions > 4, "{label}: forage loop sustains (completions={})", r.completions);
-            assert!(r.band <= r.peak, "{label}: steady-state band bounded by the overshoot, not growing");
+        for (label, r) in [
+            ("undamped", &undamped),
+            ("deadband", &deadband),
+            ("damped", &damped),
+        ] {
+            assert!(
+                r.completions > 4,
+                "{label}: forage loop sustains (completions={})",
+                r.completions
+            );
+            assert!(
+                r.band <= r.peak,
+                "{label}: steady-state band bounded by the overshoot, not growing"
+            );
         }
 
         // (1) THE DEADBAND has a real, discriminating effect: the order-up-to ceiling
@@ -3370,7 +3745,8 @@ mod tests {
         assert!(
             deadband.max_in_flight > undamped.max_in_flight,
             "deadband deepens the in-flight buffer: deadband={} undamped={}",
-            deadband.max_in_flight, undamped.max_in_flight
+            deadband.max_in_flight,
+            undamped.max_in_flight
         );
         assert_eq!(
             damped.max_in_flight, deadband.max_in_flight,
@@ -3379,11 +3755,16 @@ mod tests {
 
         // (2) STAGGER flattens the overshoot peak (clumped 4-hauler spike -> spread +
         // drained). Non-vacuity floor on the undamped peak, then a >=2x cut.
-        assert!(undamped.peak >= 20, "undamped overshoot is real: {}", undamped.peak);
+        assert!(
+            undamped.peak >= 20,
+            "undamped overshoot is real: {}",
+            undamped.peak
+        );
         assert!(
             damped.peak * 2 <= undamped.peak,
             "stagger at least halves the overshoot peak: damped={} undamped={}",
-            damped.peak, undamped.peak
+            damped.peak,
+            undamped.peak
         );
 
         // (3) STAGGER also TAMES the steady-state band the deadband alone would widen:
@@ -3392,17 +3773,28 @@ mod tests {
         assert!(
             deadband.band > undamped.band,
             "deadband alone widens the steady-state band: deadband={} undamped={}",
-            deadband.band, undamped.band
+            deadband.band,
+            undamped.band
         );
         assert!(
             damped.band < deadband.band,
             "stagger tames the band the deadband widens: damped={} deadband={}",
-            damped.band, deadband.band
+            damped.band,
+            deadband.band
         );
 
         // (4) STAGGER spreads the opening wave across ticks; undamped clumps it onto one.
-        assert_eq!(undamped.accept_ticks.len(), 1, "undamped clumps opening accepts: {:?}", undamped.accept_ticks);
-        assert!(damped.accept_ticks.len() > 1, "stagger spreads opening accepts: {:?}", damped.accept_ticks);
+        assert_eq!(
+            undamped.accept_ticks.len(),
+            1,
+            "undamped clumps opening accepts: {:?}",
+            undamped.accept_ticks
+        );
+        assert!(
+            damped.accept_ticks.len() > 1,
+            "stagger spreads opening accepts: {:?}",
+            damped.accept_ticks
+        );
     }
 
     #[test]
@@ -3416,8 +3808,7 @@ mod tests {
         // the loop sustains for many waves.
         use crate::economy::Good;
         let fuel = Good::FUEL.index();
-        let (mut world, _h) =
-            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+        let (mut world, _h) = World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
         let mut empty: Vec<Command> = Vec::new();
         let mut completions = 0usize;
         for t in 1..=1000u64 {
@@ -3460,12 +3851,11 @@ mod tests {
 
     #[test]
     fn phase2_gate_full_demand_deflation_harness_conserves() {
-        use crate::economy::{N_GOODS_V1, Good};
+        use crate::economy::{Good, N_GOODS_V1};
         // Conservation is config-independent; use the damped (30, 4) config so the full
         // post -> dispatch -> deliver -> sink-consume wave fires within the window
         // (first delivery ~tick 58), making the `consumed Fuel > 0` leg reachable.
-        let (mut world, _h) =
-            World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
+        let (mut world, _h) = World::reset(stage2_ab_loop_fixture(30, 4)).expect("resolvable cfg");
 
         // initial[r] = Σ station stock per resource at tick 0 (mined == consumed == 0).
         let mut initial = [0i64; N_GOODS_V1];
@@ -3490,7 +3880,11 @@ mod tests {
                 + w.ships.credits_micros.iter().sum::<i64>()
                 + w.contracts.escrow_micros.iter().sum::<i64>()
         };
-        assert_eq!(credit_now(&world), initial_credit, "credit identity holds at reset");
+        assert_eq!(
+            credit_now(&world),
+            initial_credit,
+            "credit identity holds at reset"
+        );
 
         let mut empty: Vec<Command> = Vec::new();
         for t in 1..=1000u64 {
@@ -3512,8 +3906,14 @@ mod tests {
         // reached station B via a delivered contract and was consumed by the sink there).
         let ore = Good::ORE.index();
         assert!(world.econ.mined[ore] > 0, "miner is live (mined Ore > 0)");
-        assert!(world.econ.mined[fuel] > 0, "refiner output leg live (mined Fuel > 0)");
-        assert!(world.econ.consumed[ore] > 0, "refiner input leg live (consumed Ore > 0)");
+        assert!(
+            world.econ.mined[fuel] > 0,
+            "refiner output leg live (mined Fuel > 0)"
+        );
+        assert!(
+            world.econ.consumed[ore] > 0,
+            "refiner input leg live (consumed Ore > 0)"
+        );
         assert!(
             world.econ.consumed[fuel] > 0,
             "deliver + sink-consume legs fired (consumed Fuel > 0)"
@@ -3549,13 +3949,19 @@ mod tests {
             world_b.step(&mut empty_b);
             let ha = crate::hash::state_hash(&world_a);
             let hb = crate::hash::state_hash(&world_b);
-            assert_eq!(ha, hb, "replay determinism: state_hash diverged at tick {t}");
+            assert_eq!(
+                ha, hb,
+                "replay determinism: state_hash diverged at tick {t}"
+            );
             last = ha;
         }
 
         // Non-vacuity guard: the hash sequence must actually EVOLVE over the run — two
         // constant sequences would compare equal trivially.
-        assert_ne!(last, h0, "state_hash evolved over the 1000-tick run (not a constant)");
+        assert_ne!(
+            last, h0,
+            "state_hash evolved over the 1000-tick run (not a constant)"
+        );
     }
 
     #[test]
