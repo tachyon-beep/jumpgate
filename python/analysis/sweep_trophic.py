@@ -110,6 +110,15 @@ EXCHANGE_RE = re.compile(
     r"\s+drain_per_100k=(?P<exchange_drain_per_100k>-?\d+)$"
 )
 
+# The BAZAAR drain read (rung A, A4.6, OD-2 solvency honesty): the Exchange
+# battery's consumed window (initial seeded treasury - final treasury) over the
+# run. Printed only when ExchangeCfg::active. Regex lands in the SAME commit as
+# the Rust println! (lockstep rule). Optional in ANCHORED: pre-A4.6 banked
+# outputs and Exchange-inactive runs parse as None.
+BAZAAR_DRAIN_RE = re.compile(
+    r"^BAZAAR drain=(?P<exchange_drain>-?\d+) ticks=(?P<ticks>\d+)$"
+)
+
 ANCHORED = {
     "result": (True, RESULT_RE),
     "media": (True, MEDIA_RE),
@@ -117,6 +126,7 @@ ANCHORED = {
     "fuel": (False, FUEL_RE),
     "bazaar": (False, BAZAAR_RE),   # rung A, scenario_bazaar; config-gated
     "exchange": (False, EXCHANGE_RE),  # rung A, OD-2 standing drain read
+    "bazaar_drain": (False, BAZAAR_DRAIN_RE),  # rung A (A4.6), OD-2 battery drain
 }
 
 PHASE_BINS = 10  # trip-phase histogram bins over [0, 1000] milli

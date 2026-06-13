@@ -122,11 +122,18 @@ struct MetaFacts {
     haulers: usize,
     pirates_initial: usize,
     station_radii_milli_au: Vec<u32>,
-    bazaar_mode: bool,   // A0: gate for BAZAAR anchored line
+    bazaar_mode: bool, // A0: gate for BAZAAR anchored line
     /// A0.5: count of distinct tradeable goods, read by sweep_trophic.py's
     /// META_RE `goods` group; printed as the META `goods=` tail only under
     /// bazaar_mode (true from A5).
     n_goods: usize,
+    /// A4.6 (OD-2): whether the Exchange corp is live this run — the gate for
+    /// the BAZAAR drain anchored line (recorded only, never a pass/fail gate).
+    exchange_active: bool,
+    /// A4.6: the Exchange corp's seeded battery treasury, captured from the
+    /// resolved cfg before reset. The BAZAAR drain line reports the consumed
+    /// window: `initial - final`.
+    initial_exchange_treasury_micros: i64,
 }
 
 /// Runner-side W9 liveness read: open-contract age at final tick.
@@ -191,6 +198,12 @@ fn simulate(args: &Args, mut jsonl: Option<&mut BufWriter<File>>) -> Result<RunP
             .collect(),
         bazaar_mode: false, // set true when simulate() builds MetaFacts for scenario_bazaar (A5); trophic/frontier stay silent
         n_goods: jumpgate_core::economy::N_GOODS_V1,
+        // A4.6: Exchange battery facts captured from cfg before reset consumes it.
+        exchange_active: cfg.exchange.active,
+        initial_exchange_treasury_micros: cfg
+            .corporations
+            .get(cfg.exchange.corp_index as usize)
+            .map_or(0, |c| c.treasury_micros),
     };
     let (mut world, _config_hash) =
         World::reset(cfg).map_err(|e| format!("scenario_{} must resolve: {e}", args.scenario))?;
@@ -948,11 +961,11 @@ fn main() -> ExitCode {
              trade_buys={} trade_sells={} arb_posts={} arb_withdrawals={}",
             args.seed,
             meta.scenario,
-            0i64,  // placeholder; scenario_bazaar populates via world accessor in A3
-            0u64,  // trade_buys
-            0u64,  // trade_sells
-            0u64,  // arb_posts
-            0u64,  // arb_withdrawals
+            0i64, // placeholder; scenario_bazaar populates via world accessor in A3
+            0u64, // trade_buys
+            0u64, // trade_sells
+            0u64, // arb_posts
+            0u64, // arb_withdrawals
         );
     }
 
@@ -963,6 +976,18 @@ fn main() -> ExitCode {
     // is forward-hooked for console calibration.
     let exchange_treasury = samples.last().map_or(0, |s| s.exchange_treasury_micros);
     println!("EXCHANGE treasury_micros={exchange_treasury} drain_per_100k=0");
+
+    // BAZAAR drain read (OD-2 solvency honesty, goods-as-goods A4.6). Printed
+    // only when the Exchange corp is live — the battery drain window for console
+    // judgment. Never a gate; recorded only (PDR-0006, synthesis Part 1.2).
+    // Lockstep: this println!, sweep_trophic's BAZAAR_DRAIN_RE, and its fixture
+    // land in the same commit. drain = seeded battery - final treasury.
+    if meta.exchange_active {
+        let drain = meta
+            .initial_exchange_treasury_micros
+            .saturating_sub(exchange_treasury);
+        println!("BAZAAR drain={drain} ticks={}", args.ticks);
+    }
 
     if let Some(path) = &args.gossip_log {
         write_gossip_log(&world, path);
@@ -1065,15 +1090,21 @@ mod tests {
 
     #[test]
     fn gossip_log_encodes_contract_fulfilled_as_deliver() {
-        use jumpgate_core::{scenario_trophic, ContractId, CraftId, World};
+        use jumpgate_core::{ContractId, CraftId, World, scenario_trophic};
         let world = World::reset(scenario_trophic(7))
             .expect("trophic resolves")
             .0;
         let e = Event {
             tick: Tick(100),
             kind: EventKind::ContractFulfilled {
-                contract: ContractId { slot: 1, generation: 0 },
-                hauler: CraftId { slot: 3, generation: 0 },
+                contract: ContractId {
+                    slot: 1,
+                    generation: 0,
+                },
+                hauler: CraftId {
+                    slot: 3,
+                    generation: 0,
+                },
             },
         };
         let row = gossip_log_event_json(&world, &e)
@@ -1092,12 +1123,15 @@ mod tests {
         let e = Event {
             tick: Tick(55),
             kind: EventKind::PirateLieLow {
-                pirate: CraftId { slot: 7, generation: 0 },
+                pirate: CraftId {
+                    slot: 7,
+                    generation: 0,
+                },
                 until: Tick(155),
             },
         };
-        let row = gossip_log_event_json(&world, &e)
-            .expect("PirateLieLow must produce a lie_low row");
+        let row =
+            gossip_log_event_json(&world, &e).expect("PirateLieLow must produce a lie_low row");
         assert_eq!(row["e"].as_str(), Some("lie_low"));
         assert_eq!(row["tick"].as_u64(), Some(55));
         assert_eq!(row["pirate"].as_u64(), Some(7));
@@ -1113,19 +1147,31 @@ mod tests {
         let e = Event {
             tick: Tick(20),
             kind: EventKind::ContractAccepted {
-                contract: ContractId { slot: 0, generation: 0 },
-                hauler: CraftId { slot: 2, generation: 0 },
+                contract: ContractId {
+                    slot: 0,
+                    generation: 0,
+                },
+                hauler: CraftId {
+                    slot: 2,
+                    generation: 0,
+                },
             },
         };
         // The world has contracts from scenario_trophic; slot 0 may not be live —
         // so we only assert the keys exist when a route is resolvable.
         // For a non-existent contract the row is still emitted with route=null.
-        let row = gossip_log_event_json(&world, &e)
-            .expect("ContractAccepted always emits an accept row");
+        let row =
+            gossip_log_event_json(&world, &e).expect("ContractAccepted always emits an accept row");
         assert_eq!(row["e"].as_str(), Some("accept"));
         // The new keys must be present (null is ok for a stale contract).
-        assert!(row.get("resource").is_some(), "accept row must have 'resource' key");
-        assert!(row.get("reward").is_some(), "accept row must have 'reward' key");
+        assert!(
+            row.get("resource").is_some(),
+            "accept row must have 'resource' key"
+        );
+        assert!(
+            row.get("reward").is_some(),
+            "accept row must have 'reward' key"
+        );
     }
 
     #[test]
@@ -1137,17 +1183,28 @@ mod tests {
         let e = Event {
             tick: Tick(30),
             kind: EventKind::Robbed {
-                pirate: CraftId { slot: 8, generation: 0 },
-                hauler: CraftId { slot: 2, generation: 0 },
-                contract: ContractId { slot: 0, generation: 0 },
+                pirate: CraftId {
+                    slot: 8,
+                    generation: 0,
+                },
+                hauler: CraftId {
+                    slot: 2,
+                    generation: 0,
+                },
+                contract: ContractId {
+                    slot: 0,
+                    generation: 0,
+                },
                 value_micros: 1_000_000,
             },
         };
-        let row = gossip_log_event_json(&world, &e)
-            .expect("Robbed always emits a rob row");
+        let row = gossip_log_event_json(&world, &e).expect("Robbed always emits a rob row");
         assert_eq!(row["e"].as_str(), Some("rob"));
-        assert_eq!(row["pirate"].as_u64(), Some(8),
-            "rob row must carry pirate slot");
+        assert_eq!(
+            row["pirate"].as_u64(),
+            Some(8),
+            "rob row must carry pirate slot"
+        );
     }
 
     #[test]
@@ -1157,14 +1214,23 @@ mod tests {
         use jumpgate_core::CraftId;
         // StationId for the denied station
         use jumpgate_core::StationId;
-        let craft = CraftId { slot: 3, generation: 0 };
-        let station = StationId { slot: 1, generation: 0 };
+        let craft = CraftId {
+            slot: 3,
+            generation: 0,
+        };
+        let station = StationId {
+            slot: 1,
+            generation: 0,
+        };
         let kind = EventKind::RefuelDenied {
             craft,
             station,
             reason: jumpgate_core::RefuelDeniedReason::NoStock,
         };
-        assert_eq!(chronicle_subject(&kind), Some(craft),
-            "RefuelDenied must thread into craft life arc");
+        assert_eq!(
+            chronicle_subject(&kind),
+            Some(craft),
+            "RefuelDenied must thread into craft life arc"
+        );
     }
 }

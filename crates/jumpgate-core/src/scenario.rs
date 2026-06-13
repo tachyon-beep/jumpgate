@@ -127,13 +127,27 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
     // --- bodies: star + 6 station bodies, seed-derived phases --------------
     let mut bodies = vec![BodyInit {
         mass: STAR_MASS,
-        elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+        elements: OrbitalElements {
+            a: 0.0,
+            e: 0.0,
+            i: 0.0,
+            raan: 0.0,
+            argp: 0.0,
+            m0: 0.0,
+        },
     }];
     for (k, &a) in STATION_ORBIT_AU.iter().enumerate() {
         let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
         bodies.push(BodyInit {
             mass: BODY_MASS,
-            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0 },
+            elements: OrbitalElements {
+                a,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0,
+            },
         });
     }
 
@@ -196,39 +210,148 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
     // change.
     let stock = |ore: i64, fuel: i64| -> Vec<i64> {
         let mut s = vec![0i64; crate::economy::N_GOODS_V1];
-        s[Good::ORE.index()]  = ore;
+        s[Good::ORE.index()] = ore;
         s[Good::FUEL.index()] = fuel;
         s
     };
     let stations = vec![
-        StationInit { body_index: 1, initial_stock: stock(40, 18), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
-        StationInit { body_index: 2, initial_stock: stock(40, 14), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
-        StationInit { body_index: 3, initial_stock: stock(40, 10), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
-        StationInit { body_index: 4, initial_stock: stock(18, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: true },
-        StationInit { body_index: 5, initial_stock: stock(14, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: false },
-        StationInit { body_index: 6, initial_stock: stock(10, 0), initial_price_micros: vec![0i64, 0i64], sells_upgrades: true },
+        StationInit {
+            body_index: 1,
+            initial_stock: stock(40, 18),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 2,
+            initial_stock: stock(40, 14),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 3,
+            initial_stock: stock(40, 10),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 4,
+            initial_stock: stock(18, 0),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: true,
+        },
+        StationInit {
+            body_index: 5,
+            initial_stock: stock(14, 0),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: false,
+        },
+        StationInit {
+            body_index: 6,
+            initial_stock: stock(10, 0),
+            initial_price_micros: vec![0i64, 0i64],
+            sells_upgrades: true,
+        },
     ];
     let producers = vec![
         // Ore miners at the sources.
-        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 2, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit {
+            station_index: 0,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 1,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 2,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
         // Refiners at the tier destinations (Ore -> Fuel): the Ore demand sinks.
-        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
-        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit {
+            station_index: 3,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
+        ProducerInit {
+            station_index: 4,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
+        ProducerInit {
+            station_index: 5,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
         // Fuel sinks back at the sources (per-tier return-leg demand).
-        ProducerInit { station_index: 0, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit {
+            station_index: 0,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
+        ProducerInit {
+            station_index: 1,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
+        ProducerInit {
+            station_index: 2,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
     ];
 
     // --- corps: 3 tier corps + the Yard (corp 3, receives upgrade payments).
     let corporations = vec![
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 3 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 4 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 0, home_station_index: 3 , arb_premium_micros: 0}, // the Yard
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 3,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 4,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 5,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 3,
+            arb_premium_micros: 0,
+        }, // the Yard
     ];
 
     // --- 12 directed route templates: per tier, 3 Ore legs out to the tier's
@@ -273,7 +396,7 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         grubstake_micros: 100_000,
         ransom_cap_micros: 6_000_000,
         starve_lie_low_ticks: 4_000,
-        hideout_body_index: 6, // outermost body (1.4 AU)
+        hideout_body_index: 6,    // outermost body (1.4 AU)
         pirate_max_reach_au: 0.6, // EXPLICIT (WGB §6) — was silent ..default(); unchanged
         hauler_belief_scoring: true,
         hauler_buy_policy: BuyPolicy::EscortFirst,
@@ -284,7 +407,10 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
         master_seed: seed,
         dt: Dt::new(0.25),
         softening: 1.0e-4,
-        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
+        substep_cfg: SubstepCfg {
+            accel_ref: 3.0e-4,
+            max_substeps: 64,
+        },
         ephemeris_window: 100_000,
         bodies,
         craft,
@@ -302,7 +428,10 @@ pub fn scenario_trophic(seed: u64) -> RunConfig {
             contract_qty: 0,
         },
         trophic,
-        shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
+        shipyard: ShipyardCfg {
+            corp_index: 3,
+            ..ShipyardCfg::default()
+        },
         media: MediaCfg::default(),
         refuel: crate::config::RefuelCfg::default(),
         goods: crate::config::GoodsCfg::default(),
@@ -328,13 +457,27 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     // phases via the existing mix (anti-memorization unchanged) -------------
     let mut bodies = vec![BodyInit {
         mass: STAR_MASS,
-        elements: OrbitalElements { a: 0.0, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0: 0.0 },
+        elements: OrbitalElements {
+            a: 0.0,
+            e: 0.0,
+            i: 0.0,
+            raan: 0.0,
+            argp: 0.0,
+            m0: 0.0,
+        },
     }];
     for (k, &a) in FRONTIER_ORBIT_AU.iter().enumerate() {
         let m0 = u64_to_unit_f64(mix(seed, (k + 1) as u64)) * std::f64::consts::TAU;
         bodies.push(BodyInit {
             mass: BODY_MASS,
-            elements: OrbitalElements { a, e: 0.0, i: 0.0, raan: 0.0, argp: 0.0, m0 },
+            elements: OrbitalElements {
+                a,
+                e: 0.0,
+                i: 0.0,
+                raan: 0.0,
+                argp: 0.0,
+                m0,
+            },
         });
     }
 
@@ -398,7 +541,7 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     // band — the trophic DEVIATION comment applies unchanged.
     let stock = |ore: i64, fuel: i64| -> Vec<i64> {
         let mut s = vec![0i64; crate::economy::N_GOODS_V1];
-        s[Good::ORE.index()]  = ore;
+        s[Good::ORE.index()] = ore;
         s[Good::FUEL.index()] = fuel;
         s
     };
@@ -436,31 +579,135 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
     ];
     let producers = vec![
         // Ore miners at the six tier sources.
-        ProducerInit { station_index: 0, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 1, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 3, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 7, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
-        ProducerInit { station_index: 8, recipe: Recipe { input: None, output: Some((Good::ORE, 5)), interval: 40 } },
+        ProducerInit {
+            station_index: 0,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 1,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 3,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 4,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 7,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
+        ProducerInit {
+            station_index: 8,
+            recipe: Recipe {
+                input: None,
+                output: Some((Good::ORE, 5)),
+                interval: 40,
+            },
+        },
         // Refiners at the three tier dests: the Ore demand sinks and the
         // propellant supply geography.
-        ProducerInit { station_index: 2, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
-        ProducerInit { station_index: 5, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
-        ProducerInit { station_index: 9, recipe: Recipe { input: Some((Good::ORE, 5)), output: Some((Good::FUEL, 5)), interval: 60 } },
+        ProducerInit {
+            station_index: 2,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
+        ProducerInit {
+            station_index: 5,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
+        ProducerInit {
+            station_index: 9,
+            recipe: Recipe {
+                input: Some((Good::ORE, 5)),
+                output: Some((Good::FUEL, 5)),
+                interval: 60,
+            },
+        },
         // Fuel sinks at the per-tier return-leg destinations.
-        ProducerInit { station_index: 3, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 4, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
-        ProducerInit { station_index: 8, recipe: Recipe { input: Some((Good::FUEL, 5)), output: None, interval: 80 } },
+        ProducerInit {
+            station_index: 3,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
+        ProducerInit {
+            station_index: 4,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
+        ProducerInit {
+            station_index: 8,
+            recipe: Recipe {
+                input: Some((Good::FUEL, 5)),
+                output: None,
+                interval: 80,
+            },
+        },
     ];
 
     // --- corps: 3 tier corps + the Yard (3, upgrade payments) + the Port
     // (4, propellant revenue — armed by RefuelCfg.corp_index in task 2.4).
     let corporations = vec![
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 2 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 5 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 2_000_000_000, home_station_index: 9 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 0, home_station_index: 2 , arb_premium_micros: 0},
-        CorporationInit { treasury_micros: 0, home_station_index: 2 , arb_premium_micros: 0},
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 2,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 5,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 2_000_000_000,
+            home_station_index: 9,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 2,
+            arb_premium_micros: 0,
+        },
+        CorporationInit {
+            treasury_micros: 0,
+            home_station_index: 2,
+            arb_premium_micros: 0,
+        },
     ];
 
     // --- 9 directed route templates: per tier, 2 Ore legs src->dest + 1 Fuel
@@ -510,7 +757,10 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
         master_seed: seed,
         dt: Dt::new(0.25),
         softening: 1.0e-4,
-        substep_cfg: SubstepCfg { accel_ref: 3.0e-4, max_substeps: 64 },
+        substep_cfg: SubstepCfg {
+            accel_ref: 3.0e-4,
+            max_substeps: 64,
+        },
         ephemeris_window: 120_000,
         bodies,
         craft,
@@ -537,12 +787,18 @@ pub fn scenario_frontier(seed: u64) -> RunConfig {
             contract_qty: 0,
         },
         trophic,
-        shipyard: ShipyardCfg { corp_index: 3, ..ShipyardCfg::default() },
+        shipyard: ShipyardCfg {
+            corp_index: 3,
+            ..ShipyardCfg::default()
+        },
         media: MediaCfg::default(),
         // Refuel LIVE (spec §5): 20 lots/tank (~1 lot core leg, ~3-4
         // frontier leg); revenue -> the Port corp (index 4, treasury 0) —
         // generator AND consumer land in one rung (the OD-5b two-sided law).
-        refuel: RefuelCfg { lot_mass: 5.0e-11, corp_index: 4 },
+        refuel: RefuelCfg {
+            lot_mass: 5.0e-11,
+            corp_index: 4,
+        },
         goods: crate::config::GoodsCfg::default(),
         exchange: crate::config::ExchangeCfg::default(),
         arbitrage: crate::config::ArbitrageCfg::default(),
@@ -568,9 +824,18 @@ pub fn scenario_bazaar(seed: u64) -> RunConfig {
     // Promote the goods table to three goods: Ore(0), Fuel(1), Food(2).
     cfg.goods = GoodsCfg {
         goods: vec![
-            GoodSpec { name: "Ore".to_string(), unit_mass_milli: 1000 },
-            GoodSpec { name: "Fuel".to_string(), unit_mass_milli: 1000 },
-            GoodSpec { name: "Food".to_string(), unit_mass_milli: 1000 },
+            GoodSpec {
+                name: "Ore".to_string(),
+                unit_mass_milli: 1000,
+            },
+            GoodSpec {
+                name: "Fuel".to_string(),
+                unit_mass_milli: 1000,
+            },
+            GoodSpec {
+                name: "Food".to_string(),
+                unit_mass_milli: 1000,
+            },
         ],
     };
     // Every per-good station array must be sized to the new n_goods (3). The
@@ -598,6 +863,18 @@ pub fn scenario_bazaar(seed: u64) -> RunConfig {
             },
         });
     }
+
+    // --- Exchange battery sizing note (A4.6, OD-2) --------------------------
+    // The Exchange corp (wired with its corp_index by ExchangeCfg in A5) is
+    // seeded as a SIZED BATTERY, not a self-sustaining economy. Worst drain
+    // measured at ~5.4e9 micros/100k ticks (synthesis solvency arithmetic, OD-2);
+    // refuel recapture <= 0.3e9/100k. Seed the battery from a calibration run's
+    // measured drain window (the BAZAAR drain= anchored line in trophic_run.rs
+    // records the consumed window for that calibration — never a gate, PDR-0006).
+    // PDR-0007: the battery models "laying the tubes," not a closed economy;
+    // consumption-minted money is the NAMED trigger if the console shows
+    // universal late-game heat death. The seeded value lives in the corp init
+    // (A5 wires the Exchange corp + ExchangeCfg.corp_index/active).
 
     // --- Arbitrage transport table (A4.2, PDR-0007) -------------------------
     // The per-route transport floor is a FACTORY-TIME integer table from the
@@ -673,7 +950,9 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
     where
         T::Err: std::fmt::Display,
     {
-        value.parse::<T>().map_err(|e| format!("--set {name}={value}: {e}"))
+        value
+            .parse::<T>()
+            .map_err(|e| format!("--set {name}={value}: {e}"))
     }
     let t = &mut cfg.trophic;
     let y = &mut cfg.shipyard;
@@ -708,7 +987,11 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
                 "Off" => BuyPolicy::Off,
                 "EscortFirst" => BuyPolicy::EscortFirst,
                 "HullFirst" => BuyPolicy::HullFirst,
-                other => return Err(format!("--set {name}={other}: expected Off|EscortFirst|HullFirst")),
+                other => {
+                    return Err(format!(
+                        "--set {name}={other}: expected Off|EscortFirst|HullFirst"
+                    ));
+                }
             }
         }
         // ShipyardCfg (arms-race knobs).
@@ -742,7 +1025,9 @@ pub fn apply_knob(cfg: &mut RunConfig, name: &str, value: &str) -> Result<(), St
         "fuel_capacity_scale" => {
             let scale: f64 = p(name, value)?;
             if !(scale.is_finite() && scale > 0.0) {
-                return Err(format!("--set {name}={value}: scale must be finite and > 0"));
+                return Err(format!(
+                    "--set {name}={value}: scale must be finite and > 0"
+                ));
             }
             for c in &mut cfg.craft {
                 c.spec.base_fuel_capacity *= scale;
@@ -799,31 +1084,47 @@ mod tests {
         for w in axes.windows(2) {
             assert!(w[0] < w[1], "station orbits ascending: {axes:?}");
         }
-        assert!(axes.iter().all(|&a| (0.35..=1.4).contains(&a)), "a in 0.35-1.4: {axes:?}");
+        assert!(
+            axes.iter().all(|&a| (0.35..=1.4).contains(&a)),
+            "a in 0.35-1.4: {axes:?}"
+        );
 
         // 6 stations on bodies 1..=6; exactly 2 vendors; the hideout's station
         // (outermost body) is one of them (pirates shop while lying low).
         assert_eq!(cfg.stations.len(), 6);
         let body_idx: Vec<usize> = cfg.stations.iter().map(|s| s.body_index).collect();
         assert_eq!(body_idx, vec![1, 2, 3, 4, 5, 6]);
-        let vendors: Vec<usize> =
-            (0..6).filter(|&s| cfg.stations[s].sells_upgrades).collect();
+        let vendors: Vec<usize> = (0..6).filter(|&s| cfg.stations[s].sells_upgrades).collect();
         assert_eq!(vendors.len(), 2, "2 vendor stations (spec §6)");
         assert!(
-            cfg.stations.iter().any(|s| s.sells_upgrades
-                && s.body_index as u32 == cfg.trophic.hideout_body_index),
+            cfg.stations
+                .iter()
+                .any(|s| s.sells_upgrades && s.body_index as u32 == cfg.trophic.hideout_body_index),
             "the hideout station is a vendor (the pirate-haven settle path)"
         );
 
         // 12 scripted haulers + 6-pirate pool, all scripted, all x10 endurance.
         assert_eq!(cfg.craft.len(), NUM_HAULERS + NUM_PIRATES);
-        let pirates = cfg.craft.iter().filter(|c| c.role == CraftRole::Pirate).count();
-        let haulers = cfg.craft.iter().filter(|c| c.role == CraftRole::Idle).count();
+        let pirates = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Pirate)
+            .count();
+        let haulers = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Idle)
+            .count();
         assert_eq!(pirates, 6, "6-pirate pool");
         assert_eq!(haulers, 12, "12 haulers");
-        assert!(cfg.craft.iter().all(|c| c.scripted), "all scripted (no gym craft)");
         assert!(
-            cfg.craft.iter().all(|c| c.spec.base_exhaust_velocity == 20.0),
+            cfg.craft.iter().all(|c| c.scripted),
+            "all scripted (no gym craft)"
+        );
+        assert!(
+            cfg.craft
+                .iter()
+                .all(|c| c.spec.base_exhaust_velocity == 20.0),
             "exhaust_velocity x10 vs the trader spec's 2.0 (fuel endurance, spec §6)"
         );
 
@@ -861,7 +1162,10 @@ mod tests {
         // tier pricing qty 5/10/15 at per-unit 1.00x/1.15x/1.30x.
         assert_eq!(cfg.corporations.len(), 4, "3 tier corps + the Yard");
         assert!(cfg.contracts.len() >= 12, "≥ 12 directed route templates");
-        assert_eq!(cfg.shipyard.corp_index, 3, "the Yard receives upgrade payments");
+        assert_eq!(
+            cfg.shipyard.corp_index, 3,
+            "the Yard receives upgrade payments"
+        );
         assert!(
             cfg.contracts.iter().all(|k| k.corp_index < 3),
             "the Yard posts no haulage routes"
@@ -872,7 +1176,8 @@ mod tests {
             assert_eq!(
                 k.reward_micros,
                 qty as i64 * PER_UNIT_BASE_MICROS * mult_milli / 1000,
-                "tier {} per-unit ladder", k.corp_index
+                "tier {} per-unit ladder",
+                k.corp_index
             );
         }
         // Each tier's triggers are independent: per-tier destination stations.
@@ -980,16 +1285,28 @@ mod tests {
         // scales capacity AND starting fuel (full-tank starts preserved) so
         // endurance exceeds run length and the burn tail is uncorrupted.
         let mut cfg = scenario_trophic(7);
-        let base: Vec<(f64, f64)> =
-            cfg.craft.iter().map(|c| (c.spec.base_fuel_capacity, c.fuel_mass)).collect();
+        let base: Vec<(f64, f64)> = cfg
+            .craft
+            .iter()
+            .map(|c| (c.spec.base_fuel_capacity, c.fuel_mass))
+            .collect();
         apply_knob(&mut cfg, "fuel_capacity_scale", "100").expect("knob applies");
         for (c, (cap0, fuel0)) in cfg.craft.iter().zip(&base) {
             assert_eq!(c.spec.base_fuel_capacity, cap0 * 100.0, "capacity scaled");
             assert_eq!(c.fuel_mass, fuel0 * 100.0, "starting fuel scaled");
         }
-        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "0").is_err(), "zero is loud");
-        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "-1").is_err(), "negative is loud");
-        assert!(apply_knob(&mut cfg, "fuel_capacity_scale", "nan").is_err(), "NaN is loud");
+        assert!(
+            apply_knob(&mut cfg, "fuel_capacity_scale", "0").is_err(),
+            "zero is loud"
+        );
+        assert!(
+            apply_knob(&mut cfg, "fuel_capacity_scale", "-1").is_err(),
+            "negative is loud"
+        );
+        assert!(
+            apply_knob(&mut cfg, "fuel_capacity_scale", "nan").is_err(),
+            "NaN is loud"
+        );
     }
 
     #[test]
@@ -1028,7 +1345,11 @@ mod tests {
         assert_eq!(cfg.bodies.len(), 11, "star + 10 station bodies");
         assert_eq!(cfg.bodies[0].elements.a, 0.0, "central star");
         let axes: Vec<f64> = cfg.bodies[1..].iter().map(|b| b.elements.a).collect();
-        assert_eq!(axes, FRONTIER_ORBIT_AU.to_vec(), "bodies ride FRONTIER_ORBIT_AU");
+        assert_eq!(
+            axes,
+            FRONTIER_ORBIT_AU.to_vec(),
+            "bodies ride FRONTIER_ORBIT_AU"
+        );
 
         // 10 stations; body k+1 hosts station row k (the trophic law, n=10).
         assert_eq!(cfg.stations.len(), 10);
@@ -1038,12 +1359,27 @@ mod tests {
         // Populations (spec §2): 20 haulers (2/station), 10 pirates — a 2:1
         // predator:prey DESIGN CHOICE, all scripted (no gym craft).
         assert_eq!(cfg.craft.len(), FRONTIER_NUM_HAULERS + FRONTIER_NUM_PIRATES);
-        let pirates = cfg.craft.iter().filter(|c| c.role == CraftRole::Pirate).count();
-        let haulers = cfg.craft.iter().filter(|c| c.role == CraftRole::Idle).count();
+        let pirates = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Pirate)
+            .count();
+        let haulers = cfg
+            .craft
+            .iter()
+            .filter(|c| c.role == CraftRole::Idle)
+            .count();
         assert_eq!(haulers, 20, "20 haulers");
         assert_eq!(pirates, 10, "10-pirate pool");
-        assert!(cfg.craft.iter().all(|c| c.scripted), "all scripted (no gym craft)");
-        assert_eq!(haulers % cfg.stations.len(), 0, "haulers == 0 mod n (2/station)");
+        assert!(
+            cfg.craft.iter().all(|c| c.scripted),
+            "all scripted (no gym craft)"
+        );
+        assert_eq!(
+            haulers % cfg.stations.len(),
+            0,
+            "haulers == 0 mod n (2/station)"
+        );
 
         // Per-CLASS craft specs (spec §4/§6, OD-6): haulers ride the NAMED
         // calibration-pending const; pirates keep the band's x10 endurance.
@@ -1058,7 +1394,10 @@ mod tests {
                     "hauler v_e = the named analytic prior (calibration bakes it)"
                 ),
             }
-            assert_eq!(c.spec.base_fuel_capacity, 1.0e-9, "tank = 100x re-baked eps");
+            assert_eq!(
+                c.spec.base_fuel_capacity, 1.0e-9,
+                "tank = 100x re-baked eps"
+            );
             assert_eq!(c.fuel_mass, 1.0e-9, "spawn with a full tank");
         }
 
@@ -1094,7 +1433,10 @@ mod tests {
         assert_eq!(cfg.softening, 1.0e-4);
         assert_eq!(cfg.substep_cfg.accel_ref, 3.0e-4);
         assert_eq!(cfg.substep_cfg.max_substeps, 64);
-        assert_eq!(cfg.ephemeris_window, 120_000, "frontier window (runner guard 2.5)");
+        assert_eq!(
+            cfg.ephemeris_window, 120_000,
+            "frontier window (runner guard 2.5)"
+        );
 
         // Seam-haven law REPLACES hideout-outermost (spec §3, OD-3): haven =
         // station 6 hosted by body 7 (1.4660 AU), a vendor (the pirate escort
@@ -1130,11 +1472,18 @@ mod tests {
 
         // Partitioned tier loops EXACT (spec §3): per tier, 2 Ore legs
         // src->dest + 1 Fuel return dest->sink; rewards 1.0M / 2.3M / 3.9M.
-        assert_eq!(cfg.contracts.len(), 9, "3 tiers x (2 Ore legs + 1 Fuel return)");
+        assert_eq!(
+            cfg.contracts.len(),
+            9,
+            "3 tiers x (2 Ore legs + 1 Fuel return)"
+        );
         for (tier, &(qty, mult_milli)) in TIERS.iter().enumerate() {
             let (src_a, src_b, dest, sink) = FRONTIER_TIER_WIRING[tier];
-            let legs: Vec<&ContractInit> =
-                cfg.contracts.iter().filter(|k| k.corp_index == tier).collect();
+            let legs: Vec<&ContractInit> = cfg
+                .contracts
+                .iter()
+                .filter(|k| k.corp_index == tier)
+                .collect();
             assert_eq!(legs.len(), 3, "tier {tier} has 3 legs");
             let reward = qty as i64 * PER_UNIT_BASE_MICROS * mult_milli / 1000;
             for k in &legs {
@@ -1148,7 +1497,9 @@ mod tests {
                 .collect();
             assert_eq!(
                 ore_froms,
-                [src_a, src_b].into_iter().collect::<std::collections::BTreeSet<_>>(),
+                [src_a, src_b]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>(),
                 "tier {tier} sources"
             );
             assert!(
@@ -1203,14 +1554,19 @@ mod tests {
             "haven hosts no contract endpoint"
         );
         assert!(
-            cfg.producers.iter().all(|p| p.station_index != FRONTIER_HAVEN_STATION),
+            cfg.producers
+                .iter()
+                .all(|p| p.station_index != FRONTIER_HAVEN_STATION),
             "haven hosts no producer"
         );
 
         // Every tier loop touches a vendor (heavy haulers shop where they
         // deliver — the restored mechanism): the vendor sits at each dest.
         for &(_, _, dest, _) in &FRONTIER_TIER_WIRING {
-            assert!(cfg.stations[dest].sells_upgrades, "tier dest {dest} is a vendor");
+            assert!(
+                cfg.stations[dest].sells_upgrades,
+                "tier dest {dest} is a vendor"
+            );
         }
 
         // Per-tier Schmitt-stagger initial stocks carried (18/14/10 against
@@ -1228,13 +1584,26 @@ mod tests {
 
         // Producers: miners at all 6 sources, refiners at the 3 dests, fuel
         // sinks at the 3 sink rows.
-        assert_eq!(cfg.producers.len(), 12, "6 miners + 3 refiners + 3 fuel sinks");
+        assert_eq!(
+            cfg.producers.len(),
+            12,
+            "6 miners + 3 refiners + 3 fuel sinks"
+        );
 
         // Corps: 3 tier corps + the Yard + the Port (Port armed in 2.4).
         assert_eq!(cfg.corporations.len(), 5, "3 tier corps + Yard + Port");
-        assert_eq!(cfg.shipyard.corp_index, 3, "the Yard receives upgrade payments");
-        assert_eq!(cfg.corporations[4].treasury_micros, 0, "the Port starts empty");
-        assert!(cfg.contracts.iter().all(|k| k.corp_index < 3), "Yard/Port post no routes");
+        assert_eq!(
+            cfg.shipyard.corp_index, 3,
+            "the Yard receives upgrade payments"
+        );
+        assert_eq!(
+            cfg.corporations[4].treasury_micros, 0,
+            "the Port starts empty"
+        );
+        assert!(
+            cfg.contracts.iter().all(|k| k.corp_index < 3),
+            "Yard/Port post no routes"
+        );
 
         // Resolvable + brakable; reset mints the 10-pirate pool.
         let (w, _h) = World::reset(cfg).expect("scenario_frontier must resolve");
@@ -1250,7 +1619,10 @@ mod tests {
         for _ in 0..2_000 {
             w.step(&mut cmds);
         }
-        println!("FRONTIER_TRAJECTORY_GOLDEN=0x{:016x}", crate::hash::state_hash(&w));
+        println!(
+            "FRONTIER_TRAJECTORY_GOLDEN=0x{:016x}",
+            crate::hash::state_hash(&w)
+        );
     }
 
     /// The NEW frontier trajectory golden (world-gets-big spec §9): seed-7
@@ -1307,8 +1679,16 @@ mod tests {
 
         // PriceCfg: Fuel-only live (spec §5, OD-4). cap[Ore]==0 is the
         // structural-off switch — Ore stays dead by construction.
-        assert_eq!(cfg.price_cfg.base_micros, vec![0i64, 5_000i64], "Fuel-only base");
-        assert_eq!(cfg.price_cfg.cap, vec![0i64, 40i64], "cap[Ore]==0 keeps Ore structurally dead");
+        assert_eq!(
+            cfg.price_cfg.base_micros,
+            vec![0i64, 5_000i64],
+            "Fuel-only base"
+        );
+        assert_eq!(
+            cfg.price_cfg.cap,
+            vec![0i64, 40i64],
+            "cap[Ore]==0 keeps Ore structurally dead"
+        );
         assert_eq!(cfg.price_cfg.slope_milli, 1800);
         assert_eq!(cfg.price_cfg.reprice_interval, 1);
 
@@ -1364,7 +1744,12 @@ mod tests {
         }
         let mut fuel_updates = 0u32;
         for e in world.recent_events(Tick(0)) {
-            if let EventKind::PriceUpdate { resource, price_micros, .. } = e.kind {
+            if let EventKind::PriceUpdate {
+                resource,
+                price_micros,
+                ..
+            } = e.kind
+            {
                 match resource {
                     Good::ORE => panic!("Ore price updated — cap[Ore]==0 must keep it dead"),
                     Good::FUEL => {
@@ -1380,6 +1765,9 @@ mod tests {
         }
         // Non-vacuity: the dest refiners land Fuel within 500 ticks
         // (interval 60) — stock moves => at least one Fuel PriceUpdate.
-        assert!(fuel_updates > 0, "no Fuel PriceUpdate in 500 ticks — vacuous test");
+        assert!(
+            fuel_updates > 0,
+            "no Fuel PriceUpdate in 500 ticks — vacuous test"
+        );
     }
 }

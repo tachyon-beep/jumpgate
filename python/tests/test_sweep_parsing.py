@@ -160,3 +160,32 @@ def test_v5_stdout_still_parses_without_exchange_line():
     assert parsed["exchange"] is None
     # The other anchors are unaffected by the new optional line.
     assert parsed["bazaar"] is not None
+
+
+# V7: adds the optional BAZAAR drain line (rung A, A4.6, OD-2 battery drain).
+# Printed only when ExchangeCfg::active; recorded only, never a gate. Lockstep:
+# the println!, the BAZAAR_DRAIN_RE regex, and this fixture land together.
+V7_STDOUT = V6_STDOUT + ("BAZAAR drain=5400000000 ticks=50000\n")
+
+
+def test_bazaar_drain_line_is_parsed_by_anchored_regex():
+    # The A4.6 anchored line: "BAZAAR drain=<micros> ticks=<n>".
+    line = "BAZAAR drain=5400000000 ticks=50000"
+    m = sweep.BAZAAR_DRAIN_RE.match(line)
+    assert m is not None, "BAZAAR drain line must match anchored regex"
+    assert m.group("exchange_drain") == "5400000000"
+    assert m.group("ticks") == "50000"
+
+
+def test_v7_bazaar_drain_parses_and_older_reads_none():
+    parsed = sweep.parse_stdout(V7_STDOUT)
+    assert parsed["bazaar_drain"] is not None
+    assert parsed["bazaar_drain"]["exchange_drain"] == "5400000000"
+    assert parsed["bazaar_drain"]["ticks"] == "50000"
+    # The BAZAAR drain line must not collide with the BAZAAR seed= line.
+    assert parsed["bazaar"] is not None
+    assert parsed["bazaar"]["exchange_treasury"] == "1234567890"
+    for legacy_text in (V5_STDOUT, V6_STDOUT):
+        legacy = sweep.parse_stdout(legacy_text)
+        assert legacy["bazaar_drain"] is None, \
+            "bazaar_drain is None for pre-A4.6 stdout"
